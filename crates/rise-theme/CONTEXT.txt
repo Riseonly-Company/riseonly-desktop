@@ -1,0 +1,88 @@
+================================================================================
+rise-theme — design tokens
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+  ../../docs/PLATFORM_GLASS.md — materials, the three tiers, the rule
+  ../../riseonly-ios/Riseonly/Theme/ThemePalette.swift — the source of the numbers
+
+WHAT THIS CRATE OWNS
+  ThemePalette: the same field names and the same numbers as the iOS reference,
+  serde-compatible with the backend's ThemeConfig.palette_json so a palette
+  round-trips through theme-service unchanged.
+
+  AppTheme: colours and lengths resolved once for one appearance and one
+  density. Installed as a gpui global.
+
+  Density: desktop-only. iOS lengths are phone-derived (45pt controls, 56pt
+  headers). The multiplier is applied at the token layer so no component
+  carries its own idea of how big things are.
+
+  MaterialTokens: the PAINTED form of Material::Chrome / Panel / Overlay —
+  tier 2 of PLATFORM_GLASS.md, the one every host falls back to. Fills are
+  deliberately translucent so the same numbers work whether or not the window
+  got a real tier-0 system material behind it.
+
+  Its `scrim` is not one of them and is not a PaintedMaterial: a scrim has no
+  border, no highlight and no radius, and it can never be native — an AppKit
+  view behind a hole in the Metal layer cannot darken what gpui drew on top of
+  it.
+
+  Typography: the family the product ships, the weights the bundle actually
+  contains, and the size/weight pairs the reference uses. See below.
+
+  ShellMetrics: the desktop frame's geometry — rail 56, list 320, aside 300,
+  content minimum 460. rise-navigation's PanePolicy decides how many columns a
+  width affords; this decides how wide each one is, and PanePolicy is built
+  from these numbers rather than repeating them.
+
+  It also carries the overlay and palette geometry, because nothing that escapes
+  the window exists here: menus, dropdowns and the command palette are drawn
+  inside it, so their margins and widths are shell lengths like any other.
+  `menu_max_width` and `palette_width` are what an overlay ASKS for — a 400px
+  window clamps both, and the clamping belongs to the placement code, not here.
+
+--------------------------------------------------------------------------------
+WHY THIS CRATE DEPENDS ON rise-platform
+--------------------------------------------------------------------------------
+
+For `Material` and `MaterialBacking`, and for nothing else. rise-platform owns
+the POLICY — which materials are real on this machine and this OS version — and
+this crate owns their painted form, so the two have to share one vocabulary.
+
+The edge points theme -> platform rather than the other way because
+rise-platform must never learn a colour; its own module doc says so. There is no
+cycle: rise-platform depends only on rise-core.
+
+docs/PLATFORM_GLASS.md's file map puts the Material enum in this crate. It is in
+rise-platform instead, beside the resolve() that consumes it and the 400 tests
+that pin it, and re-exported from here so call sites still read
+`rise_theme::Material`.
+
+--------------------------------------------------------------------------------
+TYPOGRAPHY — WHY THERE ARE BOTH NAMED STEPS AND A NUMERIC ENTRY POINT
+--------------------------------------------------------------------------------
+
+The reference has no typography layer. It writes `.system(size: 14, weight:
+.semibold)` at 908 call sites, across 17 distinct sizes and 6 weights. Naming
+all of those would invent a design system the reference does not have; leaving
+them at the call site would leave a length outside this crate, where density can
+never reach it.
+
+So a port writes `theme.typography.style(14.0, FontWeight::SEMIBOLD)` — the
+reference's own numbers, carried across unchanged, with density and the family
+applied here. New code that is not porting anything uses the named steps
+(body, body_strong, headline, title …) and never spells a number.
+
+Typography::font snaps a requested weight to the nearest SHIPPED_WEIGHTS entry.
+That snap is load-bearing: gpui asked for a weight with no shipped face will
+synthesise or substitute one, and the substitute is a different family on each
+OS — which is the whole reason the product ships its own font.
+
+WHAT IT MUST NEVER DO
+  Parse hex or multiply densities inside a render pass. AppTheme is built on
+  theme change, not per frame.
+  Redefine a number that exists in the iOS palette. 1 pt = 1 px logical.
+  Decide what a material actually is on this machine. It provides the paint;
+  rise-platform decides whether painting is what happens.

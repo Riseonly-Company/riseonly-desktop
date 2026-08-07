@@ -1,0 +1,46 @@
+================================================================================
+rise-platform/src/macos — the macOS-only bodies
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt              (what this crate owns, host_os.rs, the no-op rule)
+  ../../../../docs/PLATFORM_GLASS.md
+  ../../../../docs/PLATFORM_MATRIX.md
+
+WHY THIS DIRECTORY EXISTS AT ALL
+
+  Most seams in this crate are one file: a page of pure policy taking HostOs as
+  an argument, then a small `#[cfg(target_os)] mod macos` at the bottom with the
+  single call into the OS. That shape is right when the binding is a handful of
+  message sends, and it must stay the shape — see ../../CONTEXT.txt.
+
+  This directory is for the seams whose macOS body is not a handful of message
+  sends: something with its own build step, its own bookkeeping, or its own
+  source language. Today that is exactly one, `glass/`.
+
+  Adding a directory here is a claim that the binding is too large to sit under
+  the policy that drives it. Two files and a build script is the bar. A seam that
+  fits at the bottom of its own file belongs at the bottom of its own file.
+
+WHAT MUST NOT MOVE IN HERE
+
+  Decisions. `HostOs` is a value precisely so that the choices Linux and Windows
+  will make are exercised by the suite on a Mac. Anything under this directory is
+  compiled only on macOS, so a decision that moves in here stops being tested for
+  the other two arms and nobody finds out until a screenshot arrives.
+
+  The test for whether something belongs: could it be written as a function of
+  HostOs and MacOsVersion that returns a value? Then it belongs beside the trait,
+  not here. Only what genuinely requires an AppKit object belongs here.
+
+  This is why `glass/mod.rs` still holds pure functions — `surface_backing`,
+  `region_backing`, `is_hostable`, `refusal` — rather than deciding those things
+  inline at the call into Swift. They are exercised for all three hosts from this
+  machine; only the call itself is not.
+
+MODULE DECLARATION
+
+  `lib.rs` declares this tree behind `#[cfg(target_os = "macos")]`. Nothing above
+  this crate may name it: `materials::current_glass_surface()` is the entry
+  point, and it hands back the same trait object on every platform so that app/
+  never learns which OS it is running on.

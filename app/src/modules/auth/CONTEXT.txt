@@ -1,0 +1,75 @@
+================================================================================
+modules/auth — accounts, credentials and the token lifecycle
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt       the module convention — layout, store triad, hard rules
+  ../../../CONTEXT.txt workspace rules
+
+REFERENCE
+  ../../../../riseonly-ios/Riseonly/modules/auth/   3,784 lines of Swift
+
+WHY THIS MODULE HAS AN engine/ AND THE REFERENCE DOES NOT
+  auth is one of the fifteen reference modules that never migrated to
+  RiseEngine: it still calls SaiFetch there. Porting it RiseEngine-only is a
+  redesign of its data layer rather than a translation, which is what
+  PHASES.txt calls "the budget nobody expects".
+
+WHAT IS PROCESS-SCOPED, AND WHY
+  RiseAuthDomain is NOT an AccountScope. It is what decides which account there
+  is, so a domain that lived inside the account scope could not survive the
+  sign-out that drops it and there would be nothing left to draw the sign-in
+  screen. It owns the account registry, the credential store and the token
+  lifecycle, and it is what tells the socket who it is connected as.
+
+THE ACCOUNT REGISTRY LIVES OUTSIDE RiseEngine
+  Chicken and egg: the engine's database is keyed by account, and something has
+  to answer "which accounts are there" before any account is open. So
+  `accounts.json` in the data directory holds the metadata and the OS credential
+  store holds the tokens — the same split the reference makes between
+  UserDefaults and the Keychain, and for the same reason. The account id is
+  hashed before it becomes a credential entry name, because that name is visible
+  in Keychain Access and in `secret-tool search`.
+
+TWO METHODS GO OVER HTTP, AND ONLY TWO
+  `auth.refresh_token` and tag availability are calls an UNAUTHENTICATED client
+  has to make, and the gateway's socket action gate admits only send_code,
+  register, login, ping and the two QR verbs without a session. Refreshing
+  exactly when the access token has expired is therefore impossible on the
+  socket, by construction. Both descriptors are in the same catalogue as the
+  socket ones, with the same replay policy discipline. Nothing else may join
+  them: a method the socket can carry never appears there.
+
+THE THINGS THAT ARE EASY TO GET WRONG
+  A rotated token is a NEW identity to the gateway — it reads the user and the
+  session once, at upgrade, and never again — so every credential change is a
+  reconnect and never an in-band message.
+
+  Two refreshes can be in flight for one account. The loser must not overwrite
+  the winner's newer pair, which is why persistence is a compare-and-set.
+
+  A REFUSED refresh ends the session; a DROPPED SOCKET does not. Signing
+  somebody out because their wifi went away loses the cache with the session.
+
+  Sign-out clears local state whether or not the server answers. The wait exists
+  only so that the server usually gets to revoke the session too.
+
+  Client-side validation is load-bearing rather than decorative. The gateway
+  reads a missing name as "" and never checks a tag at all — the real tag rules
+  are three hops away in tag-service and its refusal arrives as "Failed to
+  reserve tag". Every bound in shared/auth_validation.rs mirrors a server bound
+  rather than inventing one; being stricter would refuse accounts the product
+  accepts.
+
+  Registration is the one moment `signup_region` and `signup_language` are
+  written, and they are frozen afterwards. The device says what it is via
+  rise-platform's locale seam rather than letting the server guess from the
+  connection, where a VPN would freeze the wrong market in permanently.
+
+  The trace carries no payloads at all. The interesting values here are a phone
+  number, a tag and two tokens; the SHAPE of the sequence is what a bug report
+  needs.
+
+REMINDERS
+  pages/ holds screens and nothing else.
+  A view calls only AuthInteractionsStore.

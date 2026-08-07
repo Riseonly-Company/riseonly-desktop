@@ -1,0 +1,30 @@
+================================================================================
+modules/onboarding — the first screen
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt       the module convention
+  ../../../CONTEXT.txt workspace rules
+
+REFERENCE
+  ../../../../riseonly-ios/Riseonly/modules/onboarding/   267 lines of Swift
+
+WHAT IS HERE
+  pages/ only. Onboarding has no backend service, no store and no state beyond
+  which slide is showing, so it has neither a stores/ nor an engine/.
+
+  Four slides, in the reference's order, with the reference's strings. The
+  reference draws four hand-written SwiftUI animations — a crystal ball, an
+  emoji, a shield, a party — and none of them is an asset that could be carried
+  across; they are code. What is here is the nearest thing the bundle already
+  ships, drawn once and never animated, which also keeps the first screen the
+  user sees off the overdraw path the desktop performance contract warns about.
+  Replacing it with real art is a design task, not a porting gap a test can
+  catch.
+
+IT HANDS OVER RATHER THAN NAVIGATING
+  Skip and get-started are one intent in the reference, and both mean "take me
+  to sign-up". The screen emits `Finished` and the shell decides, because the
+  pre-auth screens own the whole window rather than a column and pushing sign-up
+  on top of onboarding would leave onboarding underneath as a back destination
+  the user cannot usefully return to.

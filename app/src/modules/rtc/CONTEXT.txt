@@ -1,0 +1,26 @@
+================================================================================
+rise-rtc
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt      (the module convention — layout, store triad, hard rules)
+  ../../../CONTEXT.txt (workspace rules)
+
+REFERENCE
+  ../../../riseonly-ios/Riseonly/modules/rtc/
+  13,023 lines of Swift in the reference.
+
+FOLDERS HERE
+  engine, media, pages, shared, stores, system
+
+  This module owns a backend service, so it has engine/: the domain, the actor
+  repositories, the endpoint catalogue and the presentation snapshots.
+
+NOTES
+  Calls. Depends on the external-texture element in rise-media, which does not
+  exist yet off macOS. Do not start UI here before that lands.
+
+REMINDERS
+  pages/ holds screens and nothing else.
+  A view calls only <Feature>InteractionsStore.
+  This crate must not depend on another module crate.

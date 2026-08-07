@@ -1,0 +1,38 @@
+/target
+**/*.rs.bk
+*.pdb
+
+/build
+/dist
+*.app
+*.dmg
+*.AppImage
+*.msi
+*.exe
+
+.DS_Store
+.idea/
+.vscode/
+# Pins Zed's rust-analyzer to this workspace's toolchain, but by absolute path —
+# it is one machine's setting, not the project's.
+.zed/
+*.swp
+
+/crates/rise-app/src/config/local.json
+.env
+.env.*
+!.env.example
+
+# The bundled faces ARE tracked. This rule used to be "/assets/fonts/*", from
+# when the directory was a placeholder; it hid all six TTFs, OFL.txt and the
+# CONTEXT.txt from git, so a fresh clone had no font and the app fell back to a
+# different family on each OS. Keep the exclusion narrow: build leftovers, not
+# the product's typeface.
+/assets/fonts/*.zip
+/assets/fonts/*.woff2
+
+# LGPL FFmpeg prefix, built by scripts/build-ffmpeg-lgpl.sh
+vendor/ffmpeg/
+
+# rlottie source, fetched by scripts/vendor-rlottie.sh against a pinned hash
+vendor/rlottie/

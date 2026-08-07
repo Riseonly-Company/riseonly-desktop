@@ -1,0 +1,45 @@
+================================================================================
+rise-widgets — composed widgets
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+  ../../crates/rise-ui/CONTEXT.txt
+
+WHAT THIS CRATE OWNS
+  The bigger assemblies: sheets, overlays, notifier, context menu, navigation
+  chrome, wrappers, media viewer.
+
+  BUILT SO FAR:
+
+    glass_panel/   GlassPanel and GlassHost, the surface that asks the theme for
+                   a Material and lets rise-platform decide what that Material is
+                   on this machine. Read its CONTEXT.txt before touching it: the
+                   layout-pass timing in there is a correctness invariant rather
+                   than a style.
+    overlay/       where an in-window overlay may sit, and the layer it sits on.
+                   `place()` is total arithmetic — every input, including an
+                   overlay bigger than the window, yields an origin inside the
+                   frame. OverlayStack is who is open, so Esc can close the
+                   topmost and only the topmost.
+
+                   The content is `.occlude()`d and that is CORRECTNESS, not
+                   polish: gpui's hit test reports every hitbox under the
+                   pointer and stops only at a blocking one, so without it the
+                   dismiss scrim is hovered THROUGH the overlay and its
+                   mouse-down handler tears the overlay out of the tree before
+                   the mouse-up that would have completed a click on it. Anything
+                   drawn over a dismissing scrim needs the same.
+    context_menu/  right-click. ContextMenuItem mirrors the reference's
+                   `ContextMenuUi.ContextMenuItem` field for field: a stable
+                   action id (its `key`), a string KEY for the label, an optional
+                   SF Symbol, and `selected` as the checkmark. Keep the ids
+                   identical to the reference so analytics and handlers line up.
+
+  Still empty modules: sheets, notifier, navigation chrome, wrappers, media
+  viewer, buttons, inputs.
+
+WHAT IT MUST NEVER DO
+  Use a surface that must escape the window rectangle. gpui has no native
+  popups on X11 or Windows — only Wayland. Every menu, dropdown and tooltip is
+  an in-window overlay.

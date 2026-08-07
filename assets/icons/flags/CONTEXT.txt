@@ -1,0 +1,103 @@
+================================================================================
+assets/icons/flags/
+================================================================================
+
+WHAT IS HERE
+
+  256 SVG flags, one per region code, lowercase `<cc>.svg`, 4:3 aspect, plus
+  LICENSE. Bytes are verbatim upstream, so a version bump is a readable diff.
+
+  Source:  flag-icons, MIT, https://github.com/lipis/flag-icons
+  Pinned:  7.5.0
+  Tarball: https://registry.npmjs.org/flag-icons/-/flag-icons-7.5.0.tgz
+  sha512:  kd+MNXviFIg5hijH766tt+3x76ele1AXlo4zDdCxIvqWZhKt4T83bOtxUOOMlTx/
+           EcFdUMH5yvQgYlFh1EqqFg==            (npm `dist.integrity`, base64)
+  sha1:    66462df3e8bc5ef3a283322a46bb9dde1b290505
+
+  Taken from the tarball's `flags/4x3/` only. What was left behind, and why:
+    1x1/            a second aspect nothing in the design asks for
+    css/, sass/     a web toolkit; GPUI does not read stylesheets
+    country.json    names and capitals; ours come from rise-i18n
+    subdivisions    es-ct, es-ga, es-pv, gb-eng, gb-nir, gb-sct, gb-wls,
+                    sh-ac, sh-hl, sh-ta — ISO 3166-2, not reachable by a
+                    region code
+    organisations   arab, asean, cefta, eac
+    xx.svg          upstream's "unknown" placeholder, a crossed-out white box.
+                    Deliberately not shipped: it would silently become a second
+                    fallback path competing with the painted chip below, and a
+                    blank box tells the user nothing.
+
+  Of the 256, 249 are ISO 3166-1 alpha-2 assignments. The other seven are
+  cp, dg, ic (exceptionally reserved), eu, un, pc (supranational) and xk
+  (Kosovo, user-assigned XK, in the reference region catalogue and therefore
+  required).
+
+WHY THESE EXIST AT ALL
+
+  The reference derives a flag arithmetically — AppLanguageResolution.swift,
+  `var flag`, adds 127397 to each ASCII letter of the region code to get a pair
+  of regional-indicator code points. macOS ligates that pair into a flag. Linux
+  and Windows do not: the system emoji fonts carry the indicator letters but no
+  country ligatures, so the user sees two letters in boxes. There is nothing to
+  fix at the font level, so the flag stops being a glyph and becomes an asset.
+
+COVERAGE
+
+  Every region the app can reach today is present:
+    - the region of every locale in backend/i18n/languages.json
+      (ar_SA -> sa, pt_BR -> br, zh_Hant_TW -> tw, fil_PH -> ph, nb_NO -> no),
+      40 distinct regions across 41 languages;
+    - every one of the 245 region codes in
+      riseonly-ios/Riseonly/Core/i18n/AppRegionCatalogData.swift.
+  The union is 245 and every one of them resolves. The whole alpha-2 set ships
+  rather than only those 245 because it costs 11 more files and 60 KB, and it
+  removes the class of bug where a region added to the backend catalogue
+  renders as a hole on a settings screen.
+
+  Total 1 693 192 bytes (1.62 MiB) across 256 files. Largest are rs, bo, mx,
+  es, sv — coats of arms, tens of kilobytes of path data each. If that ever
+  matters on the memory ceiling, rasterise on first use and cache; do not
+  hand-edit the SVGs.
+
+THE LOOKUP RULE
+
+  A flag is looked up by region code, lowercased, exact. Nothing else.
+
+    - Never derive one from a language code. `en` is not `en.svg`; the region
+      comes from the locale's region subtag or from the region catalogue.
+    - Miss falls back to a painted chip carrying the two uppercase letters,
+      drawn from rise-theme tokens. Never to a regional-indicator pair, never
+      to a blank placeholder, never to a question mark. The chip is legible on
+      all three operating systems and says which region it stands for.
+    - The chip is a theme-painted form, so it obeys density and dark mode like
+      everything else. A flag asset does not.
+
+FLAGS ARE POLITICAL
+
+  Say this plainly rather than discovering it in a support ticket. A fixed set
+  of flags is a decision, not a default. Shipping a flag for a region is read
+  as recognising it; omitting one is read as denying it; the borders drawn on
+  some of these files are disputed by somebody. This set is upstream
+  flag-icons' editorial line, not ours, and it already contains choices we did
+  not make — XK for Kosovo, TW as its own entry, PS present, EU and UN present
+  as if they were regions.
+
+  So: this directory is reviewed like product copy, not like a dependency
+  bump. A flag-icons upgrade that adds, removes or redraws a flag is a product
+  change and needs the same eyes. If a market ever requires a different set,
+  the fix is a per-build override list, never editing these files in place —
+  they must stay diffable against upstream.
+
+UPDATING
+
+  Fetch the pinned tarball, verify the sha512 above, copy `flags/4x3/<cc>.svg`
+  for two-letter codes only, drop xx.svg, keep LICENSE, and update the version
+  and hashes here and in docs/DEPENDENCIES.md. Every file must start with
+  `<svg` and carry a viewBox on the root element; upstream has never shipped an
+  XML declaration or a BOM, and if it starts, the loader is what changes, not
+  the assets.
+
+LICENCE
+
+  MIT, Copyright (c) 2013 Panayiotis Lipiridis. LICENSE in this directory is
+  the upstream text verbatim and must ship with the application.

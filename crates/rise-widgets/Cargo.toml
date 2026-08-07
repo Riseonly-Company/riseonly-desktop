@@ -1,0 +1,30 @@
+[package]
+name = "rise-widgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+tracing.workspace = true
+gpui.workspace = true
+rise-core.workspace = true
+# GlassPanel is the one component that knows native materials exist. It still
+# never names glass: rise-platform decides what a Material is on this machine.
+rise-platform.workspace = true
+rise-theme.workspace = true
+rise-ui.workspace = true
+rise-i18n.workspace = true
+
+[dev-dependencies]
+# ContextMenuState is a gpui Entity, so its state machine — highlight traversal,
+# activation, dismissal — can only be exercised through a real App. Same gpui,
+# same rev, one feature: no new crate enters the graph.
+gpui = { workspace = true, features = ["test-support"] }

@@ -1,0 +1,25 @@
+================================================================================
+rise-core — portable primitives
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+  ../../docs/PERFORMANCE_GUIDE.md section 9 — why StaleGuard exists
+
+WHAT THIS CRATE OWNS
+  RequestId and its allocator. The id packs (logical_ms << 20 | sequence) and
+  never regresses when the wall clock jumps backwards, so correlation stays
+  unique across a system time change.
+
+  Generation / GenerationCounter, and StaleGuard: the captured identity of the
+  work that started an async operation. StaleGuard checks account, epoch, scope
+  AND generation together, because checking the scope alone loses the ABA case
+  (screen A closes, B opens, A opens again, and a stale result from the first A
+  looks valid).
+
+  AccountId, ScopeId, AccountEpoch.
+
+WHAT IT MUST NEVER DO
+  Depend on gpui, on any OS crate, on rise-engine, or on anything desktop.
+  This crate must stay compilable for a future FFI or wasm consumer. CI enforces
+  it (scripts/check-boundaries.py).

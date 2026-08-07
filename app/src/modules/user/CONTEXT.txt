@@ -1,0 +1,26 @@
+================================================================================
+rise-user
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt      (the module convention — layout, store triad, hard rules)
+  ../../../CONTEXT.txt (workspace rules)
+
+REFERENCE
+  ../../../riseonly-ios/Riseonly/modules/user/
+  29,208 lines of Swift in the reference.
+
+FOLDERS HERE
+  components, engine, pages, shared, stores
+
+  This module owns a backend service, so it has engine/: the domain, the actor
+  repositories, the endpoint catalogue and the presentation snapshots.
+
+NOTES
+  29,208 lines. In the reference this module reaches into 32 other stores; here
+  every one of those becomes a rise-contracts trait.
+
+REMINDERS
+  pages/ holds screens and nothing else.
+  A view calls only <Feature>InteractionsStore.
+  This crate must not depend on another module crate.

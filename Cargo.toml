@@ -1,0 +1,96 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+rise-core = { path = "crates/rise-core" }
+rise-i18n = { path = "crates/rise-i18n" }
+rise-engine = { path = "crates/rise-engine" }
+rise-platform = { path = "crates/rise-platform" }
+rise-theme = { path = "crates/rise-theme" }
+rise-ui = { path = "crates/rise-ui" }
+rise-widgets = { path = "crates/rise-widgets" }
+rise-media = { path = "crates/rise-media" }
+rise-navigation = { path = "crates/rise-navigation" }
+
+
+gpui = { git = "https://github.com/zed-industries/zed", rev = "6b2aa1c90aeb72cadfd30ed12141ed9e2569eded" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "6b2aa1c90aeb72cadfd30ed12141ed9e2569eded", features = [
+    "font-kit",
+    "x11",
+    "wayland",
+] }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+tokio-util = "0.7"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures = "0.3"
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+aes-gcm = "0.10"
+rand = "0.9"
+sha2 = "0.10"
+directories = "6"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+smallvec = "1"
+fs4 = "0.13"
+base64 = "0.22"
+
+# Native seams for Phase 3. Versions match what this gpui rev already resolves,
+# so the tray does not drag a second copy of the objc2 or windows families in.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package.gpui]
+opt-level = 3
+
+[profile.dev.package.gpui_platform]
+opt-level = 3
+
+[profile.dev.package.gpui_macos]
+opt-level = 3
+
+[profile.dev.package.gpui_wgpu]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+# The tree mirrors riseonly-ios file for file, and the reference names a
+# subsystem's hub file after its folder (RiseSync/RiseSync.swift,
+# pages/Onboarding/Onboarding.swift). Parity is checkable; this lint is taste.
+module_inception = "allow"

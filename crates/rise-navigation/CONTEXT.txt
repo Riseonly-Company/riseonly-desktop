@@ -1,0 +1,62 @@
+================================================================================
+rise-navigation — routes and panes
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+  ../../RISEONLY-DESKTOP-CLONE-PROMPT.md section 10.2
+  ../../app/src/core/CONTEXT.txt  (the lease stack that keys off active_routes)
+
+WHAT THIS CRATE OWNS
+  RootRoute: every screen the shell can show. Routes carry ids and parameters
+  only, never module types, so this crate depends on no feature crate. That is
+  what lets modules push routes without depending on each other.
+
+  Each route also answers three questions about itself, and each answer is a
+  product decision rather than a mechanism:
+    screen_id()               what analytics and the route matcher call it
+    resource_key()            what its data is cached and revalidated under —
+                              parameters included, so two panes showing the same
+                              conversation are ONE resource and not two
+    requires_authentication() whether the shell may show it before sign-in
+    accepts_files()           whether a drop onto it means anything
+
+  PanePolicy / PaneLayout: how many columns a width affords, and which stacks
+  each drawn column may take its screen from. Resizing has hysteresis so
+  dragging a window across a boundary settles instead of strobing.
+
+  NavigationStore: per-section stacks, one per slot, plus forward history.
+
+WHAT THE STORE GUARANTEES, AND WHY THE PHASE 6 GATE DEPENDS ON IT
+
+  THE PRIMARY STACK IS NEVER EMPTY. Its bottom entry is the section itself, so
+  there is no window width at which the sidebar column has nothing to draw. A
+  drawn column with no screen in it is the shell's empty state, not a hole.
+
+  A SCREEN NEVER CHANGES STACKS. Narrowing the window merges COLUMNS, not
+  stacks — see PaneLayout::slots_for_column. Folding a conversation into the
+  primary stack on collapse would be irreversible: widening the window again
+  could not tell it from something the user had pushed there, and they would
+  watch it reappear in the sidebar. Every projection is reversible, which is
+  what makes 400px → 2560px → 400px lossless.
+
+  EACH SECTION KEEPS ITS OWN STACKS. Leaving Chats mid-conversation and coming
+  back returns to that conversation, the way a tab's UINavigationController does
+  in the reference. Reselecting the section you are ALREADY in resets only its
+  primary column: the reference pops the whole tab stack because on a phone that
+  stack is the conversation, and here the conversation is a column of its own.
+
+  window_resized REPORTS WHETHER ANYTHING CHANGED. The caller uses that to
+  decide whether the visible set moved; a false positive there re-registers a
+  lease on every mouse move of a window drag.
+
+  Forward history is bounded per section and cleared by any new push, which is
+  browser semantics and the only ones a user does not have to learn.
+
+WHAT IT MUST NEVER DO
+  Import a module crate. If a route needs a screen type, the composition root
+  in the app resolves it, not this crate.
+
+  Learn the window width outside PanePolicy. A screen declares its slot; it
+  never counts columns. That is what lets the shell collapse to a phone-shaped
+  stack without touching a single feature.

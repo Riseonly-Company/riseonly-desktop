@@ -1,0 +1,49 @@
+================================================================================
+app/src/app/storybook — the Phase 5 gate, made visible
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt   workspace rules, boundaries, commands
+  ../../../../PHASES.txt    "PHASE 5 — DESIGN SYSTEM", and its GATE
+
+WHAT THIS IS
+
+  The gate says: every component in a storybook, light and dark, three density
+  multipliers, no literal colour or length outside rise-theme. This directory is
+  the first half. The second half is mechanical and lives in
+  scripts/check-design-tokens.py, which runs inside `cargo make lint`.
+
+    cargo make dev-macos -- -riseStorybook
+
+  A launch argument, not a route. The reference gates its own developer surfaces
+  the same way (-riseChatPerformanceTools), and a RootRoute variant would put a
+  developer screen inside the product's exhaustive route match forever.
+
+WHY IT BUILDS ITS OWN THEMES
+
+  Six columns — two appearances by three densities — stand side by side in one
+  window, each rendered from an AppTheme built locally rather than from the
+  installed global. A difference between light and dark then becomes something
+  you can see rather than something you have to remember across a restart.
+
+  This is also why every component in rise-ui takes `&AppTheme` explicitly
+  instead of reaching for the global itself. Keep it that way: a component that
+  reads the global can only ever be shown once.
+
+WHAT IT DELIBERATELY DOES NOT SHOW
+
+  The native tier of a material. GlassPanel resolves to an AppKit view or to
+  paint depending on the machine, and only the painted tier is a drawing this
+  window can place six times. The storybook shows the painted form and says so;
+  judging real glass means running the app.
+
+  Every icon. 229 SF Symbols mapped to Lucide is a stress test, not a review.
+  The sample is small on purpose, and the 26 whose match is a compromise are
+  listed in assets/icons/sf-to-lucide.json under "approximate" — those are the
+  ones a designer has to sign off.
+
+WHAT IT MUST NEVER DO
+
+  Ship in a release build's UI without an explicit flag. Performance and
+  developer surfaces do not appear on their own in staging or production; that
+  rule is the reference's and it carries over.

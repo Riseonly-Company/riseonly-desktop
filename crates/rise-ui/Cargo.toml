@@ -1,0 +1,32 @@
+[package]
+name = "rise-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+tracing.workspace = true
+gpui.workspace = true
+rise-core.workspace = true
+rise-theme.workspace = true
+rise-i18n.workspace = true
+
+[dev-dependencies]
+# The bundled faces have to be proved to RESOLVE, not merely to exist on disk:
+# Inter's Medium and SemiBold carry their own legacy family names, so a family
+# query can silently answer Regular. Proving otherwise needs a real text system.
+gpui = { workspace = true, features = ["test-support"] }
+
+[build-dependencies]
+# Reads assets/icons/sf-to-lucide.json once, at build time, so a missing icon is
+# a build failure rather than a blank square in a screenshot.
+serde = { workspace = true }
+serde_json.workspace = true

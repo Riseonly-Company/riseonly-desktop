@@ -1,0 +1,92 @@
+================================================================================
+rise-ui — the primitives
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt                 workspace rules, boundaries, commands
+  ../../docs/PERFORMANCE_GUIDE.md   sections 6 and 12
+  ../rise-theme/CONTEXT.txt         where every colour and length comes from
+
+--------------------------------------------------------------------------------
+NAMING — ONE FOLDER PER COMPONENT. THIS IS THE RULE.
+--------------------------------------------------------------------------------
+
+A component gets a directory named after it, and the component lives inside:
+
+    box_ui/
+        mod.rs        re-exports only
+        box_ui.rs     the component
+    button_ui/
+        mod.rs
+        button_ui.rs
+    main_text/
+        mod.rs
+        main_text.rs
+
+Never a grab-bag file. There is no primitives.rs, no text.rs, no helpers.rs and
+no components.rs. If two components share a file, split them.
+
+The folder name is the component's type name in snake_case: BoxUi -> box_ui,
+MainText -> main_text, CleverImageUi -> clever_image_ui. Directories must be
+valid Rust module identifiers, which is why they are snake_case rather than the
+reference's PascalCase.
+
+A component folder may hold more than one file when the component genuinely has
+parts — a disk cache, a prefetcher, a playback hub — and those parts stay inside
+its folder. They do not get promoted to the crate root.
+
+--------------------------------------------------------------------------------
+WHAT THIS CRATE OWNS
+--------------------------------------------------------------------------------
+
+The small composable pieces every screen uses: containers, text, buttons,
+inputs, images, skeletons, list wrappers, animation helpers.
+
+BUILT SO FAR
+  box_ui, button_ui, main_text      the Phase 1 primitives
+  fonts/                            loads the six bundled Inter faces into the
+                                    text system, and reports at startup which
+                                    weights the text system actually gave back
+                                    distinct faces for
+  icon_ui/                          an icon addressed by its SF SYMBOL name, the
+                                    way riseonly-ios addresses it, mapped to a
+                                    Lucide asset by a table build.rs turns into
+                                    a static array. A name with no file is a
+                                    build failure, not a blank square.
+  flag_ui/                          a flag by ISO 3166-1 region code, with a
+                                    painted two-letter chip when the bundle has
+                                    none. Never regional-indicator arithmetic:
+                                    that renders as two boxes off macOS.
+  skeleton/ + animation/            placeholder geometry and ONE shimmer driver
+                                    per container. Never one per shape — gpui
+                                    has no damage regions, so each animation
+                                    repaints the window.
+  input_ui/                         the text input, on gpui's own
+                                    EntityInputHandler. It has its own
+                                    CONTEXT.txt, including an honest account of
+                                    what its grapheme walker does not cover.
+
+  image/ and list/ are still empty. They land with real media and real lists in
+  Phase 7; wrap gpui's `list`, do not reimplement RiseManualListView.
+
+On lists: gpui already gives more than the reference had to build by hand.
+`list` is SumTree-backed with variable heights, ListAlignment::Bottom ("like a
+chat log" in its own docs), and splice-based prepend anchoring, so loading older
+history does not move the viewport. Wrap it here; do not reimplement
+RiseManualListView.
+
+--------------------------------------------------------------------------------
+WHAT IT MUST NEVER DO
+--------------------------------------------------------------------------------
+
+Reach for the engine, a store or a route. A primitive takes values and returns
+an element. If it needs data, it is not a primitive.
+
+Hardcode a colour, a radius or a height. Everything comes from AppTheme via
+rise_ui::theme(cx). A literal px() in a component is a bug, and
+scripts/check-design-tokens.py fails the build on one — including the tailwind
+helpers gpui inherits (.px_5(), .gap_4(), .text_sm()), which look like tokens
+and are not: they bake a scale that is neither the reference's numbers nor
+reachable by density.
+
+Depend on a feature module. The dependency only ever points the other way.

@@ -1,0 +1,154 @@
+================================================================================
+app/src/app/shell — the desktop frame
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt              workspace rules, boundaries, commands
+  ../../../../docs/PLATFORM_GLASS.md   materials, the three tiers, the shell shape
+  ../../CONTEXT.txt                    what app/ owns
+  ../../core/CONTEXT.txt               the lease stack and SessionActivity, both
+                                       of which the shell drives
+
+WHAT THIS DIRECTORY OWNS
+
+  The vertical rail on the left, the geometry around it, and everything the
+  desktop has that the phone does not: the keyboard, the overlays, the windows,
+  and what a dropped file means. This is the only part of the product design
+  that deliberately departs from the phone: the screens are the phone's, the
+  frame is the desktop's.
+
+    rail 56 · list/sidebar 320 · content flexible · aside 300
+    rail = Material::Chrome · list = Material::Panel · content opaque
+
+  The numbers are not here. They are rise-theme's ShellMetrics, so density
+  reaches them and so rise-navigation's PanePolicy can be built from the same
+  values instead of repeating them.
+
+  rail.rs              the sections and folders, click and right-click
+  shell_actions.rs     the actions, the one idempotent key map, and what
+                       Cmd/Ctrl+1..9 addresses
+  command_palette.rs   Cmd/Ctrl+K: the catalogue, the ranking, the list
+  window_presenter.rs  opening windows, and the one-account-per-process decision
+  handover.rs          what a second launch hands the first one
+  file_drop.rs         what a drop onto the window means
+
+THE RAIL IS A PRESENTATION OF RootTab, NOT A SECOND LIST OF SECTIONS
+
+  RailSection::ALL must stay in the same order as RootTab::ALL, and a test holds
+  it there. The order is the reference's own — MainTabs.swift declares posts,
+  search, chats, shorts, more — and it is the order Cmd+1..5 follows, so getting
+  it wrong moves the user's shortcuts as well.
+
+  Each section carries the SF Symbol name and the string key the reference uses,
+  not a Lucide name and not literal copy. Keying on the Apple side is what lets
+  a ported screen diff cleanly against its Swift; rise-ui's IconUi does the
+  translation, once, from a table.
+
+  Cmd/Ctrl+1..5 are the sections and 6..9 are the first four folders. The
+  mapping is a function of the folder count, not a table, so a shortcut past the
+  last folder does nothing instead of addressing whatever moved into that slot.
+
+THE KEYBOARD
+
+  Bindings are scoped to a key context, never global. The shell's context is
+  "Shell" and the palette adds "CommandPalette" on top of it, so a text field
+  never has a shortcut taken from it by the frame around it — and the frame's
+  bindings stay inert while a field owns the keystroke.
+
+  That cuts both ways, and it is one of two gpui traps in here: an action
+  listener STOPS PROPAGATION BY DEFAULT during the bubble phase, and the deepest
+  matching binding is dispatched first. A single-line InputUi that handled `up`
+  would silently take the arrow keys away from the list in front of it, which is
+  why rise-ui's input propagates vertical motion instead of consuming it. Enter
+  and Escape reach the palette as InputUiEvent::Submitted / Cancelled rather
+  than as contested bindings.
+
+  The second trap is worse, because it fails silently in the other direction: a
+  FOCUS HANDLE WITH NO DISPATCH NODE DISABLES EVERY SHORTCUT. `InputUi::new` is
+  the raw element — IME and caret, no key context, no tracked focus — so
+  focusing it left gpui with nothing to find and it fell back to the WINDOW
+  ROOT, where none of the app's key contexts live. Typing still worked, because
+  typing goes through the input handler and not the dispatch tree, so the field
+  looked entirely healthy while Esc and every chord died. Always render the
+  ENTITY. For the same reason the shell focuses itself on a window nobody has
+  clicked in yet, and the tests drive real keystrokes rather than calling the
+  handlers, which would prove the handler and not the binding.
+
+  Esc closes the topmost overlay and only the topmost, then — with nothing
+  floating — the topmost screen. That ordering is the OverlayStack's job, which
+  is why the shell holds a stack and not two booleans.
+
+A MODAL MUST OCCLUDE THE SCRIM THAT DISMISSES IT
+
+  gpui's hit test collects every hitbox under the pointer and stops only at one
+  that blocks, so a window-filling dismiss scrim stays "hovered" while the
+  pointer is over the thing it is dimming. Both the palette panel and
+  rise-widgets' OverlayLayer content call `.occlude()`. Without it a click on a
+  result runs the scrim's dismiss instead of the row, and a menu is reachable
+  only from the keyboard. Any new sheet or popover over a scrim needs the same
+  line, and a test that clicks through a real window rather than calling the
+  handler — the state-machine tests cannot see this class of defect at all.
+
+NOTHING LEAVES THE WINDOW RECTANGLE
+
+  gpui has no native popups on X11 or Windows — only Wayland — so every menu and
+  dropdown is an in-window overlay placed by rise-widgets' `place()`. The
+  palette does not use it: it is a modal centred by flex, and flex cannot put it
+  outside the frame. Menus can, which is why they go through the arithmetic.
+
+  Right-click carries the reference's action ids (`ContextMenuUi`'s `key`), so
+  handlers and analytics line up with the phone. The rail's menu has one entry
+  today because one is what the shell can honestly do without chat data; the
+  folder actions the reference has — mark read, mute, reorder — arrive with the
+  module in Phase 7, as list entries and not as a design.
+
+WINDOWS
+
+  ONE ACCOUNT PER PROCESS, MANY WINDOWS ONTO IT. rise-engine holds one engine
+  per account per process behind a lease on the database path, and the account
+  root entity is dropped whole when the account changes; a second account in a
+  second window would mean a second engine, a second database and two teardown
+  orders inside one process. Two accounts at once is a second process, and each
+  process already takes its own advisory lock. Every window is a view onto the
+  same account with its own navigation stacks and its own overlays.
+
+  A desktop app is launched constantly — from the dock, from a link, from a file
+  association. The second launch writes its argv to the primary's inbox and
+  exits; handover.rs polls that inbox, turns the links into routes and raises
+  the window that already exists. Nothing about that path opens a second
+  database.
+
+WHAT IT MUST NEVER DO
+
+  Ask for glass. The rail asks for Material::Chrome and rise-platform decides
+  what that is on this machine. A component that could name glass would be a
+  hole on Linux that nobody notices until a screenshot arrives.
+
+  Reach past InteractionsStore for data. The folder list arrives as values; the
+  rail neither fetches nor owns it.
+
+  Spell a colour or a length. Everything comes from rise_ui::theme(cx), and
+  scripts/check-design-tokens.py fails the build on a literal.
+
+  Sync the lease stack from render unconditionally. `screens_dirty` exists
+  because rebuilding the visible set allocates, and the set only moves when the
+  user or the window moves it.
+
+WHAT IS WIRED AND WHAT IS NOT
+
+  Wired: sections and folders respond, Cmd/Ctrl+1..9, back/forward, Esc, the
+  palette, right-click menus, drag-in policy, new and close window, deep-link
+  handover.
+
+  NOT wired, and honestly so:
+    - The drop policy has no consumer. It resolves the target screen, the cap
+      and what is not a file; the composer that will take the paths is Phase 7.
+    - Dragging OUT is reported by rise_platform::gpui_shim::supports_external_drag
+      and used by nothing, because nothing here owns a file yet.
+    - Folders are always empty: the list is chat data, and chat is Phase 7. The
+      shortcuts, the rail rows and the palette entries for them are written and
+      tested against a supplied list.
+    - SessionActivity has five signals; the shell can feed it two. gpui can
+      minimise a window but cannot report that it is minimised, and knows
+      nothing of system idle or a locked screen. Those need a rise-platform
+      seam that does not exist yet.

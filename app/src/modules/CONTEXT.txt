@@ -1,0 +1,87 @@
+================================================================================
+app/src/modules — the 22 feature modules
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt                    what app/ owns
+  ../../../CONTEXT.txt                 workspace rules, boundaries, commands
+  ../../../docs/STORE_ARCHITECTURE.md  the canon this layout comes from
+  ../../../../riseonly-ios/STORE_ARCHITECTURE.md  the canon itself, in full
+  the CONTEXT.txt of the module you are about to touch
+
+MODULES ARE ORGANISATION, NOT ISOLATION
+  A module is a plain `mod` tree inside the application binary, exactly as it is
+  a folder inside one build target in the reference. Modules may reference each
+  other directly. There is no per-module crate, no trait layer between them, and
+  no `rise-contracts`: the genuinely reusable, layered pieces are the crates in
+  `crates/`, and everything here is this product's screens and stores.
+
+  (An earlier draft of this file described one crate per module. That was never
+  built and would have made `story` calling `ChatActionsStore` — which the
+  reference does — a dependency cycle instead of a call.)
+
+INTERNAL LAYOUT — copy it exactly
+  pages/        full screens, and NOTHING ELSE. No helpers, no view models, no
+                types. If it is not a screen it does not live here.
+  components/   reusable subviews for this module
+  widgets/      module-owned global sheets and overlays
+  shared/       mocks, permissions, policy helpers, small utilities
+  services/     only where the reference has it (auth): pure policy that is
+                neither a store nor a screen
+  stores/       the triad, laid out exactly as the module's iOS counterpart
+                lays it out. The reference is not consistent about this and the
+                tree follows it rather than tidying it: auth and session put
+                <domain>_actions/ straight under stores/, presence wraps them in
+                stores/presence/. `cargo make parity` compares trees, so a
+                "cleaner" layout reads as unported work.
+    <domain>_actions/       <domain>_actions.rs, <domain>_types.rs
+    <domain>_services/      <domain>_services.rs
+    <domain>_interactions/  <domain>_interactions.rs
+  engine/       only for modules that own a backend service
+    rise_<f>_domain.rs, rise_<f>_repository.rs, rise_<f>_presentation.rs,
+    rise_<f>_engine_models.rs, rise_<f>_debug_trace.rs
+    core/rise_<f>_rpc.rs, core/rise_<f>_transport.rs, and any resource
+    repository the domain owns
+
+  Directory names are snake_case, not the reference's hyphens: `auth-actions`
+  is not a Rust module path. The reference's `<domain>-wire-types` file has no
+  counterpart here — request and response DTOs live beside the descriptors they
+  belong to, in `engine/core/rise_<f>_rpc.rs`, because a store may not import
+  `rise_engine` and the descriptors must.
+
+  A module only has the folders its iOS counterpart has, with one standing
+  exception: fifteen of the twenty-two reference modules never migrated to
+  RiseEngine and still use the old transport there. Porting one of those is a
+  REDESIGN of its data layer, so it gains an `engine/` the reference does not
+  have. `auth`, `session` and `presence` are already in that position.
+
+THE STORE TRIAD
+  <Feature>ActionsStore       thin command facade, no state
+  <Feature>ServicesStore      cheap selectors over an immutable snapshot
+  <Feature>InteractionsStore  the ONLY thing a view may call
+
+  <Feature> is the domain, not the folder: module chat yields both
+  ChatActionsStore and MessageActionsStore.
+
+  stores/ must not contain a repository, a transport, an endpoint catalogue, a
+  server cache, a realtime reducer, mocks, or permissions. CI checks that
+  stores/ never imports rise_engine directly, and that engine/ never imports
+  gpui.
+
+WHERE A STORE LIVES
+  Auth is process-scoped, because it is what decides which account there is; its
+  stores are gpui globals. Everything that belongs to ONE account is owned by
+  that account's scope and dropped whole when it changes — the reference's ~60
+  singletons and its teardown-order invariant do not exist here.
+
+NO COMMENTS IN STORES
+  No file headers, no doc comments, no section markers. In engine code a comment
+  is allowed only for a non-obvious concurrency, transaction, replay or
+  reconciliation invariant.
+
+DEAD CODE WHILE A MODULE IS AHEAD OF ITS SCREENS
+  `main.rs` carries one `#[allow(dead_code)]` over this whole tree, because a
+  module's domain lands before the screens that call it — presence is drawn by
+  the chat list and the profile, neither of which exists yet. It comes off module
+  by module as those screens arrive. A module that still needs it once its
+  screens exist has API nobody wanted.

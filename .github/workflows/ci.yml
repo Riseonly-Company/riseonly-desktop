@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Every OS from the first commit. A target that is not built on every change
+  # is a target that is already broken and nobody knows it yet.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          # ubuntu-22.04 specifically: ubuntu-latest silently raises the glibc
+          # floor and the resulting binary will not run on older distributions.
+          - os: ubuntu-22.04
+            name: linux
+          - os: windows-latest
+            name: windows
+    runs-on: ${{ matrix.os }}
+    name: build (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libfontconfig-dev libvulkan1 libasound2-dev cmake clang lld
+      - run: cargo build --workspace --all-targets
+      # Not --all-features. The `ffmpeg` feature needs an LGPL prefix that takes
+      # ten minutes to build and is not vendored here; its build.rs panics with
+      # the command to run rather than silently linking a GPL system FFmpeg.
+      - run: cargo test --workspace
+      # rlottie is cheap to vendor (a tarball and 35 translation units) and this
+      # is what moves its C++ compile from "written blind" to "compiled" on
+      # Linux and Windows.
+      - name: Vendor rlottie
+        shell: bash
+        run: ./scripts/vendor-rlottie.sh
+      - run: cargo test -p rise-media --features rlottie
+
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: python3 scripts/check-boundaries.py
+      - run: python3 scripts/check-design-tokens.py
+      - name: Vendor rlottie
+        run: ./scripts/vendor-rlottie.sh
+      - run: python3 scripts/check-rlottie-license.py

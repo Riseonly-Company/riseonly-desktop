@@ -1,0 +1,770 @@
+================================================================================
+RISEONLY DESKTOP — PHASES
+================================================================================
+
+Hand one phase to one session. Every phase below is self-contained: it states
+what already exists, what to build, where each file goes, and the gate that ends
+it. A phase is not done because the code exists; it is done because the gate
+passes.
+
+Read CONTEXT.txt first. Read this second. Read the CONTEXT.txt of the directory
+you are about to touch third.
+
+WHAT WE ARE BUILDING
+  A native desktop client for Riseonly. Rust + GPUI. macOS, Linux and Windows
+  from one codebase — but ONLY macOS is built and run today. Linux and Windows
+  arms are written blind and left unexercised on purpose: writing them now is
+  cheap, retrofitting the seam later is not.
+
+TWO REFERENCES, TWO DIFFERENT JOBS
+  ../riseonly-ios      Naming, architecture, store layout, performance contract,
+                       every design token. READ-ONLY. When in doubt about what
+                       to call something or where it belongs, the answer is
+                       there. 347,887 lines of Swift, 1,816 files, 22 modules.
+  Telegram for macOS   The desktop SHELL only: a vertical rail on the left,
+                       folders under it, multi-column layout, native materials.
+                       Principles, never code — it is GPLv2.
+
+  Product design is the iOS app one to one. Shell is Telegram-macOS-shaped.
+  Those two are not in conflict: the screens are the phone's, the frame is the
+  desktop's.
+
+SCALE
+  chat alone is 125,508 lines, 36% of the app. music 31,495. user 29,208.
+  media-picker 17,376. post 15,195. rtc 13,023. Then a long tail of 300-500.
+
+STATUS LEGEND
+  [done] gate passed   [active] in progress   [ ] not started
+
+CURRENT: 1,455 tests green on macOS. Phases 0-3 done, Phase 4 [active] and
+nearly closed, Phases 5 and 6 [active] with their gates met, Phase 7 [active]
+with auth, onboarding, session and presence landed. The design system
+exists — material tokens and their painted tier, typography over a font the
+product ships itself, the SF-Symbol-to-Lucide table, flags as assets, 41 locales
+with both interpolation dialects, a text input built on gpui's own IME plumbing,
+the RiseGlass Swift bridge, and a storybook that stands every component at two
+appearances and three densities — and the shell around it now responds:
+reversible columns, the active screen as a lease stack, a desktop
+SessionActivity, the keyboard, in-window menus, drag-in and the second-launch
+handover.
+  rise-platform 421 · rise-media 263 · rise-engine 124 · rise-ui 114
+  riseonly 116 · rise-i18n 63 · rise-widgets 56 · rise-navigation 43
+  rise-theme 33 · rise-core 15
+
+================================================================================
+THE REPOSITORY AS IT ACTUALLY IS
+================================================================================
+
+crates/            LIBRARIES — layered, reusable, each with its own CONTEXT.txt
+  rise-core        RequestId, Generation, StaleGuard. No UI, no OS, no engine.
+  rise-i18n        41 locales, plurals, two interpolation dialects.
+  rise-engine      wire, store, sync, upload. The data layer.
+  rise-platform    every OS difference behind traits, plus the gpui shim.
+  rise-theme       palette, radii, heights, density, materials, typography,
+                   spacing, icons, shell geometry.
+  rise-ui          primitives, icons, flags, fonts, skeletons, text input.
+                   One folder per component.
+  rise-widgets     composed: glass panel, overlay placement and layer, context
+                   menu; sheets, notifier and the media viewer still to come.
+  rise-media       video, audio, lottie, images, calls.
+  rise-navigation  RootRoute, PanePolicy, NavigationStore.
+
+app/               THE APPLICATION — a binary, not a library
+  src/main.rs      resolves config, installs the theme, opens the window
+  src/app/         root view, router, deep links, the shell (rail, keyboard,
+                   command palette, windows, handover, drop policy), storybook
+  src/core/        account scope, session activity, active screens, config,
+                   engine bridge, utils
+  src/modules/     the 22 feature modules, as plain module trees
+
+There is no rise-contracts and no rise-runtime. There is no crates/modules.
+Modules are organisation, not isolation: they live inside the app and may
+reference each other directly, exactly as they do in the reference. Do not
+reintroduce a trait layer between them.
+
+================================================================================
+PHASE 0 — GROUND  [done]
+================================================================================
+
+  [done] Cargo workspace, Rust 1.95, edition 2024, resolver 3
+  [done] gpui pinned to rev 6b2aa1c90aeb72cadfd30ed12141ed9e2569eded
+  [done] [profile.dev.package.gpui] opt-level = 3 (mandatory: an unoptimised
+         gpui is unusable for interactive development)
+  [done] scripts/check-boundaries.py, scripts/check-tree-parity.py
+  [done] cargo make dev-macos / test / lint / parity / ci / set-dev-url
+  [done] macOS .app bundling, ad-hoc signing, Info.plist, entitlements
+  [done] GitHub Actions matrix: macOS, ubuntu-22.04, Windows
+  [done] CONTEXT.txt in every significant directory
+
+GATE MET: empty window builds and opens on macOS; boundaries clean; CI green.
+
+REMEMBER: Linux must build on ubuntu-22.04 specifically. ubuntu-latest silently
+raises the glibc floor and the binary stops running on older distributions.
+
+================================================================================
+PHASE 1 — FOUNDATION  [done]
+================================================================================
+
+  [done] rise-core: RequestId ((logical_ms << 20) | seq, never regresses on a
+         backwards clock), Generation, StaleGuard
+  [done] rise-theme: the reference palette by value, Density multiplier
+  [done] rise-ui: BoxUi, ButtonUi, MainText — one folder per component
+  [done] rise-navigation: RootRoute, PanePolicy with hysteresis, NavigationStore
+  [done] app: shell, exhaustive route match, onboarding screen
+  [done] 22 module trees, iOS folder convention, snake_case module paths
+
+GATE MET: the window shows a real screen built from the real theme.
+
+WHAT WAS LEARNED, KEPT SO NOBODY RELEARNS IT
+  - GPUI's `list` already does variable heights, ListAlignment::Bottom and
+    splice-based prepend anchoring. Most of RiseManualListView does not need
+    porting. Wrap `list`; do not reimplement it.
+  - AccessKit is wired into all three backends. Accessibility is no longer a
+    framework gap; populating the tree is still on us.
+  - Windows CJK input is the weakest link in the stack (IMM32, no TSF), not
+    Linux as the reputation suggests.
+  - gpui is Apache-2.0 and safe to link. Everything else in the Zed repo
+    (crates/ui, theme, icons, editor, markdown, picker, workspace) is GPL-3.0.
+
+================================================================================
+PHASE 2 — THE ENGINE  [done]
+================================================================================
+
+Headless. Not one pixel. This phase decided whether the client is correct under
+reconnects, account switches and offline.
+
+WIRE  crates/rise-engine/src/rise_wire/
+  [done] rise_wire_contracts.rs   descriptors, ReplayPolicy, RequestEnvelope
+  [done] rise_wire_frame_decoder.rs the tolerant classifier
+  [done] rise_wire.rs             correlation, timeouts, pushes, disconnect
+
+  THE THREE GATEWAY DEVIATIONS. Covered by tests. Not bugs, do not "fix" them:
+    - `status` is omitted on success;
+    - the payload is under `data` for some services, `result` for others;
+    - `request_id` arrives as an integer, a float or a string.
+
+  The engine does NOT own the socket. The host pumps inbound bytes into
+  `accept()` and supplies a `FrameSender`. That mirrors the reference and makes
+  every path testable without a network.
+
+STORE  crates/rise-engine/src/rise_store/
+  [done] rise_store_cipher.rs      AES-GCM, AAD = "rise.engine.store.aad.v1"
+                                   plus length-prefixed account‖domain‖identity
+  [done] rise_sqlite.rs            schema v4 created directly, key verifier
+  [done] rise_store_models.rs      Namespace, LocalId, ViewId, PositionKey
+  [done] rise_store_writes.rs      WriteBatch — one transaction, proven rollback
+  [done] rise_store_reads.rs       values, entities, aliases, view windows
+  [done] rise_store_concurrency.rs the single-writer thread on a channel
+  [done] rise_store_observation.rs RevisionBus with explicit overflow
+
+SYNC  crates/rise-engine/src/rise_sync/rise_sync.rs
+  [done] batch caps 32 events / 512 mutations / 8 MiB
+  [done] backoff: 1000 · 2^min(n-1,6) + (request_id % (base/4))
+  [done] outbox state machine, claim tokens, head-of-line by ordering key
+
+UPLOAD  crates/rise-engine/src/rise_upload/
+  [done] rise_upload_progress.rs   coalescing hub, ~92 updates instead of 640
+
+COMPOSITION  crates/rise-engine/src/rise_engine.rs
+  [done] open/close, in-process account lease, hashed per-account directories,
+         advisory file lock for the second process
+
+GATE MET: 124 engine tests. Rollback proven. Plaintext proven absent from disk.
+An account switch provably cannot let an old callback write into the new account.
+
+TRAPS THIS PHASE ALREADY HIT — do not step on them again
+  - fs4's try_lock_exclusive returns Ok(false) on contention, Err only on a
+    failed syscall. Treating it as a plain Result silently admits the second
+    process.
+  - PositionKey must bias into unsigned space or negative ordinals sort after
+    positive ones and page merges reorder rows.
+  - A repository is a tokio task on an mpsc channel, NOT a mutex. The canon's
+    guarantees are ordering guarantees; a mutex gives exclusion without ordering.
+
+================================================================================
+PHASE 3 — PLATFORM SEAMS  [done]
+================================================================================
+
+GOAL
+  Fifteen small subsystems, three implementations each. Individually boring,
+  collectively the difference between an app and a demo. Everything here lives
+  in crates/rise-platform — the only crate besides rise-media allowed
+  #[cfg(target_os)].
+
+ALREADY DONE
+  [done] secure_store.rs      the trait, three secret purposes, entry naming
+  [done] keyring_store.rs     Keychain / Credential Manager / Secret Service,
+                              base64 because the backends disagree about bytes
+                              vs strings; is_available() does a real round trip
+  [done] paths.rs             per-OS data dirs, per-environment siblings,
+                              cloud-sync detection
+  [done] single_instance.rs   advisory lock + inbox handoff of arguments
+  [done] deep_link.rs         scheme and host validation, percent decoding
+  [done] gpui_shim.rs         wrappers over the non-uniform gpui calls
+
+ALSO DONE
+  [done] host_os.rs      HostOs as a VALUE, not a compile-time fact. This is what
+                         keeps "written blind" from also meaning "untested":
+                         per-OS policy is a pure function of HostOs, so all three
+                         arms are exercised by the suite on a Mac and only the
+                         final call into the OS API stays unverified.
+  [done] notifications.rs Local, from socket events. No APNs, no device token —
+                         that whole reference path has no counterpart. The mute
+                         policy from PushChatNotificationPolicy is ported
+                         faithfully, fail-open and all. gpui implements
+                         SystemNotification on all three backends.
+  [done] tray.rs         NSStatusItem + Dock badge real on macOS; Shell_NotifyIconW
+                         written blind. Linux reports Unsupported and names
+                         StatusNotifierItem: it is a D-Bus object that must stay
+                         exported for the process lifetime, and this seam is
+                         synchronous and main-thread-bound. Giving the tray an
+                         executor is a decision for whoever needs Linux.
+  [done] window_chrome.rs App-drawn titlebar by default, control side and
+                         decoration mode as pure per-host policy.
+  [done] autostart.rs    SMAppService on macOS; XDG desktop entry on Linux is
+                         std-only and genuinely tested here; HKCU Run blind.
+  [done] file_dialog.rs  gpui has the dialogs; what it lacks is a type filter,
+                         so that is ours and it is enforced after the fact.
+  [done] reveal_in_file_manager.rs  Plus the executable-consent gate, so nothing
+                         launches a downloaded binary by accident.
+  [done] global_hotkey.rs Carbon RegisterEventHotKey on macOS — no Accessibility
+                         permission, unlike an NSEvent monitor. Windows and Linux
+                         report a named UnavailableReason rather than no-oping.
+  [done] media_keys.rs   MediaPlayer.framework real on macOS, MPRIS blind on
+                         Linux, Windows SMTC declined with its reason recorded.
+                         souvlaki was NOT vendored: talking to the two APIs
+                         directly turned out smaller than the crate.
+  [done] updater.rs      Manifest, version decision, integrity, per-OS install
+                         plan. Takes bytes, never fetches them — network is
+                         rise-engine's. Applying is refused until Phase 8.
+  [done] materials.rs    The policy and the trait; the Swift RiseGlass target is
+                         Phase 5. See docs/PLATFORM_GLASS.md.
+
+GATE MET: 402 rise-platform tests, 589 in the workspace. fmt, clippy -D warnings
+and scripts/check-boundaries.py all clean. docs/PLATFORM_MATRIX.md records, per
+seam, what is verified, what merely compiles, and what is only written. No
+#[cfg(target_os)] anywhere in app/.
+
+An adversarial pass over all ten new seams raised 16 findings; 12 were refuted on
+independent review and 4 confirmed and fixed. What the four had in common is worth
+remembering: none of them failed a test, because each was a place where the code
+and its test agreed with each other and both were wrong.
+
+TRAPS THIS PHASE HIT — do not step on them again
+  - gpui's path_for_auxiliary_executable is todo!() on Windows at this rev, so
+    the updater's helper cannot be found through it. HelperUnavailable is a real
+    outcome, not defensive padding.
+  - serde builds a struct from a JSON *sequence*, so a bare `[]` parsed as an
+    empty update manifest — and a feed published as an array of releases would
+    have read as "no updates" instead of failing. Manifests are now required to
+    be objects.
+  - objc2's add_method wants a higher-ranked fn pointer. A handler written
+    `fn(&AnyObject, Sel, ...)` binds one concrete lifetime and will not compile;
+    take the receiver as *mut AnyObject.
+  - std::path is flavoured by the host it compiles for. A "C:\..." literal is one
+    opaque component on a Mac and its parent is "", so a Windows path cannot be
+    used as a test fixture for path arithmetic.
+  - MPRemoteCommand.addTarget:action: does NOT retain its target — the SDK header
+    says so directly — and MPRemoteCommandCenter is a process-wide singleton that
+    outlives the app object. Dropping the target without removeTarget: leaves the
+    OS holding freed memory, and the next media key press from ANY app messages
+    it. Registration and removal now share one table so they cannot drift.
+  - On macOS an application bundle IS a directory, so "reveal this folder" and
+    "run this program" are the same call. The bundle test must use the resolved
+    path: a trailing separator or a symlink hides the .app extension, and a
+    hand-rolled basename that keeps "" for "/Foo.app/" disarms the guard.
+  - #[cfg(target_os)] is not the only way to lose a platform. gpui's
+    titlebar_double_click is an empty default on the trait and only gpui_macos
+    overrides it, so the call compiles and silently does nothing on two of three
+    targets. Check the backend, not the trait, before reporting Performed.
+
+RULES FOR THIS PHASE
+  A trait must never leak an OS type into a caller's signature. The point of the
+  crate is that app/ never learns which OS it is on.
+  Every seam reports whether it did the thing (see PlatformSupport in
+  gpui_shim.rs) rather than silently no-oping, so a caller can offer an
+  alternative.
+  macOS is the only arm you can test. Say so; do not imply Linux coverage.
+
+GATE
+  Every seam has a test that runs on macOS, and a written note in
+  docs/PLATFORM_MATRIX.md saying what is unverified elsewhere. Nothing in app/
+  or app/src/modules contains #[cfg(target_os)].
+
+================================================================================
+PHASE 4 — THE MEDIA BET  [active]
+================================================================================
+
+GOAL
+  The highest-risk item in the project, and the reason it comes BEFORE any feed
+  UI rather than after it.
+
+THE PROBLEM, STATED PRECISELY
+  gpui::surface() accepts only CVPixelBuffer and is #[cfg(target_os = "macos")].
+  On Linux and Windows its paint method is a silent no-op. That is why Zed's own
+  livekit_client aliases RemoteVideoFrame = Arc<gpui::RenderImage> off macOS and
+  does a full I420 → RGBA CPU conversion plus a fresh texture upload PER FRAME.
+  A vertical short-video feed cannot ship on that path.
+
+BUILD, IN THIS ORDER
+  [done] crates/rise-media/src/texture/
+        frame.rs, color.rs, external_texture.rs, import.rs, nv12_to_rgb.wgsl.
+        ImportPlan picks IOSurface / DMA-BUF / DXGI per host and is a PURE
+        function of HostOs, so all three arms are tested on a Mac. StreamTexture
+        is one persistent allocation per stream with a process-wide budget
+        ledger; a test named plans_never_allocate_per_frame pins the invariant.
+        PARTIAL: the two off-macOS import BODIES are not written. They return
+        ImportError::NotExercised rather than a stub that looks like it works.
+  [done] crates/rise-media/src/video/decoder.rs
+        rsmpeg behind the `ffmpeg` feature; every DECISION (accelerator, codec
+        allow-list, geometry, software degradation) is pure and always compiled.
+        hw_device_ctx is set on the raw AVCodecContext — rsmpeg exposes only
+        set_hw_frames_ctx, and a decoder needs the device.
+        NOT DONE: no bitstream has been decoded end to end. The decoder opens
+        and the linked FFmpeg is asserted; frames have not been pulled through.
+  [done] crates/rise-media/src/video/feed_scheduler.rs
+        Pool cap 5, preload 2 ahead / 1 behind, closes emitted before opens,
+        keyed on stable server ids. 18 tests including a 200-item scroll that
+        asserts the cap at every position.
+  [done] crates/rise-media/src/audio/
+        cpal + symphonia, and no ffmpeg on the music player's path at all.
+        format/codec/gapless/decoder/symphonia_backend/ring/resample/fade/
+        output/cpal_sink/pump/scheduler. A real WAV is built in the suite and
+        decoded frame for frame, so the decode path is proven rather than
+        mocked. The gapless note came true and is handled: symphonia trims MP3
+        from the LAME tag and does NOT trim AAC in MP4, which is exactly what
+        file-service's extraction job writes, so iTunSMPB parsing is ours and
+        `DecoderPlan` decides who trims so the two can never both cut.
+        THREE THINGS WORTH KEEPING:
+          - The device callback is a real-time thread. It may not allocate,
+            lock or block, which is why ring.rs is a hand-written lock-free
+            SPSC and not a Mutex<VecDeque>.
+          - WASAPI shared mode is FIXED at the control-panel rate and does not
+            negotiate. 44.1 played verbatim on it is 8.8% sharp — the whole
+            catalogue in the wrong key — hence resample.rs, which is written
+            for the one platform nobody here can run and tested on the one
+            everybody can.
+          - Opus has NO pure-Rust decoder and file-service accepts it. It is
+            refused by name rather than producing silence. Voice messages are
+            Ogg/Opus, so Phase 7 needs a decision: libopus, or route that one
+            format through the FFmpeg already vendored for video.
+  [done] crates/rise-media/src/lottie/
+        rlottie vendored from upstream (MIT), compiled by build.rs with `cc`,
+        behind the `rlottie` feature and behind a trait so ThorVG can replace
+        it. Each (sticker, size, frame) rasterised once, LZ4'd and replayed;
+        ONE shared 30 Hz tick for every sticker on screen; a bucketed texture
+        atlas priced into the same GPU ledger as video. A test rasterises a
+        real Lottie through the LINKED library and asserts the pixels and their
+        byte order.
+        NOT foyer and NOT the telegram fork. foyer is a hybrid memory/disk
+        cache for a workload that is neither; a bounded in-memory registry is
+        what the reference has and what this needs. The telegram tree is GPLv2
+        and copying from it would relicense the product.
+        THE CAP THAT IS NOT REDUNDANT: the frame cache bounds resident
+        sequences by COUNT as well as by bytes. Every resident sequence holds
+        an rlottie animation on the C++ heap that this process's ledger cannot
+        see, so a picker scrolled past hundreds of small stickers stays under
+        the byte ceiling forever while accumulating hundreds of C++ animations.
+        The suite caught this; nothing else would have.
+        30 Hz, not 60: sources are authored at 60 and read identically at 30,
+        and halving the cadence halves both the rasterisation and the texture
+        writes. On a 165 Hz monitor it is still 30.
+  [done] ffmpeg built LGPL-only. scripts/build-ffmpeg-lgpl.sh (--disable-gpl
+      --disable-nonfree --disable-version3, shared, narrow decoder set),
+      build.rs refusing to fall back to a system FFmpeg,
+      scripts/check-ffmpeg-license.py in `cargo make lint`, and a test asserting
+      avcodec_configuration() on the LINKED library — the one claim a script
+      edit cannot fake. NOT DONE: publishing the matching source on release.
+
+GATE: PARTLY MET
+  MET: the memory regression tests exist and pass, for all three media kinds.
+  Video — a 500-item synthetic scroll holds the ceiling, a 500-item feed costs
+  exactly what a 5-item one does, three streams survive a simulated minute at
+  60fps with zero further allocation. Stickers — a 500-sticker picker scroll
+  holds the compressed, decoded and atlas ceilings, and 500 costs what 40 does.
+  Audio — forty tracks play through two decoders and one ring, and two trimmed
+  tracks join with no lost frames and no added silence. Process RSS does not
+  grow across any of the three.
+  MET: the linked libraries are asserted, not assumed. rlottie rasterises a
+  real document and the pixels are checked; symphonia decodes a real file and
+  the frame count and waveform are checked; FFmpeg's licence is read off
+  avcodec_configuration() at runtime.
+  NOT MET: "three simultaneous videos hold FRAME BUDGET" is unproven. No real
+  bitstream has been decoded, nothing has been drawn, and frame timing has not
+  been measured. That needs the render integration, which needs Phase 5.
+  NOT MET: the Linux and Windows import bodies are declared, not written.
+  NOT MET: nothing has been uploaded to a GPU. The atlas is an allocation
+  policy with a test; the texture it describes arrives in Phase 5.
+
+WHY THE CEILING TEST EXISTS
+  A community report documents gpui memory for six static images dropping from
+  300 MB to 12 MB once CPU-side bytes stopped being retained after GPU upload.
+  Multiply by 60fps × N videos × M stickers.
+
+================================================================================
+PHASE 5 — DESIGN SYSTEM  [active]
+================================================================================
+
+DESIGN TARGET
+  The mobile design one to one, in a modern macOS desktop shell. A vertical rail
+  on the left the way Telegram for macOS does it, carrying the sections the
+  phone puts in a tab bar — posts, chats, search, vacancies, profile — with
+  folders stacked beneath. Liquid Glass wherever a real macOS app uses it.
+
+  Shell geometry:
+    rail 56pt · list/sidebar 320pt · content flexible · aside 300pt
+    rail = Material::Chrome, list = Material::Panel, content opaque
+
+BUILD
+  [done] rise-theme: Material tokens (Chrome / Panel / Overlay) and painted
+      forms. Also typography, spacing, icon and shell-geometry tokens, which the
+      reference has no layer for and which density could not otherwise reach.
+      `Material` itself stayed in rise-platform beside the resolve() that
+      consumes it, and rise-theme re-exports it; see rise-theme/CONTEXT.txt.
+  [done] Window vibrancy. Free as predicted, and applied in main.rs through
+      apply_window_material, which downgrades to opaque off macOS rather than
+      handing a Linux session a see-through window with no compositor blur.
+  [done] crates/rise-platform/src/macos/glass/RiseGlass.swift
+      A Swift target behind a C ABI, built by build.rs, macOS only. The C ABI
+      refuses every call off the main thread before dereferencing anything, and
+      the class is reached through NSClassFromString behind #available so an old
+      build SDK is survivable. swiftc is now a hard macOS build prerequisite.
+  [done] Painted fallback. rise-widgets/glass_panel is the only component that
+      knows native materials exist, and even there it never names glass.
+      GlassPanel records its rectangle from PREPAINT — the layout pass — and
+      glass_host() commits the whole batch once per frame from paint, which is
+      after every panel has reported.
+  [done] The left rail, as a presentation of RootTab plus folders. RootTab::ALL
+      was reordered to the reference's own (posts, search, chats, shorts, more);
+      a test holds the rail to it, because Phase 6 hangs Cmd+1..5 off that order.
+  [done] Ship our own font. Inter 4.1, six static faces (300/400/500/600/700/900)
+      because the reference draws with six. Typography snaps an unshipped weight
+      to the nearest face rather than letting the text stack substitute a
+      different family per OS.
+  [done] SF Symbols → Lucide mapping table, keyed by SF name. 229 keys: the 228
+      the reference names across BOTH systemName: and systemImage:, plus
+      `folder` for the rail. 26 are honest approximations and are listed as such.
+      A build script turns the table into a static array, so a name with no file
+      is a build failure rather than a blank square.
+  [done] Replace emoji flags. 256 SVGs by ISO 3166-1 alpha-2, and a painted chip
+      carrying the two letters when a region has none. Nothing does
+      regional-indicator arithmetic, and a test proves the fallback never emits
+      a code point outside ASCII.
+  [done] Text input. NOT gpui-component — see below.
+  [done] rise-i18n: 41 locales, both dialects, the fallback chain. The catalogue
+      is generated from backend/i18n/languages.json, the same file the Swift and
+      the server generate from, with a check that fails when it drifts.
+
+  WHY THE TEXT INPUT IS NOT gpui-component
+    This phase named gpui-component (Apache-2.0) as a hard dependency. It was
+    not taken. gpui-component tracks gpui's default branch with no rev pin,
+    while this workspace pins gpui to an exact rev — two different git sources
+    for gpui means two copies in the graph and types that do not unify. It is
+    also a second design system beside rise-ui.
+    So InputUi is built on the pinned gpui's own EntityInputHandler /
+    ElementInputHandler plumbing, which is what gpui-component builds on too:
+    caret, selection, word and line motion, clipboard, undo with coalescing,
+    IME marked text, secure and disabled modes, viewport-limited shaping. It
+    has no soft wrap, and its grapheme walker is not full UAX #29; both are
+    written down in crates/rise-ui/src/input_ui/CONTEXT.txt rather than implied.
+
+  THE RULE THAT KEEPS LINUX FROM ROTTING
+    No component ever asks for glass. It asks the theme for a MATERIAL, and
+    rise-platform decides what that material is on this machine and this OS
+    version. If a component could ask for glass directly, every call site
+    becomes a hole on Linux and nobody notices until a screenshot arrives.
+
+  GLASS CONSTRAINTS, WRITTEN DOWN BEFORE SOMEONE REDISCOVERS THEM
+    A glass region is an AppKit view under a transparent hole in the Metal
+    layer. Its rectangle updates from the LAYOUT pass, never a render pass, or
+    it desynchronises from the content around it. Glass is background, never a
+    mid-stack layer — anything gpui draws in that rectangle sits on top.
+
+GATE: MET
+  MET: the storybook stands every stateless component at both appearances and
+  all three densities, in one window, from locally built themes rather than by
+  switching the installed global. `cargo make dev-macos -- -riseStorybook`.
+  MET: no literal colour or length outside rise-theme, and it is mechanical
+  rather than a habit — scripts/check-design-tokens.py runs inside
+  `cargo make lint`, and there are currently zero escapes.
+  NOT SHOWN SIX TIMES, deliberately: the text input is a live entity that reads
+  the installed theme, so it appears once and says so; and only the PAINTED tier
+  of a material is a drawing the storybook can place six times. Judging real
+  glass means running the app.
+  NOT PROVEN: nothing here is a pixel test. render_to_image exists only on
+  macOS, and no screenshot was taken — the evidence is that the app builds,
+  bundles, launches and holds its window with no panic, and that the startup
+  font check reports every shipped weight resolving to its own face.
+  NOT PROVEN ANYWHERE: Linux and Windows. Not built, not run, not claimed.
+
+================================================================================
+PHASE 6 — THE SHELL  [active]
+================================================================================
+
+Everything the desktop has and the phone does not.
+
+  [done] Adaptive panes wired to the real window, through observe_window_bounds
+      rather than a width read during render. The projection is REVERSIBLE:
+      narrowing merges COLUMNS, never stacks, so a conversation opened in the
+      second column is still in the second stack at 400px and comes back to the
+      second column at 2560px. Folding it into the primary stack — the obvious
+      implementation, and the one that was there — cannot be undone, because
+      widening cannot tell a folded screen from one the user pushed.
+  [done] active_screens as a SET. app/src/core/active_screens.rs is the
+      visible-resource-lease stack from CACHE-OPTIMIZATION-AUDIT.txt section 6,
+      which iOS never built. Once-per-cycle is restated as once per cycle PER
+      KEY, GLOBALLY, and a cycle begins only at begin_cycle — cold start,
+      foreground, reconnect, event gap, manual — and NEVER at a visibility
+      change, because a resize carries no information about staleness.
+      Eligibility is the audit's own rule: with an overlay open only the topmost
+      overlay may refresh; with none, the topmost lease of EVERY column is
+      eligible at once, and that simultaneity is the desktop difference.
+  [done] SessionActivity. Five signals, not one, and the socket is kept in every
+      combination of all of them — a test enumerates the sixteen. No activity
+      change ever fails an in-flight request. SocketPolicy and
+      PendingRequestPolicy have one variant each so a later "optimisation" has
+      to delete a type rather than flip a bool.
+  [done] Keyboard-first: Cmd/Ctrl+1..9 (sections then folders, from the folder
+      count rather than a table), the command palette on Cmd/Ctrl+K, back and
+      forward on both the macOS bracket chords and alt-arrow, Esc down the
+      overlay stack and then the navigation stacks, arrows and Enter in the
+      palette.
+  [done] Right-click menus, entirely inside the window bounds. rise-widgets'
+      place() is total arithmetic — an overlay larger than the viewport still
+      lands inside it — and the items carry the reference's own action ids.
+  [done] Drag IN: the policy resolves the target screen, caps the count and
+      refuses anything that is not a file. Drag OUT is reported honestly by
+      gpui_shim::supports_external_drag and used by nothing, because nothing in
+      the app owns a file yet.
+  [done] Multi-window, and the decision: ONE ACCOUNT PER PROCESS, MANY WINDOWS
+      ONTO IT. Two accounts in one process would mean two engines, two databases
+      and two teardown orders inside the ownership model built to avoid exactly
+      that; two accounts is a second process, and each already takes its own
+      advisory lock. Single-instance handover is wired with it: a second launch
+      writes its argv and exits, the first turns the links into routes.
+
+WHAT THIS PHASE CHANGED OUTSIDE ITSELF, AND WHY
+  A single-line InputUi no longer consumes the arrow keys. A gpui action
+  listener stops propagation BY DEFAULT in the bubble phase and the deepest
+  binding wins, so a field that handled `up` silently took the arrows from every
+  list in front of it. The palette needs them, and every picker after it will.
+
+FOUR TRAPS THIS PHASE HIT — do not step on them again
+
+  A DISMISS SCRIM COVERS THE OVERLAY IT BELONGS TO. gpui's hit test collects
+  EVERY hitbox under the pointer and stops only at one that blocks, so a
+  window-filling scrim is still "hovered" while the pointer is over the menu on
+  top of it. Its dismiss fires on mouse DOWN, tearing the menu out of the tree
+  before the mouse UP that would have completed the click — the menu was
+  reachable only by keyboard, and the palette closed instead of running the row
+  the user clicked. `.occlude()` on the overlay's own content is what fixes it,
+  and it is load-bearing rather than a hint. Neither defect was visible to 1,230
+  green tests, because every one of them drove the state machine directly; the
+  regression tests now go through a real window and a real click.
+
+  A FOCUS HANDLE THAT IS NOT IN THE DISPATCH TREE SILENTLY DISABLES EVERY
+  SHORTCUT. `InputUi::new(entity)` is the raw ELEMENT: it wires IME and the
+  caret, and it carries no key context and tracks no focus. Focusing it left
+  `focus_node_id_in_rendered_frame` with nothing to find, gpui fell back to the
+  WINDOW ROOT, and from there the dispatch path contains none of the app's key
+  contexts — so Esc did not dismiss the palette and Cmd+2 did nothing, while
+  typing still worked, because typing does not go through the dispatch tree.
+  Render the ENTITY (`.child(state.clone())`), which is what `Render for
+  InputUiState` exists for. The storybook was already doing it correctly.
+
+  THE SAME FALLBACK MAKES A FRESH WINDOW DEAF. Nothing is focused until
+  something is clicked, so every shell shortcut was dead on a window the user
+  had not touched. `RootView::render` focuses itself when the window has no
+  focus. Three tests now drive real keystrokes through `simulate_keystrokes`
+  rather than calling the handlers directly, because calling the handler proves
+  the handler and not the binding.
+
+  A MERGED COLUMN NEEDS RECENCY, NOT A SLOT PRIORITY. A two-column window draws
+  the aside's stack and the content stack in one column. With a fixed priority,
+  opening a conversation while a profile was open showed the profile and the
+  conversation appeared nowhere at all. Each stack now records when it was last
+  pushed to, and the merged column — and `back`, and `focused_route` — follow
+  that.
+
+GATE: MET, BEHAVIOURALLY
+  MET: resizing never loses a screen. A 400 → 2560 → 400 round trip restores
+  every column, and the reverse is asserted route by route.
+  MET: never leaves a pane empty. Every width from 400 to 2560 in 7px steps is
+  asserted to draw exactly as many columns as the layout affords, with the
+  sidebar column never empty; a drawn column with nothing open renders the
+  shell's own empty state rather than a blank rectangle.
+  MET: never double-fetches. Registering three screens, collapsing to one and
+  reopening grants zero further refreshes, because releasing a lease does not
+  forget that its key was already claimed this cycle.
+  MET, AND BY REAL KEYSTROKES: the palette opens on Cmd+K in a window nobody has
+  clicked in, Esc dismisses it from inside its own field, and a section chord
+  fires while that field holds the caret. Driven through
+  `TestAppContext::simulate_keystrokes`, so the BINDING is under test and not
+  just the handler behind it.
+  PROVEN BY RUNNING, NOT BY TEST: the app builds, bundles, launches, holds its
+  window; a second launch carrying two deep links exits without opening anything
+  while the first logs both screens; and a link on the launch that STARTS the
+  app reaches its screen too.
+
+  REVIEWED ADVERSARIALLY. Six independent lenses over the whole phase, every
+  claim then handed to a skeptic told to refute it: 54 claims, 43 refuted, 11
+  confirmed and all 11 fixed here. The two that mattered are the hit-test pair
+  above. The rest: `DeepLink::decode` panicked on `%` before a multi-byte
+  character (a crash from an argv entry another app supplies); a link on the
+  first launch reached no screen and macOS never passes one in argv to a running
+  app at all (`on_open_urls` is now wired); a handover with no window open
+  logged delivery and dropped the routes; `deliver` picked the first-created
+  window rather than the frontmost; `single_instance` folded a failed lock
+  syscall into contention, so a network home directory would have exited without
+  a window on every launch, forever; and closing the last window left a
+  windowless process holding the lock with no way back.
+  NOT PROVEN: no pixel test and no screenshot. render_to_image is macOS-only and
+  the host refused screencapture, so nothing here is visual evidence. Dragging a
+  real window across the thresholds by hand has not been done — the resize
+  behaviour is proven at the store and view level, not through the window
+  server.
+  NOT PROVEN ANYWHERE: Linux and Windows. Not built, not run, not claimed.
+
+STILL OPEN, AND HONESTLY SO
+  - The drop policy has no consumer. The composer that takes the paths is Phase
+    7; what landed is the whole decision, not a stub.
+  - Folders are always empty: the list is chat data. The rail rows, the
+    shortcuts and the palette entries for them are written and tested against a
+    supplied list, and the rail's right-click menu is one entry until the
+    reference's folder actions have data to act on.
+  - SessionActivity's minimised, idle and locked signals have no sensor. gpui
+    can minimise a window but cannot report that it is; system idle and screen
+    lock need a rise-platform seam that does not exist. The policy is written
+    and tested; only focus and the window count are fed.
+
+================================================================================
+PHASE 7 — MODULES  [active]
+================================================================================
+
+One at a time, each ending green. Order chosen so every module lands on
+foundations that already exist.
+
+  [done] auth + onboarding   the login path, the first real network
+  [done] session + presence  small, and they prove the socket lifecycle
+  [ ] user                29,208 lines; profile, settings, subscriptions
+  [ ] post + comment      15,195 lines; the feed, the first real list
+  [ ] search
+  [ ] notify              local notification generation, mute policy
+  [ ] chat                125,508 lines. Split it before starting: chat list,
+                          conversation, composer, forum, media, calls.
+  [ ] music               31,495 lines; needs the audio stack from Phase 4
+  [ ] shorts + story      need the video element from Phase 4
+  [ ] moderation, vacancy, bot, stickers, analytics, event
+  [ ] media_picker        17,376 lines on iOS, built on Photos/PhotosUI
+  [ ] rtc                 needs the external texture element
+  [ ] system_share        desktop-only; replaces the iOS share extension
+
+THE BUDGET NOBODY EXPECTS
+  Fifteen of the twenty-two reference modules never migrated to RiseEngine —
+  they still use the old transport there. Porting them RiseEngine-only is a
+  REDESIGN of their data layer, not a translation. Budget it here rather than
+  discovering it in month four.
+
+WHAT THE FIRST FOUR MODULES SETTLED, AND WHAT THEY LEFT
+  The socket is real: tokio-tungstenite, exponential backoff with a per-process
+  jitter seed, `Bearer.<jwt>` in Sec-WebSocket-Protocol, and a 25-second
+  application-level `gateway.ping` because the gateway's reaper counts
+  application activity and a protocol Pong does not reset it. A credential change
+  is a reconnect, never an in-band message, because the gateway reads the user
+  once at upgrade.
+
+  rise-engine gained a SECOND transport, and it is not a compatibility layer.
+  `auth.refresh_token` and tag availability are calls an unauthenticated client
+  has to make, and the socket's action gate admits only send_code, register,
+  login, ping and the two QR verbs without a session. Same descriptor shape, same
+  replay discipline, and a method the socket can carry may never appear there.
+
+  rise-platform gained a locale seam. `signup_region` and `signup_language` are
+  written once at registration and frozen, so the device has to say for itself
+  rather than let the server infer a market from a VPN exit node.
+
+  The shell now keeps ONE live view per resource key. It used to rebuild every
+  destination on every frame, which no screen with a caret or a scroll position
+  could have survived.
+
+  STILL OPEN from this tranche: no country picker (the phone step defaults to
+  +7, and the catalogue belongs to `user`); the four onboarding animations are
+  the reference's own SwiftUI code and are drawn here as static art; the sessions
+  list has stores and no screen, because in the reference it lives in
+  user/settings; `AccountScope` is not built, because nothing opens a per-account
+  database until the first module that owns account data does.
+
+GATE PER MODULE
+  Parity does not regress. The three states exist (loading with skeletons whose
+  geometry matches real content, empty, non-blocking error with retry).
+  Optimistic mutations reconcile and roll back. No #[cfg(target_os)].
+
+================================================================================
+PHASE 8 — SHIP  [ ]
+================================================================================
+
+  [ ] macOS: codesign in the right order (inner binaries, then the main binary
+      with entitlements, then the .app, then the .dmg — each with
+      --options runtime --timestamp), notarytool, stapler
+  [ ] Windows: Inno Setup or WiX, Azure Trusted Signing, the update helper
+  [ ] Linux: tarball plus AppImage bundling x11/wayland/xkb/fontconfig
+  [ ] Auto-update on all three
+  [ ] Crash reporting — a DECISION, not a default. The reference deliberately
+      ships no crash reporter and no analytics SDK. That is a privacy posture.
+  [ ] Troubleshooting page: ZED_DEVICE_ID, MESA_VK_DEVICE_SELECT, DRI_PRIME,
+      GPUI_X11_SCALE_FACTOR
+
+START NOW, NOT HERE
+  Azure Trusted Signing needs an organisation identity older than three years
+  and validation measured in weeks. Apple Developer is $99/yr and gates
+  notarisation. Both should be in flight by Phase 3.
+
+================================================================================
+OPEN DECISIONS
+================================================================================
+
+RESOLVED
+  Databases are independent per client. Local formats are ours to change; sync
+  happens only through the server. They are still written 1:1 with the
+  reference today.
+
+STILL OPEN — each blocks the phase named
+  1. v1 scope: which of the 22 modules ship first          → Phase 7
+  2. Monetisation: Stripe/Paddle on desktop, or honour
+     only what was bought on mobile. There is no App Store → Phase 7
+  3. Calls in v1? They land on the Phase 4 texture element → Phase 4
+  4. Media editor, or a file dialog plus server transform  → Phase 7
+  5. Bot mini-apps: embed wry, or drop them                → Phase 7
+  6. RESOLVED for now: theme is local-only, as iOS does. ThemeService exists and
+     no client uses it; ThemePalette is already serde-compatible with its
+     palette_json, so adopting it later is a repository, not a redesign.
+  7. CJK markets? Windows IMM32 without TSF is months      → release date
+  8. RESOLVED: both dialects kept, bug-compatible with the reference. In
+     locale-en.json 80 values are printf and 25 are braces, and ZERO mix them,
+     so the two are separable; normalising would mean retranslating 41 locales
+     and would make a client render a string differently from the server's push.
+  9. Accessibility: best effort for now. AccessKit is wired into all three gpui
+     backends, so the framework gap is closed and populating the tree is ours;
+     Phase 6 owns the rail's focus order and node identity. Revisit if it ever
+     becomes a procurement requirement rather than a quality one.
+
+================================================================================
+STANDING RISKS
+================================================================================
+
+gpui has no consumable release channel. crates.io is a year stale and
+gpui_platform is unpublished, so we are pinned to a git rev of a fast-moving
+editor monorepo with no changelog and no semver. Bumping is scheduled work with
+a test gate and a rollback, monthly, never incidental.
+
+Visual regression testing works only on macOS. render_to_image exists nowhere
+else and current_headless_renderer() returns None. Behavioural tests run
+everywhere; pixel tests do not. Say so rather than implying coverage we lack.
+
+Untrusted media decoding is a real attack surface: ffmpeg, dav1d, libavif and
+rlottie are all C parsing attacker-supplied bytes, and animated stickers have
+published precedent. Sandbox it or at minimum fuzz the entry points.
+
+gpui overdraws and has no damage regions (issues #8043, #15166, both years old).
+The cost is battery and compositor load, invisible in a frame trace. Minimise
+permanently animating elements.

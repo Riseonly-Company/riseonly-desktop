@@ -1,0 +1,41 @@
+================================================================================
+modules/presence — who is online, and who is reading which conversation
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt       the module convention
+  ../../../CONTEXT.txt workspace rules
+
+REFERENCE
+  ../../../../riseonly-ios/Riseonly/modules/presence/   450 lines of Swift
+
+THE BACKEND SERVICE IS THE GATEWAY, NOT presence-service
+  presence-service has no client-facing RPC. The gateway sets a user online and
+  offline from the socket's own lifecycle, and what a client may ask for is a
+  SUBSCRIPTION to somebody else's state. So this module's descriptors name the
+  `gateway` service, and they are the only ones in the app that do.
+
+NO ACTOR, NO STORE, AND THAT IS DELIBERATE
+  Presence exists only while the socket does, and a reconnect starts it again
+  from nothing. There is no persistence to order, no pagination to merge and no
+  acknowledgement to reconcile — only pushes to fold in — so the repository is a
+  plain projection rather than a task on a command channel. Every other module's
+  repository IS an actor; this one is the documented exception.
+
+THE THREE RULES THAT MATTER
+  The desired set is per-OWNER and the wire sees only the union's changes.
+  Several screens watch overlapping people, and opening a second view onto the
+  same conversation must not re-subscribe to everybody in it.
+
+  Subscriptions live on the CONNECTION. A reconnect drops every one of them
+  silently, so the composition root re-subscribes on reconnect — without it
+  presence freezes at whatever it last showed, which looks exactly like
+  everybody going quiet.
+
+  A failed check is not a negative answer. `Unknown` is distinct from offline,
+  and an unknown user shows what the payload that built the row claimed, so a
+  chat list does not read as entirely offline until the first push arrives.
+
+REMINDERS
+  A view calls only PresenceInteractionsStore.
+  `owner` is a screen's identity, never a user's.

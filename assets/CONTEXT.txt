@@ -1,0 +1,61 @@
+================================================================================
+assets/
+================================================================================
+
+  fonts/       LANDED. Inter 4.1 (rsms/inter v4.1), six static TTF weights —
+               Light 300, Regular 400, Medium 500, SemiBold 600, Bold 700,
+               Black 900 — plus OFL.txt, the SIL Open Font License 1.1 text the
+               licence obliges us to ship. Six because the reference draws with
+               six. We carry our own face because three text stacks (CoreText,
+               cosmic-text, DirectWrite) resolve system fonts differently, so
+               relying on the host font moves every measured layout between
+               OSes; on Linux you cannot even use system-ui/sans-serif as a
+               family name. See fonts/CONTEXT.txt for the pinned release, the
+               hashes, why static weights rather than the variable font, and
+               the name-table trap that makes family-name lookup return Regular
+               for the four non-RIBBI weights.
+  icons/       LANDED, two sets that are not the same thing.
+               lucide/ is 169 SVGs plus LICENSE — exactly the icons
+               sf-to-lucide.json names, and nothing else. sf-to-lucide.json maps
+               229 SF Symbol names to those 169. It is keyed by the SF name so a
+               ported call site stays 1:1 with the reference; SF Symbols is a
+               font Apple licenses for Apple platforms only and cannot ship in a
+               Linux or Windows build.
+               flags/ is 256 region flags from flag-icons 7.5.0, plus LICENSE,
+               and is the larger half of this directory by an order of
+               magnitude. It exists because the reference derives a flag
+               arithmetically from a regional-indicator pair, which only Apple's
+               system font ligates.
+               Each has its own CONTEXT.txt; read the one you are working in.
+  animations/  Empty. Lottie JSON, ~36 files in the reference.
+  locales/     LANDED. All 41 translation files, copied byte-for-byte from
+               ../../riseonly-ios/Riseonly/Core/locales/ and keeping the exact
+               locale-<code>.json names: 6,718,056 bytes, 2,754 to 2,779 keys
+               per language, en at 2,767. Each parses as a flat JSON object of
+               string to string.
+               The "locale-" prefix is load-bearing, not decoration — a bare
+               no.json collided with a Lottie animation named "no" in the
+               reference. Locales are NOT key-complete, so the fallback chain
+               is load-bearing too. See crates/rise-i18n/CONTEXT.txt for that
+               and for the two interpolation dialects.
+
+Everything here is copied into Riseonly.app/Contents/Resources at bundle time —
+scripts/bundle-macos.sh copies the tree wholesale — so every byte below is a
+byte in the shipped bundle. Measured, counting assets and licences and not the
+CONTEXT.txt files:
+
+  locales/     41 files      6,718,056 bytes
+  fonts/        7 files      2,506,304 bytes   (6 TTFs 2,501,924 + OFL.txt)
+  icons/      428 files      1,769,171 bytes   flags/ 1,694,279
+                                               lucide/   65,387
+                                               sf-to-lucide.json 9,505
+  animations/   0 files              0 bytes
+                                    ----------
+                              10,993,531 bytes  (10.5 MiB)
+
+Locales dominate at 61% of the payload, and flags are most of the rest. If the
+bundle ever has to shrink, that is where the room is — but the cost today is
+disk, not memory: Catalogue reads a locale file only when something asks for
+that language, so a session holds the active language's lookup chain and
+whatever the user has already switched to, not 6.7 MB of JSON. Do not
+pre-emptively strip languages; switching without a re-download is the point.

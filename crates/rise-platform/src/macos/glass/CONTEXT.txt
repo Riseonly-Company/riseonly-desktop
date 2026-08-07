@@ -1,0 +1,143 @@
+================================================================================
+rise-platform/src/macos/glass — the RiseGlass bridge
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt
+  ../../../CONTEXT.txt
+  ../../../../../docs/PLATFORM_GLASS.md   the whole design: three tiers, the rule
+  ../../materials.rs                      the types and the policy this serves
+
+WHAT IS HERE
+
+  RiseGlass.swift   AppKit views hosted below the transparent Metal layer, behind
+                    a C ABI. One NSGlassEffectView per region on macOS 26+, one
+                    NSVisualEffectView per region on 13-25.
+  mod.rs            the extern "C" declarations, the pure policy around them, and
+                    MacGlassSurface, which implements the GlassSurface trait that
+                    already lives in materials.rs.
+
+  materials.rs owns Material, MaterialBacking, resolve(), RegionId, RegionRect,
+  GlassRegion, GlassError, LayoutGate, GlassLayout, the GlassSurface trait and
+  InMemoryGlassSurface. None of that is redefined here. This directory is only
+  the implementation behind the trait.
+
+--------------------------------------------------------------------------------
+WHY SWIFT AND NOT objc2
+--------------------------------------------------------------------------------
+
+  Every other native seam in this crate is objc2, and that is the right default:
+  it needs no second toolchain, no build step and no second calling convention.
+  Glass is the exception for one reason. NSGlassEffectView is Swift-first, and
+  its configuration API — the corner radius, the tint, the grouping of adjacent
+  regions — has already changed shape between OS versions and will change again.
+  Tracking that in hand-rolled message sends means re-deriving selectors and
+  struct layouts by hand every time; tracking it in ~300 lines of Swift means
+  editing the line that changed.
+
+  There is a trap this repo has already paid for that also argues for Swift:
+  objc2's add_method wants a higher-ranked fn pointer, and a handler written
+  fn(&AnyObject, Sel, ...) binds one concrete lifetime and will not compile.
+  Anything here that needed an NSView subclass — and the container is one, for
+  isFlipped and hitTest: — would have hit that.
+
+  The cost is a Swift compiler on every macOS build machine. build.rs fails
+  loudly with the exact fix rather than skipping, because a build that silently
+  omits the bridge produces an app with a blank rail and no diagnostic anywhere.
+
+--------------------------------------------------------------------------------
+THE INVARIANTS
+--------------------------------------------------------------------------------
+
+  MAIN THREAD. Every C entry point except rise_glass_probe_backing and
+  rise_glass_vibrancy_material_name touches AppKit view state. Each checks
+  Thread.isMainThread and refuses rather than proceeding, and MacGlassSurface is
+  neither Send nor Sync, so the value cannot reach another thread to begin with.
+  Dropping it off the main thread would leak the container rather than remove it.
+
+  LAYOUT PASS, NEVER RENDER PASS. A region's rectangle must come from the layout
+  pass. LayoutGate is what makes that mechanical instead of advisory: it admits a
+  batch only when it carries a newer Generation, and a render pass has none to
+  offer. The gate runs before the backing check in commit(), deliberately — a
+  violation is a bug on every platform and gating it behind a native backing
+  would mean it could only ever be caught on the one platform that has glass.
+
+  BELOW THE METAL LAYER, ABOVE THE WINDOW BLUR. The container is inserted into
+  the window's content view directly below the view GPUI renders into. Not at the
+  very back: gpui_macos inserts its own NSVisualEffectView there for a blurred
+  window background, at whatever moment the app sets one, and a container behind
+  that view is invisible. The position is re-asserted every layout pass, which is
+  cheap and removes the ordering dependency entirely.
+
+  A REGION IS BACKGROUND. The views are below the Metal layer, so anything GPUI
+  draws in a region's rectangle lands on top of it. Glass is never a mid-stack
+  layer, and the container declines hit testing so a click in a rectangle the
+  Metal view somehow did not cover cannot vanish into a material.
+
+  THE RADIUS TRAVELS WITH THE REGION. A native backing cannot be clipped by GPUI
+  drawing a rounded mask over it — the mask would land on top. NSGlassEffectView
+  gets its own cornerRadius property, set by key so this file still compiles
+  against an SDK that never declared the class; NSVisualEffectView gets a layer
+  cornerRadius with masksToBounds.
+
+  ONE VIEW PER ID, ACROSS PASSES. Views are keyed by RegionId and moved, not
+  rebuilt. A view is torn down only when its backing or material changed, or when
+  a commit finds the id was not named in that pass.
+
+--------------------------------------------------------------------------------
+RUNTIME RESILIENCE, WHICH IS NOT THE SAME AS A VERSION CHECK
+--------------------------------------------------------------------------------
+
+  MacOsVersion::backing() answers what the running OS could host. It does not
+  answer whether the view actually came back, which no version number predicts.
+  So NSGlassEffectView is resolved by NSClassFromString behind #available, never
+  referenced as a type, and rise_glass_probe_backing reports what actually
+  resolved. MacGlassSurface caps the version policy with that probe, and the cap
+  can only lower. That is the whole reason the surface's backing is not simply
+  resolve(material, host, version).
+
+  WHAT THIS IS *NOT* FOR, because the earlier rationale here was wrong and has
+  been measured. It is not a rescue for a build made against an older SDK.
+  RiseGlass.swift compiles clean against the 13.3, 14 and 15 SDKs — none of which
+  declare NSGlassEffectView — and the 15-SDK build, run on macOS 26.1, reports
+  LiquidGlass. NSClassFromString and #available both resolve against the RUNNING
+  OS. An old SDK is survivable, but it is survivable because nothing names the
+  class as a type, not because the probe catches it.
+
+--------------------------------------------------------------------------------
+WHAT IS AND IS NOT COVERED BY cargo test
+--------------------------------------------------------------------------------
+
+  Covered, on this machine, for all three hosts: every pure function here, the
+  gate, the refusal messages, the ABI codes, and — through the linked Swift —
+  the probe and the fact that RiseGlass.swift and Material::vibrancy_material()
+  name the same NSVisualEffectMaterial cases.
+
+  NOT covered by cargo test: hosting a view. libtest runs every test on a spawned
+  thread, so no test in this crate is ever on the AppKit main thread, and a
+  surface with no window to attach to correctly reports GlassError::Refused. The
+  view tree behaviour was driven once by hand against the compiled archive; see
+  docs/PLATFORM_MATRIX.md, which says exactly that and no more.
+
+  If you need that permanently covered, it has to be a main-thread harness that
+  is not a libtest binary. Do not fake it with a test that passes because nothing
+  happened.
+
+--------------------------------------------------------------------------------
+GPUI FACTS THIS DEPENDS ON, AT THE PINNED REV
+--------------------------------------------------------------------------------
+
+  The Metal-hosting view is registered at runtime as "GPUIView" and the blurred
+  background view as "BlurredView"; the latter is added with positioned:below
+  relativeTo:nil, so it is always the back-most child. RiseGlass matches GPUIView
+  by name and falls back to "the topmost child that is not a visual effect view",
+  so a rename degrades instead of picking the window material as its anchor.
+
+  Bumping the gpui rev is scheduled work with a test gate. Re-check those two
+  names when it happens.
+
+  Only one window is served. The host view is found through NSApp's key window,
+  then its main window, then its window list. When Phase 6 brings a second
+  window, attach has to take the window it belongs to — which means getting the
+  NSView out of a gpui::Window, which today needs raw-window-handle, a dependency
+  this crate does not have and which would need a line in docs/DEPENDENCIES.md.

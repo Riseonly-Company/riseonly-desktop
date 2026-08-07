@@ -1,0 +1,44 @@
+================================================================================
+modules/session — the active-sessions list
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt       the module convention
+  ../../../CONTEXT.txt workspace rules
+
+REFERENCE
+  ../../../../riseonly-ios/Riseonly/modules/session/   385 lines of Swift
+
+WHY IT HAS AN engine/
+  Like auth, session never migrated to RiseEngine in the reference. Its two
+  methods live in session-service behind the gateway's `session` service, and one
+  parent domain owns them both.
+
+THE RULES THIS MODULE OWES
+  Ending a session never replays. A retry after an inconclusive failure could end
+  a session the user has since started from another device, and no backend
+  contract makes it safe.
+
+  Removal is optimistic and rolls back. The row goes when it is pressed; a
+  refusal — including a 200 whose body says `success: false` — puts it back.
+
+  A failed refresh never clears a page that is already on screen.
+
+  The edge asks once and never past the end. Both guards, or a list that reaches
+  its bottom asks for the same page forever.
+
+  `should_logout` is REPORTED, not acted on. Signing out belongs to auth; a
+  session store that could clear an account would be a second place account state
+  is owned.
+
+  Timestamps are parsed once, into epoch milliseconds, off the frame path. The
+  parse is hand-rolled against the fixed ISO-8601 prefix and fails to `None`
+  rather than to a wrong instant — the list only needs the ordering.
+
+WHERE ITS SCREEN IS
+  Nowhere yet. In the reference the sessions UI lives in user/settings, and the
+  user module is a later Phase 7 item; this module's stores are complete and
+  tested ahead of it.
+
+REMINDERS
+  A view calls only SessionInteractionsStore.

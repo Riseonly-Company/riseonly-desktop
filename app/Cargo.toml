@@ -1,0 +1,56 @@
+[package]
+name = "riseonly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "riseonly"
+path = "src/main.rs"
+
+[features]
+# On by default: the onboarding and the sign-in wizard are Lottie, and a build
+# without them shows empty boxes where the product's whole first impression is.
+# `cargo make vendor-rlottie` fetches the source it compiles.
+default = ["rlottie"]
+rlottie = ["rise-media/rlottie"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures.workspace = true
+tokio-tungstenite.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+base64.workspace = true
+sha2.workspace = true
+parking_lot.workspace = true
+tracing-subscriber.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+rise-core.workspace = true
+rise-i18n.workspace = true
+rise-engine.workspace = true
+rise-platform.workspace = true
+rise-theme.workspace = true
+rise-ui.workspace = true
+rise-widgets.workspace = true
+rise-media = { workspace = true, features = ["rlottie"] }
+rise-navigation.workspace = true
+directories.workspace = true
+
+[dev-dependencies]
+# The shell is a gpui Entity that owns a window's navigation, overlays and lease
+# stack. Its rules — Esc order, what a resize does to the visible set, what a
+# shortcut addresses — are only reachable through a real App. Same gpui, same
+# rev, one feature: no second crate enters the graph.
+gpui = { workspace = true, features = ["test-support"] }

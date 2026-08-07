@@ -1,0 +1,169 @@
+================================================================================
+rise-i18n — 41 locales
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+
+
+WHAT THIS CRATE OWNS
+
+  The whole i18n runtime, ported from riseonly-ios/Riseonly/Core/i18n/ file for
+  file with snake_case stems:
+
+    app_language_catalog.rs    GENERATED. AppLanguage, PluralRules, the 41
+                               entries, the alias table.
+    app_plural_selector.rs     CLDR cardinal selection, all eleven families.
+    app_language_resolution.rs canonical casing, normalize, lookup_chain,
+                               device_preferences, resolve, display order.
+    i18n.rs                    the catalogue itself: loader, cache, translate,
+                               plural templates, both interpolation dialects,
+                               the process-wide runtime.
+
+  It depends on serde_json and nothing else. No gpui, no OS crate, no threads:
+  every entry point is synchronous and the caller decides which thread pays.
+
+WHAT IT MUST NEVER DO
+
+  Hardcode user-facing text anywhere in the app. Every string goes through a
+  key. Hardcode a bundle path — see THE LOADER CONTRACT below.
+
+
+--------------------------------------------------------------------------------
+THE TWO INTERPOLATION DIALECTS
+--------------------------------------------------------------------------------
+
+The reference has two and they are NOT interchangeable. In locale-en.json: 78
+keys are printf style (%@, %d, %1$@), 25 keys are named braces ({name}, {count},
+{n}), and ZERO keys mix them. Across all 41 files and 113,157 values, still
+zero — `no_shipped_value_mixes_the_two_dialects` in tests/catalog_parity.rs is
+what keeps that true, because each formatter is blind to the other's syntax and
+a mixed value would render one placeholder and leave the other on screen.
+
+Open decision 8 in PHASES.txt is settled: keep BOTH, bug-compatible with the
+reference. Do not normalise them, do not move to ICU MessageFormat. 41 languages
+× 2,767 keys of retranslation is not on the table, and a client that renders a
+string differently from the server's push is a real user-visible bug.
+
+  printf   format_printf / translate_args / tr_args
+           %@ %s %d %i %u %f, %n$ indices, flags, width, precision, and %%.
+           A malformed specifier and a missing argument both degrade to the
+           specifier text itself. 41 human-translated locales will eventually
+           contain both and neither may take the process down; Swift's
+           String(format:) reads garbage off the varargs instead.
+
+  braces   format_named / translate_named / tr_named
+           {name} substituted from a key-value list, ONE pass. The reference
+           chains replacingOccurrences calls, so a substituted value containing
+           another placeholder can be re-substituted; one pass cannot. An
+           unknown placeholder is left intact, which is what keeps documentation
+           copy like `/bot<TOKEN>/{method}` readable.
+
+  chat_thread_title_* is the family that forced the decision: plural-suffixed
+  keys whose values are braced, which String(format:) cannot substitute, so the
+  reference selects the key by hand at the call site. Here that is
+  translate_plural_named / tr_plural_named. Note the family ships
+  zero/one/few/many and NO `other`: it renders for Slavic languages and falls
+  through to the raw key for English. That is the reference's data, unchanged.
+
+--------------------------------------------------------------------------------
+THE FALLBACK CHAIN IS LOAD-BEARING, NOT DECORATIVE
+--------------------------------------------------------------------------------
+
+Locales are not key-complete: 2,754 to 2,779 keys depending on language, en has
+2,767. The chain is
+
+    chosen language -> base language of a regional variant (pt-BR -> pt) -> en
+
+A key nothing in the chain defines renders as the key itself, never as another
+language's copy. The fallback USED to be Russian in the reference, which
+surfaced Russian text to English speakers. Do not reintroduce that.
+
+Plural resolution follows the same chain: "<key>_<category>" anywhere in it,
+otherwise "<key>_other", otherwise the "<key>_other" string itself.
+
+--------------------------------------------------------------------------------
+THE LOADER CONTRACT
+--------------------------------------------------------------------------------
+
+The crate never decides where locale files live. A caller supplies a
+LocaleSource; DirectoryLocaleSource reads `<root>/locale-<code>.json`.
+
+    bundle   Riseonly.app/Contents/Resources/assets/locales
+    dev run  <repo>/assets/locales
+    tests    a fixture map, or the repo assets resolved from CARGO_MANIFEST_DIR
+
+The `locale-` prefix is the reference's, kept for parity: iOS flattens the whole
+Riseonly/ tree into the bundle root, where `no.json` collided with a Lottie
+animation called "no".
+
+Parsed dictionaries are cached process-wide behind an RwLock, because switching
+language rebuilds the scene and would otherwise re-read and re-parse ~150 KB of
+JSON per locale in the chain. `prewarm(code)` warms a chain and is synchronous
+on purpose — this crate owns no threads, so the caller runs it off the UI
+thread ahead of a switch and the eventual `reload` is a map lookup.
+
+An unparseable or absent locale file yields an empty dictionary, not an error:
+the chain behind it still answers. A JSON object with any non-string value fails
+the whole file, exactly as the reference's `as? [String: String]` cast does.
+
+--------------------------------------------------------------------------------
+REGENERATING THE CATALOGUE
+--------------------------------------------------------------------------------
+
+backend/i18n/languages.json is the single source of truth for the 41 languages
+and the alias table. The backend generates its own data.rs and the iOS
+AppLanguageCatalog.swift from it; this tree generates its own copy:
+
+    python3 crates/rise-i18n/tools/gen_catalog.py                 # rewrite
+    python3 crates/rise-i18n/tools/gen_catalog.py --check         # verify only
+
+It defaults to ../../backend/i18n/languages.json relative to the workspace and
+writes src/app_language_catalog.rs, which carries an @generated header. Do not
+hand-edit that file: `the_generator_reproduces_the_checked_in_catalogue` runs
+--check and fails on a stale or hand-edited copy (and skips when the backend
+tree is not checked out beside this one).
+
+Adding a language means editing languages.json in the backend, regenerating all
+three trees, and shipping its locale JSON in each.
+
+--------------------------------------------------------------------------------
+AGREEMENT WITH THE SERVER
+--------------------------------------------------------------------------------
+
+app_plural_selector.rs is a line-for-line mirror of
+backend/common/src/i18n/plural.rs. The two must agree: a push rendered
+server-side and the same phrase rendered in-app have to pick the same form.
+`every_family_agrees_with_the_server_table` pins all eleven families against the
+counts the server's own suite asserts. If they ever diverge, the server is the
+authority — it is what the notification says.
+
+Only integer counts are pluralised in this product, so rules are evaluated
+against `i` with `v = 0`; fractional operands are deliberately not modelled.
+
+--------------------------------------------------------------------------------
+DELIBERATE DIFFERENCES FROM THE REFERENCE
+--------------------------------------------------------------------------------
+
+  Catalogue::load normalises its argument. The reference matches the catalogue
+  exactly and falls back to English on a miss, which is safe there only because
+  LanguageStore normalises first. Nothing enforces that here and a tag can
+  arrive from a server field or three different OS APIs, so `ru_RU` loads
+  Russian instead of silently rendering the whole app in English.
+
+  AppLanguage::flag is not ported. Regional-indicator arithmetic does not render
+  on Linux or Windows (PHASES.txt, Phase 5). `region_code()` derives the region
+  from the language's own formatting locale, the same way the reference derives
+  the flag, and the UI layer picks an asset from it.
+
+  ordered_for_display sorts the non-popular tail by a case-insensitive Unicode
+  comparison, not a locale-aware collation. There is no collator here and ICU is
+  not worth a settings list; the popular head, which is what the picker shows
+  first, is identical to the reference.
+
+  device_preferences takes the raw list instead of reading it. Reading the
+  host's preferred languages is an OS call and belongs to rise-platform.
+
+  LanguageStore and LocaleBootstrap are NOT here. They are UserDefaults, HTTP
+  and SwiftUI environment plumbing; the desktop equivalents belong in app/ once
+  there is a store layer and a network. This crate is what they will call.

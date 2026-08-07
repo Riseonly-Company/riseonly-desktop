@@ -1,0 +1,93 @@
+================================================================================
+rise-platform — every OS difference
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt          (workspace rules, the three boundaries, commands)
+  ../../docs/PLATFORM_MATRIX.md  (what is verified, compiled, or merely written)
+
+ONLY MACOS IS EXERCISED TODAY
+  Linux and Windows arms are written but unrun. Do not delete or collapse them
+  when they are inconvenient; writing them blind now is cheap, retrofitting the
+  seam later is not.
+
+WHAT THIS CRATE OWNS
+  Traits plus per-OS implementations: secure storage, paths, single instance,
+  deep links, notifications, tray and unread badge, window chrome, autostart,
+  file dialogs, reveal-in-file-manager, global hotkeys, media keys, the updater,
+  and materials.
+
+  Also the gpui shim. Some gpui platform methods are not uniform: on Windows
+  hide_other_apps and unhide_other_apps are live unimplemented!() calls, and
+  start_external_drag does not exist there. Call the shim, never gpui directly,
+  or a Windows build will panic at runtime.
+
+--------------------------------------------------------------------------------
+THE RULE THAT MAKES THE BLIND ARMS TESTABLE — host_os.rs
+--------------------------------------------------------------------------------
+
+Every seam is split in two:
+
+    pure policy  ──  takes HostOs as an ARGUMENT, tested for all three on a Mac
+         │
+    OS binding   ──  #[cfg(target_os)], one call, and no decisions in it
+
+HostOs is an ordinary value, not a compile-time fact. That is the whole trick:
+the decisions Linux and Windows will make are exercised by the suite today, and
+what stays unverified is only the final call into the OS API.
+
+A seam that reaches for #[cfg(target_os)] to make a DECISION has put that
+decision beyond the reach of every test on this machine. The cfg belongs at the
+binding, after the decision has already been made. If you find yourself writing
+a cfg inside an if, you are about to break this.
+
+--------------------------------------------------------------------------------
+NOTHING SILENTLY NO-OPS
+--------------------------------------------------------------------------------
+
+Every OS-touching entry point reports what it did, through PlatformSupport
+(Performed | Unsupported) or a typed error. A caller must be able to offer an
+alternative — a copy instead of a drag, a download page instead of a self-update,
+a menu item instead of a global chord.
+
+Where an arm genuinely cannot be implemented, it reports Unsupported AND names
+the exact API that would implement it and why it was deferred. See
+global_hotkey::UnavailableReason for the shape. That is not a TODO; it is the
+answer, written down.
+
+Do not write that anything is verified on Linux or Windows. It is not.
+
+--------------------------------------------------------------------------------
+WHAT IT MUST NEVER DO
+--------------------------------------------------------------------------------
+
+  Leak an OS type into a caller's signature. No objc2, windows or zbus type may
+  appear in a pub signature. The point of this crate is that app/ never learns
+  which OS it is on, and app/ is checked for #[cfg(target_os)] by CI.
+
+  Open a network connection. The updater takes already-fetched bytes and returns
+  a decision; it does not own an HTTP client. All network in this product goes
+  through rise-engine, and a second transport here would be exactly the
+  compatibility layer the architecture forbids.
+
+--------------------------------------------------------------------------------
+NATIVE DEPENDENCIES, AND WHY EACH ONE EXISTS
+--------------------------------------------------------------------------------
+
+All target-gated, so a macOS build never compiles the other two. Reasons and
+exits are in ../../docs/DEPENDENCIES.md; the short version:
+
+  objc2 + objc2-foundation + objc2-app-kit   macOS. Tray, Dock badge, login item,
+                                             OS version probe. Pinned to the same
+                                             0.6/0.3 family gpui already links so
+                                             there is no second ObjC runtime.
+  windows                                    Windows. Shell_NotifyIconW, HKCU Run.
+  zbus                                       Linux. StatusNotifierItem, MPRIS.
+
+Frameworks with no binding crate (ServiceManagement, MediaPlayer, Carbon) are
+reached by runtime class lookup plus a #[link] attribute, not by adding a crate.
+AnyClass::get returning None means the framework is absent on this OS version,
+which is a legitimate Unsupported and never a panic.
+
+AppKit is main-thread-only. Types holding Retained<...> are naturally !Send;
+never paper over that with an unsafe impl Send.

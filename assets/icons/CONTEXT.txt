@@ -1,0 +1,110 @@
+================================================================================
+assets/icons/
+================================================================================
+
+WHAT IS HERE
+
+  sf-to-lucide.json   every SF Symbol name riseonly-ios actually uses, mapped to
+                      a Lucide icon name. 229 keys, 169 distinct Lucide icons.
+  lucide/*.svg        exactly those 169 icons, and nothing else.
+  lucide/LICENSE      Lucide's licence text, shipped with the product.
+  flags/              owned elsewhere; see its own CONTEXT.txt.
+
+  Lucide version 1.28.0, the GitHub release `lucide-icons-1.28.0.zip`,
+  sha256 79b02addeac22305ac49b238cb810161c4bfe7c60856a6d6b8f37cd42f1f6365.
+  LICENSE is the repository's LICENSE file at tag 1.28.0. Bumping the version
+  means re-running the map against the new set: Lucide renames icons between
+  releases and keeps the old name only as an alias in its JS packages, not as a
+  file on disk. A bump that silently drops a file is a blank icon at runtime.
+
+WHY LUCIDE AT ALL
+
+  SF Symbols is a font Apple licenses for use on Apple platforms only. It cannot
+  be redistributed inside a Linux or Windows build, and there is no Apple API to
+  fall back to off the platform. Lucide is ISC, is plain SVG, and covers the
+  vocabulary a social product needs.
+
+WHY THE MAP IS KEYED BY THE SF NAME
+
+  So a screen ported out of riseonly-ios keeps its call sites character for
+  character. The Swift line
+
+      Image(systemName: "bubble.left.and.bubble.right")
+
+  becomes a Rust line naming the same string. Nothing has to be re-decided, and
+  a diff against the reference stays readable. The Lucide name is an
+  implementation detail of this directory.
+
+  THE RULE: a new call site adds a key to sf-to-lucide.json under the SF name
+  the reference uses. It never names a Lucide icon directly, and it never
+  invents an SF name the reference does not use. If the reference has no symbol
+  for what you are building — a desktop-only affordance, say — say so in the
+  same change and give the key an SF-shaped name that a designer signed off on.
+
+  The keys were derived from string literals in the reference, and the derivation
+  MUST read BOTH spellings:
+
+      grep -rhoE '(systemName|systemImage)[[:space:]]*:[[:space:]]*"[^"]*"' \
+        --include=*.swift --exclude-dir=build ../riseonly-ios
+
+  `Image(systemName:)` is only half of it. SwiftUI's `Tab`, `Label` and `Button`
+  take `systemImage:` instead, and the chat, music, rtc and bot modules reach for
+  those constantly. Grepping `systemName:` alone yields 171 symbols and misses 57
+  the product actually draws — the undercount this table shipped with at first.
+  Both spellings together give 228.
+
+  `--exclude-dir=build` is not optional either, though it is a rule rather than
+  a number. `build/` is derived data, so what it holds depends on when the
+  reference was last built. When this table was derived it carried SwiftPM
+  checkouts of a third-party dev tool (InjectionNext) whose own settings screens
+  added 16 symbols — `ladybug`, `stethoscope`, `testtube.2` — that are not this
+  product, and counting them gave 244. Those sources are not there today, so
+  both greps currently agree at 228 and the 244 no longer reproduces. Keep the
+  exclusion: the next build can put them back.
+
+  228 of the 229 keys are those reference symbols. The 229th is `folder`, which
+  the reference does not use: the desktop rail stacks chat folders under the
+  sections, and a phone has no equivalent. It is keyed by the SF name Apple uses
+  so the table keeps one convention.
+
+  Symbols reached through a variable or an expression (`player.repeatMode.icon`,
+  a `pause.fill` inside a ternary) are not in the list yet and will surface as
+  the modules land. Adding them is the rule above, not an exception to it.
+
+THE "approximate" LIST — A DESIGNER MUST REVIEW IT
+
+  sf-to-lucide.json has two keys: "map" and "approximate". "approximate" names
+  the SF symbols for which Lucide has no counterpart, only a related glyph — a
+  partial-success check-with-warning, a crossed-out raised hand, a SharePlay
+  badge, an unknown-person badge. Each got the nearest honest substitute and
+  none got a wrong one, but each is a compromise a designer has not yet seen.
+  Treat that list as the review queue, not as settled.
+
+  Two things are NOT in that list because they are systematic, not per-icon:
+
+  1. Lucide is stroke-only. It has no filled variants, so `heart` and
+     `heart.fill` name the same file, as do every other `.fill` pair. The filled
+     STATE is the component's job — fill the path with the current colour — not
+     a second file. A component that cannot distinguish liked from unliked is a
+     bug in the component, not in this table.
+
+  2. SF's speech bubbles are oval; Lucide's are rounded rectangles. Every bubble
+     maps into Lucide's `message-square` family rather than `message-circle`,
+     because only the square family has the variants the chat surface needs
+     (`-text`, `-warning`, `-off`, and the two-bubble `messages-square`). Mixing
+     the families would put two bubble shapes on one screen.
+
+  Where Lucide does have the enclosure SF used, the map keeps it
+  (`circle-check`, `circle-arrow-up`, `square-arrow-out-up-right`). Where it does
+  not, the enclosure is dropped and the component draws the circle
+  (`link.circle.fill` -> `link`). That is not a compromise; it is chrome.
+
+WHAT THIS DIRECTORY DOES NOT DO
+
+  No colours and no sizes live here. A Lucide SVG paints with
+  `stroke="currentColor"` on a 24x24 viewBox; the stroke colour and the rendered
+  size come from rise-theme through the component, never from this file and
+  never from a literal at the call site.
+
+  No Rust lives here either. The component that reads sf-to-lucide.json and
+  rasterises these files is IconUi in crates/rise-ui.

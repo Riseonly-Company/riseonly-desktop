@@ -1,0 +1,208 @@
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+[env]
+BUNDLE_ID = "net.riseonly.desktop"
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = "true"
+
+[tasks.default]
+alias = "dev"
+
+[tasks.dev]
+description = "Run the app on the current OS"
+run_task = [
+    { name = "dev-macos", condition = { platforms = ["mac"] } },
+    { name = "dev-linux", condition = { platforms = ["linux"] } },
+    { name = "dev-win", condition = { platforms = ["windows"] } },
+]
+
+# macOS runs from a real .app bundle, never a bare binary: Keychain ACLs,
+# UserNotifications and MPNowPlayingInfoCenter all key off the bundle identity.
+[tasks.dev-macos]
+description = "Build, bundle and launch Riseonly.app (debug)"
+script_runner = "@shell"
+script = '''
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "dev-macos must run on macOS."
+    exit 1
+fi
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+cargo build -p riseonly
+# The bundle is named for the environment it was compiled for, so the script
+# reports where it put it rather than the caller guessing.
+BUNDLE="$(./scripts/bundle-macos.sh debug | sed -n 's/^bundled: \(.*\)  (.*)$/\1/p')"
+open -n "$BUNDLE" --args "$@"
+'''
+
+[tasks.dev-macos.mac.env]
+RUST_BACKTRACE = "1"
+RUST_LOG = "riseonly=debug,rise_app=debug,rise_engine=debug"
+
+[tasks.dev-linux]
+description = "Build and launch on Linux (X11 or Wayland, chosen at runtime)"
+script_runner = "@shell"
+script = '''
+if [ "$(uname -s)" != "Linux" ]; then
+    echo "dev-linux must run on Linux."
+    echo "A GPUI app cannot be cross-run: the window server, text stack and"
+    echo "renderer all come from the host. Build on the target OS."
+    exit 1
+fi
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+cargo build -p riseonly
+exec ./target/debug/riseonly "$@"
+'''
+
+[tasks.dev-linux.linux.env]
+RUST_BACKTRACE = "1"
+RUST_LOG = "riseonly=debug,rise_app=debug,rise_engine=debug"
+
+[tasks.dev-win]
+description = "Build and launch on Windows"
+condition = { platforms = ["windows"] }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build -p riseonly
+exec --fail-on-error ./target/debug/riseonly.exe
+'''
+
+[tasks.dev-win.windows.env]
+RUST_BACKTRACE = "1"
+RUST_LOG = "riseonly=debug,rise_app=debug,rise_engine=debug"
+
+[tasks.build]
+description = "Build every crate except the GUI binary"
+command = "cargo"
+args = ["build", "--workspace"]
+
+# Not --all-features: the `ffmpeg` and `rlottie` features need vendored sources
+# that a fresh clone does not have, and their build.rs panics with the command
+# to run rather than guessing at a system library. `cargo make test-media` is
+# where those are exercised.
+[tasks.test]
+description = "Run the whole test suite headlessly"
+command = "cargo"
+args = ["test", "--workspace"]
+
+[tasks.fmt]
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.fmt-check]
+command = "cargo"
+args = ["fmt", "--all", "--check"]
+
+[tasks.clippy]
+command = "cargo"
+args = ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+
+[tasks.parity]
+description = "Report port progress against riseonly-ios"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+python3 ./scripts/check-tree-parity.py
+'''
+
+[tasks.boundaries]
+description = "Enforce the three architectural boundaries"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+python3 ./scripts/check-boundaries.py
+'''
+
+[tasks.design-tokens]
+description = "Keep colour and length literals inside rise-theme"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+python3 ./scripts/check-design-tokens.py
+'''
+
+[tasks.build-ffmpeg]
+description = "Build the LGPL-only FFmpeg prefix rise-media links against"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+./scripts/build-ffmpeg-lgpl.sh
+'''
+
+[tasks.vendor-rlottie]
+description = "Fetch the pinned rlottie source rise-media compiles into itself"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+./scripts/vendor-rlottie.sh
+'''
+
+[tasks.rlottie-license]
+description = "Re-derive rlottie's licensing from the vendored tree"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+python3 ./scripts/check-rlottie-license.py
+'''
+
+[tasks.ffmpeg-license]
+description = "Re-derive FFmpeg's licence from the built artefact"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+python3 ./scripts/check-ffmpeg-license.py
+'''
+
+# The two media backends need vendored sources, which is why the default
+# `cargo make test` does not enable them: a fresh clone would fail on a build.rs
+# panic rather than on anything real. This is the task that proves the LINKED
+# libraries work — the claims a script edit cannot fake.
+[tasks.test-media]
+description = "rise-media against the real FFmpeg and rlottie (needs build-ffmpeg + vendor-rlottie)"
+dependencies = ["vendor-rlottie"]
+command = "cargo"
+args = ["test", "-p", "rise-media", "--features", "ffmpeg,rlottie"]
+
+[tasks.test-stickers]
+description = "rise-media against the real rlottie only (no FFmpeg prefix needed)"
+dependencies = ["vendor-rlottie"]
+command = "cargo"
+args = ["test", "-p", "rise-media", "--features", "rlottie"]
+
+[tasks.lint]
+dependencies = ["fmt-check", "clippy", "boundaries", "design-tokens", "ffmpeg-license", "rlottie-license"]
+
+[tasks.ci]
+dependencies = ["lint", "build", "test"]
+
+[tasks.bundle-macos]
+description = "Build a release .app bundle"
+condition = { platforms = ["mac"] }
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+cargo build -p riseonly --release
+./scripts/bundle-macos.sh release
+'''
+
+[tasks.clean]
+command = "cargo"
+args = ["clean"]
+
+[tasks.set-dev-url]
+description = "Point dev builds at a backend host (detects the LAN IP by default)"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+./scripts/set-dev-url.sh "$@"
+'''
+
+[tasks.dev-staging]
+description = "Run against staging"
+env = { RISE_ENV = "staging" }
+run_task = "dev"
+
+[tasks.dev-prod]
+description = "Run against production"
+env = { RISE_ENV = "prod" }
+run_task = "dev"

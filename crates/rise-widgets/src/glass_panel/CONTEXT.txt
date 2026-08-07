@@ -1,0 +1,63 @@
+================================================================================
+rise-widgets/glass_panel — the component that consumes a material
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt              workspace rules, boundaries, commands
+  ../../../../docs/PLATFORM_GLASS.md   the whole design: three tiers, the rule
+  ../../CONTEXT.txt                    what rise-widgets owns
+  ../../../rise-platform/src/materials.rs  the policy, already written and tested
+
+WHAT THIS DIRECTORY OWNS
+
+  GlassPanel  a surface that asks for a Material and lets the platform decide
+              what that Material is. It is the ONLY component in the product
+              that knows native materials exist, and even here it never names
+              glass.
+
+  GlassHost   the per-frame bookkeeping: stable region ids, the regions this
+              layout pass reported, and the single commit that hands them to
+              rise-platform. Installed as a gpui global because there is one
+              window's worth of AppKit views, and because GlassSurface is
+              neither Send nor Sync — AppKit off the main thread is undefined
+              behaviour, not a lint.
+
+THE TWO BRANCHES ARE DIFFERENT DRAWINGS, NOT ONE DRAWING WITH A FLAG
+
+  Native   an AppKit view sits BELOW the Metal layer. GlassPanel therefore draws
+           nothing at all in its own rectangle — a fill would land on top of the
+           material and hide it — and only reports where it is. The corner radius
+           travels with the region because GPUI cannot clip a view it is drawing
+           over.
+
+  Painted  an ordinary element with a translucent fill, a hairline border, and no
+           platform bookkeeping whatsoever. This is macOS 13-25, Linux and
+           Windows, and it is also what a headless test sees.
+
+WHY THE COMMIT IS WHERE IT IS
+
+  A region's rectangle must come from the LAYOUT pass and be static for the
+  frame; a rectangle that moved during a render pass desynchronises from the
+  content around it. So GlassPanel records from an element's prepaint, and
+  glass_host() commits from a paint callback — gpui prepaints the whole tree
+  before it paints any of it, so by then every panel has reported. That ordering
+  is what makes one commit per frame both complete and free of a frame's lag.
+
+  rise-platform's LayoutGate enforces the other half: it refuses a generation
+  that is not newer, so a render pass has nothing to offer it.
+
+  The batch goes over whole, never as a diff. The platform side has to know
+  which views should no longer exist, and a surface that simply stopped being
+  laid out sends no removal of its own.
+
+WHAT IT MUST NEVER DO
+
+  Let a caller name a backing. GlassPanel::surface takes a Material and a stable
+  key; everything else is rise-platform's decision and rise-theme's paint.
+
+  Mint a region id per frame. The platform moves the view it already has for an
+  id it has seen; a fresh id rebuilds every AppKit view on every layout pass.
+
+  Put glass under dense scrolling text. Apple's own guidance is that the
+  material sits behind chrome, and Material::ceiling() is where that judgement
+  is lowered for a surface if it ever needs to be.

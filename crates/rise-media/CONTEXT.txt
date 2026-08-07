@@ -1,0 +1,164 @@
+================================================================================
+rise-media — video, audio, stickers, calls
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+  ../../RISEONLY-DESKTOP-CLONE-PROMPT.md section 7.4
+
+WHAT THIS CRATE OWNS
+  Decode, playback scheduling, and the GPU path for anything that is not a
+  static image.
+
+  THE CENTRAL PROBLEM. gpui::surface() takes only CVPixelBuffer and is
+  macOS-only; on Linux and Windows its paint method is a silent no-op. Zed's own
+  livekit code therefore does a full I420 -> RGBA CPU conversion and a fresh
+  texture upload per frame off macOS. A vertical short-video feed cannot ship on
+  that path. texture/external_texture.rs is where the wgpu-hal import lives
+  (DMA-BUF on Linux, DXGI shared handle on Windows, IOSurface on macOS).
+
+  Never route video or sticker frames through a per-frame RenderImage. One
+  persistent texture per stream, written into.
+
+WHAT IT MUST NEVER DO
+  Add ffmpeg with --enable-gpl or link libx264/libx265. That relicenses the
+  whole product under GPL. LGPL-only, dynamically linked, sources published.
+
+  Copy anything out of ../telegram. It is GPLv2. rlottie is fetched from
+  upstream Samsung/rlottie, which is MIT, by scripts/vendor-rlottie.sh.
+
+--------------------------------------------------------------------------------
+WHAT IS HERE NOW (Phase 4)
+--------------------------------------------------------------------------------
+
+src/texture/
+  frame.rs             FrameFormat, PlaneLayout, FrameGeometry. Pure plane and
+                       stride arithmetic, no OS, no graphics API. Strides come
+                       from the decoder and are NEVER assumed tight: hardware
+                       aligns rows to 16/64/256 bytes and reading them as packed
+                       gives the classic diagonal-shear picture.
+  color.rs             The YUV->RGB matrix and offset, derived from Kr/Kb per
+                       colour space and scaled per range. Getting this wrong
+                       does not crash — it produces grey blacks — so the
+                       arithmetic is asserted against known colours.
+  external_texture.rs  ImportPlan (the per-host decision), StreamTexture (one
+                       persistent allocation per stream), BudgetTracker (the
+                       process-wide ceiling). Nothing here may ever produce a
+                       per-frame image; there is a test named for it.
+  import.rs            The only file in the texture path with #[cfg(target_os)],
+                       and it contains no decisions — only the call. The Linux
+                       and Windows arms return NotExercised rather than
+                       pretending an unrun unsafe path succeeded.
+  nv12_to_rgb.wgsl     Biplanar and triplanar sampling in one pipeline.
+
+src/video/
+  decoder.rs           HwAccel per host, codec allow-list, DecoderPlan. All
+                       pure and always compiled. The VideoDecoder trait is what
+                       lets the scheduler and the ceiling test run with no
+                       FFmpeg present.
+  ffmpeg_backend.rs    rsmpeg. Behind the `ffmpeg` feature. Sets hw_device_ctx
+                       on the raw AVCodecContext because rsmpeg exposes only
+                       set_hw_frames_ctx, and a decoder needs the device.
+  feed_scheduler.rs    Decoder pool cap, preload ahead/behind, teardown. Pure,
+                       takes the viewport as input, keyed on STABLE SERVER IDS —
+                       an index makes a prepended page restart playback.
+
+src/audio/
+  format.rs            StreamFormat and the frames↔milliseconds arithmetic.
+                       Frames are not samples; the difference is a factor of
+                       two that silently halves every duration on stereo.
+  codec.rs             Container sniffing from the magic bytes, never from the
+                       filename or the Content-Type. Opus and AMR are
+                       RECOGNISED AND REFUSED BY NAME: neither has a pure-Rust
+                       decoder, and silence would be worse than an error.
+  gapless.rs           iTunSMPB and LAME/Xing parsing, and the trimmer. This is
+                       what PHASES.txt means by "if the catalogue is AAC, the
+                       trimming is yours" — symphonia does it for MP3 and not
+                       for AAC in MP4, which is what file-service produces.
+  decoder.rs           The AudioDecoder trait and DecoderPlan, which decides
+                       WHO trims. Both parties trimming cuts real audio;
+                       neither leaves the gap between album tracks.
+  symphonia_backend.rs The binding. Not behind a feature: pure Rust, no prefix.
+  ring.rs              Lock-free SPSC between the decode thread and the device
+                       callback. The callback may not allocate, lock or block —
+                       a lock held by a descheduled normal-priority thread is
+                       an audible click, every time.
+  resample.rs          Catmull-Rom SRC. Exists for Windows: WASAPI shared mode
+                       is fixed at the control-panel rate and does not
+                       negotiate, so 44.1 played verbatim is 8.8% sharp.
+  fade.rs              Volume ramps and the duck. restore_full_volume cancels
+                       a pending pause — the reference documents that exact
+                       race in a comment.
+  output.rs            The AudioSink trait and the pure device-config chooser.
+                       All three device shapes (CoreAudio range, WASAPI single
+                       fixed rate, ALSA multi-format) are cases in the suite.
+  cpal_sink.rs         The real device. Not Send: cpal::Stream is not Send on
+                       every backend, so the sink stays on its thread and the
+                       ring is the only thing that crosses.
+  pump.rs              decode → trim → resample → channel map → gain → ring,
+                       in that order and for stated reasons.
+  scheduler.rs         Which tracks have a decoder. Two at a time, the next one
+                       opened with a lead so the gapless join is not late.
+                       Keyed on stable server ids, like the feed scheduler.
+
+src/lottie/
+  raster_policy.rs     Every number, in one place. Ported from
+                       RiseLottieRasterPolicy. Two desktop changes are marked.
+  container.rs         The security boundary. rlottie is C++ parsing a document
+                       a stranger sent you, so the container is identified from
+                       magic, inflation is bounded against a gzip bomb, and the
+                       document must look like a Lottie before the C++ starts.
+  sequence.rs          Rasterise once, LZ4, replay. A looping sticker only ever
+                       shows frame_count distinct images; the naive version
+                       re-rasterises all of them forever.
+  frame_cache.rs       Resident animations, bounded by BYTES and by COUNT. The
+                       count cap is not redundant: a resident sequence also
+                       holds an rlottie animation on the C++ heap, which this
+                       process's ledger cannot see.
+  display_driver.rs    ONE tick for every sticker on screen. Returns decisions
+                       rather than invoking callbacks, so sixty stickers are
+                       tested with no window and no clock.
+  playback_hub.rs      The playback budget. Gated on window VISIBILITY, not
+                       focus — the reference's isApplicationActive has no
+                       desktop meaning.
+  raster_pool.rs       Workers, in-flight dedup, bounded queue that drops the
+                       OLDEST request. A flick asks for frames that are already
+                       off screen by the time a worker reaches them.
+  atlas.rs             Bucketed grid, one page per tile size, priced into the
+                       same BudgetTracker as video. Hundreds of tiny textures
+                       is the per-frame allocation pattern at another scale.
+  rlottie_backend.rs   The FFI, behind the `rlottie` feature.
+
+FFMPEG
+  Never the system one. Homebrew's is --enable-gpl with libx264/libx265 and
+  linking it relicenses this product. scripts/build-ffmpeg-lgpl.sh builds an
+  LGPL prefix into vendor/ffmpeg/<os>-<arch>/; build.rs points rsmpeg at it and
+  refuses to guess; scripts/check-ffmpeg-license.py re-derives the licence from
+  the artefact; and a test asserts it against the string the LINKED library
+  returns at runtime, which is the only claim that cannot be faked by editing a
+  script.
+
+RLOTTIE
+  Vendored, never a system library — no OS ships one. scripts/vendor-rlottie.sh
+  fetches a pinned, hash-checked tarball; build.rs compiles it with `cc`, so no
+  cmake or meson is needed anywhere; scripts/check-rlottie-license.py re-derives
+  the licensing from the tree and names the one MPL-2.0 file, whose source ships
+  with the release. LOTTIE_MODULE is OFF, which links stb_image in rather than
+  dlopening a second binary that would have to be signed inside the .app.
+
+WHAT IS VERIFIED
+  macOS only. The IOSurface arm runs; DMA-BUF and DXGI are written and report
+  NotExercised. The linked rlottie really rasterises and symphonia really
+  decodes — both asserted against produced pixels and samples, not mocks. Every
+  per-host DECISION is a pure function of HostOs or of what the device
+  advertises, and is tested for all three on a Mac. See docs/PLATFORM_MATRIX.md.
+
+STILL MISSING FROM PHASE 4
+  The wgpu-hal import bodies behind the two NotExercised arms, and everything
+  that needs a real render target: no video bitstream has been decoded end to
+  end, no sticker has been uploaded to a GPU, and no frame timing has been
+  measured. All three need the render integration, which is Phase 5.
+
+  Opus has no decoder. Voice messages are Ogg/Opus, so chat in Phase 7 needs a
+  decision: libopus as a C dependency, or route that one format through the
+  LGPL FFmpeg that is already vendored for video.

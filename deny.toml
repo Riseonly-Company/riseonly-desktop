@@ -1,0 +1,32 @@
+# Second line of defence behind scripts/check-boundaries.py. That script reads
+# manifests and sources; this catches a forbidden crate arriving transitively.
+
+[graph]
+all-features = true
+
+[bans]
+multiple-versions = "allow"
+
+[[bans.deny]]
+name = "openssl-sys"
+reason = "rustls only — a system OpenSSL breaks reproducible per-OS builds"
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[advisories]
+yanked = "warn"

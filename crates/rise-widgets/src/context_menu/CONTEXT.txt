@@ -1,0 +1,67 @@
+================================================================================
+rise-widgets/context_menu — long-press on the phone, right-click here
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt   workspace rules, boundaries, commands
+  ../../CONTEXT.txt         what rise-widgets owns
+  ../overlay/CONTEXT.txt    where the menu is put, and why nothing may escape
+  ../../../../../riseonly-ios/Riseonly/Core/UI/ContextMenuUi.swift   the reference
+
+WHAT THIS DIRECTORY OWNS
+
+  context_menu_item.rs  `ContextMenuItem`, `ContextMenuEntry` and the keyboard
+                        traversal as a pure function. No gpui context at all.
+  context_menu.rs       `ContextMenuState` as a gpui Entity: the entries, the
+                        anchor, the highlight, the checkmark, the actions and
+                        the rendering.
+
+THE DATA SHAPE IS THE REFERENCE'S
+
+  `ContextMenuUi.swift` has `ContextMenuItem { id, label, icon, key, callback }`
+  and a `selected: String?` that draws a checkmark on the row whose `key`
+  matches. Our `id` IS that `key` — the STABLE ACTION ID — and `selected` is
+  matched against it. Analytics and handlers on both platforms key off the same
+  strings, so a menu ported from a Swift screen diffs against its reference
+  instead of becoming a second vocabulary.
+
+  What we do not carry over is the callback. An item holding a closure is a
+  value that cannot be compared, asserted on or sent anywhere, so activation
+  leaves as `ContextMenuEvent::Activated(id)` and dismissal as
+  `ContextMenuEvent::Dismissed`. The menu never decides whether it is on screen.
+
+  The label is a STRING KEY, resolved with `rise_i18n::tr` at render time. A
+  missing key renders as the key itself, which is a visible bug, not a fallback.
+
+WHAT DECIDES CORRECTNESS
+
+  `next_enabled_index` is the whole keyboard model, and it is pure. Separators
+  occupy an index — they have to, because traversal steps over indices and a
+  separator kept outside the list would make every index mean two things — so
+  the function skips separators and disabled items, wraps in both directions,
+  and answers `None` when a menu has nothing the keyboard could land on. That
+  last case is the one that becomes an index out of range if it answers anyway.
+
+  Element ids come from the item's stable id, never the loop index. A menu that
+  reorders would otherwise hand one row's element state to another.
+
+  Every mutation ends in `cx.notify()`. gpui has no dependency tracking, so a
+  forgotten notify is a silently stale menu. The setters return early when
+  nothing changed, which is not the same thing: no mutation happened.
+
+  `asked_size` is an ASK, not a measurement. Nothing can report a menu's real
+  width before layout, so placement works from `shell.menu_max_width` and
+  `place()` clamping to the viewport is what keeps a menu inside a 400pt window.
+
+WHAT IT MUST NEVER DO
+
+  Name glass. The panel is `GlassPanel::surface(region_key, Material::Overlay)`;
+  what that material actually is on this machine is rise-platform's decision.
+  `region_key` must be stable for the life of the surface, and two menus that
+  can be open at once must not share one.
+
+  Spell a colour or a length. The highlight, the destructive tint, the row
+  height, the menu widths and the separator all come from `rise_ui::theme(cx)`.
+
+  Place itself. The anchor is a value the menu carries; the origin comes from
+  `crate::overlay::place`, and the shell mounts the result in an OverlayLayer.

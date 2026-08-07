@@ -1,0 +1,43 @@
+================================================================================
+app/ — THE APPLICATION
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt                   workspace rules, boundaries, commands
+  ../docs/STORE_ARCHITECTURE.md    the store triad
+  ../docs/PERFORMANCE_GUIDE.md     the performance contract
+  src/modules/CONTEXT.txt          the module convention
+  the CONTEXT.txt of the module you are about to touch
+
+WHAT THIS IS
+  A binary, not a library. It owns the shell and every feature module. Anything
+  reusable and layered lives in ../crates.
+
+LAYOUT
+  src/main.rs      installs the theme, opens the window, hands over
+  src/app/         root view, router, tab chrome
+  src/app/router/  RootRoute -> screen. The match is exhaustive on purpose:
+                   adding a route fails the build until someone renders it.
+  src/core/        account scope, session activity, active screens, engine
+                   bridge, shared utilities. Plumbing for THIS application —
+                   anything another product could reuse belongs in ../crates.
+  src/modules/     22 feature modules
+
+MODULES ARE ORGANISATION, NOT ISOLATION
+  A module groups the pages, components and stores of one product area. Modules
+  may reference each other directly — they are not independent products, and
+  putting traits between them to pretend otherwise buys nothing.
+
+  What they may NOT do is reach past their layer: a view calls only its
+  InteractionsStore, stores never touch rise_engine directly, and engine code
+  never touches gpui. CI checks all three.
+
+  There is no sai and no compatibility layer. A store issues an intent, the
+  module's engine/ owns the data and speaks to rise-engine. That is the only
+  path to the backend.
+
+WHAT DOES NOT BELONG HERE
+  Anything another application could reuse. Design tokens, primitives, widgets,
+  the data engine, OS seams and navigation mechanics are crates.
+
+  #[cfg(target_os)] — never. Platform differences go through rise-platform.

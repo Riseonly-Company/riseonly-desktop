@@ -1,0 +1,71 @@
+================================================================================
+scripts/
+================================================================================
+
+  check-tree-parity.py   How much of riseonly-ios is ported, per module. The only
+                         mechanical progress meter across ~1800 reference files.
+                         Maps kebab-case to snake_case and .swift to .rs.
+                         `cargo make parity`, add --list-missing for detail.
+
+  check-boundaries.py    Enforces the three architectural boundaries. See
+                         ../docs/ARCHITECTURE_BOUNDARIES.md for why each exists.
+                         `cargo make boundaries`.
+
+  check-design-tokens.py  The Phase 5 gate, made mechanical: no literal colour or
+                         length outside rise-theme. Scans crates/rise-ui,
+                         rise-widgets, rise-navigation and app/ for rgb()/hsla()/
+                         Hsla{}/white()/"#RRGGBB", for px(45.0)-style numbers, and
+                         for the tailwind-ish helpers that carry the number in
+                         their name (.p_4(), .rounded_lg(), .text_sm()).
+                         px(theme.button.height_300) passes: the number came from
+                         the theme. `cargo make design-tokens`, and part of lint.
+
+                         Not scanned: rise-theme (the numbers belong there),
+                         #[cfg(test)] blocks and tests/ (a test asserting
+                         px(45.0) is the reference height is the point of the
+                         test), and the storybook, by the explicit path list
+                         STORYBOOK_PATHS in the script — never by matching the
+                         name, because "anything called storybook" is how a
+                         second, quieter design system gets started. Adding a
+                         path there exempts a whole subtree; say why in the
+                         comment above the entry.
+
+                         THE ESCAPE HATCH, spelled exactly once:
+
+                             .w(px(1.0)) // design-token-exempt: <reason>
+
+                         The reason is mandatory — a bare marker is itself a
+                         violation. Every escape is printed on every run, and
+                         more than ESCAPE_CEILING (12) of them fails the build,
+                         so they cannot quietly become the house style. Raising
+                         the ceiling is an edit to this file plus the script,
+                         with the argument written down here.
+
+                         It is a regex, and the docstring says so: it cannot
+                         follow px(SIDEBAR_WIDTH) to the constant, and it does
+                         not read raw or multi-line strings when it looks for
+                         #[cfg(test)] boundaries. It raises the cost of hard-
+                         coding a number; it does not prove the absence of one.
+
+  vendor-rlottie.sh      Fetches the pinned rlottie source rise-media compiles
+                         into itself. Hash-checked; refuses to vendor a tarball
+                         that is not the one the pin was taken from. Never from
+                         ../telegram, which is GPLv2.
+                         `cargo make vendor-rlottie`.
+
+  check-rlottie-license.py  Re-derives rlottie's licensing from the vendored
+                         tree rather than trusting the script above. Fails on
+                         GPL text in a compiled source, fails on a licence file
+                         nobody has assessed, and names the one MPL-2.0 file
+                         whose source must ship with the release.
+                         `cargo make rlottie-license`, and part of lint.
+
+  bundle-macos.sh        Assembles Riseonly.app, copies Info.plist, entitlements
+                         and assets, then ad-hoc signs it. macOS must run from a
+                         bundle, not a bare binary: Keychain ACLs, notifications
+                         and now-playing all key off bundle identity.
+
+Linux and Windows bundling scripts are not written yet. When they are, copy the
+shape of Zed's script/bundle-linux and script/bundle-windows.ps1 rather than
+inventing one: notarisation ordering on macOS and the update-helper requirement
+on Windows are both easy to get subtly wrong.

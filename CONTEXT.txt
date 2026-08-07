@@ -1,0 +1,204 @@
+================================================================================
+riseonly-desktop — READ THIS BEFORE YOU TOUCH ANYTHING
+================================================================================
+
+WHAT THIS IS
+
+A native desktop client for Riseonly, written in Rust on the GPUI toolkit,
+targeting macOS, Linux and Windows from one codebase. It is a 1:1 architectural
+port of riseonly-ios: same layers, same module boundaries, same store triad,
+same data engine, same performance contract. Screens and stores mirror the iOS
+reference; only the application shell differs, because a phone has no window.
+
+Right now only macOS is built and run. Linux and Windows code paths are written
+but unexercised. That is deliberate: writing them blind now is cheap, retrofitting
+them later is not. Never collapse a platform seam just because only one arm is
+currently tested.
+
+STATUS: Phases 0-3 done, Phase 4 nearly closed, Phases 5 and 6 gated, Phase 7
+begun. 1,455 tests green on macOS.
+
+The engine (wire, encrypted store, sync, outbox) is built headless with contract
+tests, the fifteen platform seams are in, and the media bet has landed: the
+zero-copy texture path, the video decoder and feed scheduler, the whole audio
+stack (cpal + symphonia, gapless, resampling) and the whole sticker stack
+(vendored rlottie, one shared tick, texture atlas), each with a memory-ceiling
+test. What Phase 4 has left needs a render target.
+
+The design system exists. Material tokens and their painted tier; typography
+over a font the product ships itself rather than the host's; spacing, icon and
+shell-geometry tokens; the SF-Symbol-to-Lucide table, keyed by the Apple name so
+a ported screen still diffs against its Swift; flags as assets instead of
+regional-indicator arithmetic; 41 locales with both interpolation dialects and
+the fallback chain; a text input built on gpui's own IME plumbing; the RiseGlass
+Swift bridge with real NSGlassEffectView regions; the left rail; and a storybook
+that stands every stateless component at two appearances and three densities.
+
+The shell responds. Adaptive columns are wired to the real window and are
+reversible — narrowing merges columns rather than stacks, so widening restores
+what was there. The active screen is a SET of visible-resource leases, and the
+once-per-cycle rule is per key and global, which is what stops a window drag
+from re-fetching. SessionActivity keeps the socket while unfocused, the
+inversion of the phone. The keyboard reaches everything: Cmd/Ctrl+1..9, the
+command palette, back and forward, Esc down the overlay stack. Right-click menus
+and drag-in are placed and policed entirely inside the window rectangle, because
+gpui has no popups off Wayland. A second launch hands its links to the first.
+
+The network is real. One socket over tokio-tungstenite with backoff, a
+`Bearer.<jwt>` handshake and an application-level heartbeat, because the
+gateway's silence reaper does not count protocol Pongs. The engine gained a
+second, narrow transport for the two auth calls an unauthenticated client has to
+make, which the socket's action gate refuses by construction.
+
+Four modules exist: auth (accounts, credentials, the token lifecycle),
+onboarding, session (the active-sessions list) and presence. A signed-out launch
+shows onboarding and the step flow; a signed-in one restores from the credential
+store, refreshes if the access token has aged out, and opens the shell. The other
+eighteen modules are the rest of Phase 7.
+
+docs/PLATFORM_MATRIX.md says, per seam, what is verified, what merely compiles on
+the CI matrix, and what is only written. Read it before claiming any coverage.
+Nothing in this repository has been run on Linux or Windows.
+
+    cargo make dev-macos -- -riseStorybook     the design system, all six ways
+
+--------------------------------------------------------------------------------
+THE RULE ABOUT CONTEXT.txt
+--------------------------------------------------------------------------------
+
+Every significant directory carries a CONTEXT.txt. Before you work inside a
+directory, read its CONTEXT.txt and every CONTEXT.txt above it on the path.
+They tell you what the directory owns, what it must never do, and which canon
+applies. This repo is expected to grow past a million lines; these files are how
+an agent that has never seen it avoids inventing a parallel architecture.
+
+If you add a directory that owns a concept, add its CONTEXT.txt in the same
+change.
+
+--------------------------------------------------------------------------------
+REQUIRED READING BEFORE WRITING CODE
+--------------------------------------------------------------------------------
+
+In this repo:
+  RISEONLY-DESKTOP-CLONE-PROMPT.md  (in the parent workspace) — the full spec,
+                                     sections 0-13, and the open decisions list
+  docs/STORE_ARCHITECTURE.md        — the store triad, domains, repositories
+  docs/PERFORMANCE_GUIDE.md         — the performance contract
+  docs/ENGINE.md                    — the RiseEngine contract
+  docs/ARCHITECTURE_BOUNDARIES.md   — the three rules CI enforces
+  docs/PLATFORM_GLASS.md            — materials, Liquid Glass, the fallback
+  PHASES.txt                        — the whole plan and where we are
+
+In the reference (READ-ONLY, never modify):
+  ../riseonly-ios/STORE_ARCHITECTURE.md
+  ../riseonly-ios/PERFORMANCE_GUIDE.md
+  ../riseonly-ios/Packages/RiseEngine/DOCUMENTATION.md
+
+The reference is riseonly-ios. It is the source of truth for structure, naming
+and behaviour — but it is not infallible and it is not a phone-shaped straitjacket.
+Where the desktop form factor genuinely differs, the spec says so explicitly and
+marks the addition. Everywhere else, match the reference.
+
+--------------------------------------------------------------------------------
+LAYOUT
+--------------------------------------------------------------------------------
+
+crates/    THE LIBRARIES — layered, reusable, each with its own CONTEXT.txt
+  rise-core         identifiers, generations, StaleGuard. No UI, no OS, no engine.
+  rise-i18n         41 locales, plurals, both interpolation dialects.
+  rise-engine       wire, store, sync, upload. The data layer.
+  rise-platform     every OS difference behind traits, plus the gpui shim.
+  rise-theme        design tokens: palette, radii, heights, density, materials,
+                    typography, spacing, icons, shell geometry.
+  rise-ui           primitives: BoxUi, MainText, ButtonUi, IconUi, FlagUi,
+                    InputUi, skeleton, fonts.
+  rise-widgets      composed: glass panel, in-window overlays, context menu;
+                    sheets, notifier and the media viewer still to come.
+  rise-media        video, audio, lottie, images, calls.
+  rise-navigation   routes, pane policy, navigation store.
+
+app/       THE APPLICATION — a binary, not a library
+  src/main.rs       installs the theme, opens a window, hands over to app/
+  src/app/          shell: root view, router, deep links, the rail, the
+                    keyboard, the command palette, windows, the storybook
+  src/core/         session activity, active screens, config, the engine bridge
+                    (the socket host, its backoff and credential policy, and the
+                    HTTP sender the engine's second transport is given)
+  src/modules/      the 22 feature modules, as plain module trees
+
+  Modules are an organisation of screens and stores, not independent products.
+  They live inside the application and may reference each other directly, the
+  same way they do in the iOS reference. The genuinely reusable, layered pieces
+  are the crates above.
+
+  There is no compatibility layer and no sai. Every store talks to rise-engine
+  through its module's engine/, exactly as chat-actions.swift and
+  message-actions.swift do in the reference.
+
+  The engine carries two transports, and the second one is not a loophole. The
+  socket carries everything; HTTP carries `auth.refresh_token` and tag
+  availability, and ONLY those, because the gateway's socket action gate refuses
+  an unauthenticated caller anything else — which is exactly what refreshing an
+  expired token is. Same descriptor catalogue, same replay policy discipline. A
+  method the socket can carry never appears there.
+
+--------------------------------------------------------------------------------
+THE THREE BOUNDARIES (CI fails on violation — scripts/check-boundaries.py)
+--------------------------------------------------------------------------------
+
+1. rise-engine never imports gpui or an OS crate.
+2. #[cfg(target_os)] appears only in rise-platform and rise-media.
+3. stores/ never imports rise_engine directly; engine/ never imports gpui.
+
+These are not style preferences. (1) is what keeps the engine reusable on iOS,
+Android and wasm later. (2) is what keeps three OSes from becoming three
+codebases. (3) is STORE_ARCHITECTURE.md expressed as a check.
+
+--------------------------------------------------------------------------------
+COMMANDS
+--------------------------------------------------------------------------------
+
+cargo make dev-macos    build, bundle Riseonly.app, launch it
+cargo make dev-linux    build and launch on Linux  (errors on other hosts)
+cargo make dev-win      build and launch on Windows (errors on other hosts)
+cargo make test         whole suite, headless
+cargo make lint         fmt + clippy + boundary check + design-token check
+cargo make parity       how much of riseonly-ios is ported, per module
+cargo make ci           everything the pipeline runs
+cargo make set-dev-url  point dev builds at a backend (detects the LAN IP)
+cargo make vendor-rlottie  fetch the pinned rlottie source rise-media compiles in
+cargo make test-media   rise-media against the real FFmpeg and rlottie
+cargo make dev-staging  run against staging
+cargo make dev-prod     run against production
+
+ENVIRONMENTS
+  Resolution order, highest first: RISE_API_URL / RISE_WS_URL in the process
+  environment, then config/local.json, then the compiled defaults for RISE_ENV.
+  Production ignores the first two — a shipped build that a file on disk can
+  repoint at another backend is a credential-theft vector, not a convenience.
+  Each environment gets its own data directory and URL scheme, so dev and prod
+  never share a database and never steal each other's deep links.
+
+macOS always runs from a bundled .app, never a bare binary: Keychain ACLs,
+notifications and now-playing all key off bundle identity.
+
+--------------------------------------------------------------------------------
+HOUSE RULES
+--------------------------------------------------------------------------------
+
+- No comments that restate the code. In stores: no comments at all, no file
+  headers, no doc comments on obvious items. In engine code a comment is allowed
+  only for a non-obvious concurrency, transaction, replay or reconciliation
+  invariant. CONTEXT.txt is where explanation belongs.
+- gpui is pinned to an exact git rev in the workspace manifest. Never move it to
+  a branch, never to crates.io (which is a year stale and predates the
+  gpui_platform split). Bumping the rev is scheduled work with a test gate.
+- gpui itself is Apache-2.0 and safe to link. The rest of the Zed repo
+  (crates/ui, theme, icons, editor, markdown, picker, workspace) is GPL-3.0.
+  Read it for reference; never copy it into this product.
+- File naming mirrors iOS with one adjustment: directories and file stems become
+  snake_case so module paths stay idiomatic (pages/Onboarding/Onboarding.swift
+  becomes pages/onboarding/onboarding.rs). Type names are unchanged.
+  cargo make parity normalises both sides and measures the result.
+- Do not add a dependency without a line in docs/DEPENDENCIES.md explaining why
+  it exists and what replaces it if it dies.

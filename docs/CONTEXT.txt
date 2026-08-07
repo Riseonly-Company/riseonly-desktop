@@ -1,0 +1,17 @@
+================================================================================
+docs/
+================================================================================
+
+The canon, adapted for this repo. The originals live in ../../riseonly-ios and
+remain the source of truth for anything these do not cover.
+
+  ARCHITECTURE_BOUNDARIES.md  the three rules CI enforces, and every deliberate
+                              deviation from the iOS reference, with reasons
+  DEPENDENCIES.md             every external crate, why it is here, what replaces
+                              it if it dies
+  STORE_ARCHITECTURE.md       the store triad in Rust ownership terms
+  PERFORMANCE_GUIDE.md        the performance contract, restated for desktop
+  ENGINE.md                   the RiseEngine contract
+
+Read the reference documents in full before changing store or engine code. These
+adaptations tell you what is different here; they do not repeat what is the same.

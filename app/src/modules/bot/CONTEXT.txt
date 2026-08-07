@@ -1,0 +1,23 @@
+================================================================================
+rise-bot
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt      (the module convention — layout, store triad, hard rules)
+  ../../../CONTEXT.txt (workspace rules)
+
+REFERENCE
+  ../../../riseonly-ios/Riseonly/modules/bot/
+  7,851 lines of Swift in the reference.
+
+FOLDERS HERE
+  components, pages, shared, stores
+
+  No engine/ here. This module's data belongs to another module's domain, or
+  it has no backend service of its own. Do not add engine/ without checking
+  which backend service owns the data.
+
+REMINDERS
+  pages/ holds screens and nothing else.
+  A view calls only <Feature>InteractionsStore.
+  This crate must not depend on another module crate.

@@ -1,0 +1,171 @@
+================================================================================
+input_ui — the text input
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt                 what rise-ui owns and what it must never do
+  ../../../../docs/PERFORMANCE_GUIDE.md
+  ../../../rise-theme/CONTEXT.txt   where every colour and length comes from
+
+--------------------------------------------------------------------------------
+WHY THIS EXISTS AND WHY IT IS NOT gpui-component
+--------------------------------------------------------------------------------
+
+gpui ships no input widget and no selection over static text. Every screen with
+a field, a search box or a composer is blocked on this folder.
+
+PHASES.txt names gpui-component as the way to get it. We did not take it.
+gpui-component tracks gpui's default branch with no rev pin; this workspace pins
+gpui to an exact rev. Two git sources for gpui means two copies of gpui in the
+dependency graph and types that do not unify — and it is a second design system
+sitting next to rise-theme. So this is built on gpui's own input plumbing, which
+the pinned rev already carries: `EntityInputHandler`, `ElementInputHandler`,
+`Window::handle_input` and `WindowTextSystem::shape_line`.
+
+gpui is Apache-2.0 and is what this links against. Nothing here is copied from
+the rest of the Zed repository, which is GPL-3.0.
+
+--------------------------------------------------------------------------------
+THE FILES
+--------------------------------------------------------------------------------
+
+  mod.rs             re-exports, nothing else
+  input_ui.rs        the `Element` (caret, selection, marked text, viewport) and
+                     `Render for InputUiState` (background, border, key context,
+                     action wiring). A caller writes `div().child(state)`.
+  input_ui_state.rs  the model as a gpui `Entity`: text, selection, marked range,
+                     composition, mode, and the `EntityInputHandler` impl
+  input_actions.rs   the action types and the one idempotent key map
+  text_boundaries.rs grapheme / word / line / UTF-16 helpers, all pure `&str`
+  edit_history.rs    undo and redo with coalescing
+  caret_blink.rs     the blink cycle as a state machine with no timer in it
+  display_text.rs    what gets shaped — placeholder, secure bullets, hard lines —
+                     and how a document offset projects onto it
+  shaped_input.rs    the shaping cache and the geometry answers built on it
+
+--------------------------------------------------------------------------------
+THE RULES THAT DECIDE WHETHER THIS IS CORRECT
+--------------------------------------------------------------------------------
+
+EVERY OFFSET IS A UTF-8 BYTE OFFSET, AND EVERY ONE LANDS ON A CHAR BOUNDARY.
+Slicing a `String` off a boundary panics, and Cyrillic, CJK and emoji are where
+that happens. Anything entering the state goes through
+`text_boundaries::clamp_to_char_boundary` first. The one exception is the
+`EntityInputHandler` surface, which is UTF-16 because NSTextInputClient is —
+those offsets are converted at the boundary and nowhere else.
+
+MOVEMENT IS BY GRAPHEME. An emoji with a skin-tone modifier is one left-arrow
+press, not four.
+
+SELECTION IS AN ANCHOR PLUS A HEAD. Never a sorted pair: shift+left then
+shift+right has to collapse the selection, not grow it from the other side.
+
+EVERY MUTATION ENDS IN cx.notify(). gpui has no dependency tracking. A missing
+notify is a silently stale field with no warning at all.
+
+NO COLOUR AND NO LENGTH LITERAL. Everything comes from `rise_ui::theme(cx)`.
+The three numbers a text input needs and a phone does not — caret width, IME
+underline thickness and the selection tint — are `theme.input.caret_width`,
+`theme.input.marked_underline` and `theme.input.selection`. They are desktop
+additions to `InputTheme` with no counterpart in the iOS palette, because the
+reference's fields are UIKit's and UIKit draws all three itself.
+
+--------------------------------------------------------------------------------
+WHAT THE GRAPHEME APPROXIMATION DOES AND DOES NOT COVER
+--------------------------------------------------------------------------------
+
+`text_boundaries` implements cluster boundaries itself rather than adding
+`unicode-segmentation`. It is NOT UAX #29 and does not claim to be.
+
+It handles: combining marks over the Latin, Greek, Cyrillic, Hebrew, Arabic,
+Syriac, Thaana, N'Ko, Samaritan, Devanagari, Thai and Lao ranges; the general
+combining blocks (U+1AB0, U+1DC0, U+20D0, U+FE20); variation selectors
+(U+FE00-FE0F, U+E0100-E01EF); emoji skin-tone modifiers; ZWJ sequences in either
+direction, including three-person family emoji; regional-indicator flag pairs,
+including a run of several flags read from the right; and CRLF.
+
+It does not handle: Hangul syllable composition (an L/V/T jamo sequence is one
+cluster in UAX #29 and several here), Indic conjunct clusters outside the
+Devanagari range listed, prepend characters, or emoji sequences that rely on
+properties rather than the code-point ranges above.
+
+Where it is wrong the caret steps through a syllable instead of over it. It is
+never unsafe: every offset it returns is a char boundary, which is the property
+the rest of the component depends on.
+
+--------------------------------------------------------------------------------
+LAYOUT, AND THE SOFT-WRAP TRADE
+--------------------------------------------------------------------------------
+
+Text is split on HARD newlines and each line is shaped with `shape_line`. There
+is no soft wrapping. That is a deliberate trade, and this is what it buys:
+
+  Every row is exactly one line height tall, so the row under a y coordinate is
+  arithmetic. That is what makes viewport-limited shaping possible — a field
+  holding a long message shapes only the rows on screen, and a click anywhere
+  resolves without a layout pass over the document.
+
+  With `shape_text` and wrap boundaries the row-to-y map stops being arithmetic
+  and the whole document has to be laid out to know where row N is.
+
+A long single line still shapes in full, and the display string is rebuilt on
+every keystroke. Both are fine for a field and a composer; neither is fine for a
+document editor. If this ever has to hold a document, the shaping cache in
+shaped_input.rs is the seam to widen, not the call sites.
+
+Shaping happens once per `ShapeKey` — revision, font, size, colour, marked range,
+visible rows. A drag reads the cache; it never reshapes.
+
+--------------------------------------------------------------------------------
+IME
+--------------------------------------------------------------------------------
+
+Input arrives through `EntityInputHandler`, not through key events. That is the
+entire reason for the shape of this folder: reading key events gets Latin typing
+right and everything else wrong.
+
+A composition is one undo step, not one per keystroke. `Composition` records
+where the composition began and what it displaced; every
+`replace_and_mark_text_in_range` updates the text without touching history, and
+the commit — `replace_text_in_range`, or `unmark_text` — pushes a single edit
+spanning the whole thing. A composition cancelled with an empty mark leaves no
+history entry at all.
+
+`new_selected_range_utf16` is relative to the MARKED TEXT, not to the document.
+Treating it as a document range is the classic IME bug: the caret jumps near the
+start of the line while composing.
+
+The marked range is drawn as its own underlined `TextRun`. Runs must cover the
+line exactly or shaping silently drops glyphs.
+
+--------------------------------------------------------------------------------
+KEY BINDINGS
+--------------------------------------------------------------------------------
+
+`install_key_bindings` is idempotent and `InputUiState::new` calls it, so a field
+works in an app that never heard of it. Bindings are scoped to the `InputUi` key
+context so a field never eats a shortcut the shell owns.
+
+`secondary-` is gpui's own portable modifier — cmd on macOS, ctrl elsewhere —
+which is why nothing here needs a `cfg`, and boundary rule 2 stays intact. Word
+and document jumps bind both the macOS chord and the Windows/Linux one; on the
+other platform each is either free or owned by the window manager.
+
+A SINGLE-LINE FIELD DOES NOT CONSUME THE ARROW KEYS. `vertical()` propagates
+instead of moving, because a gpui action listener stops propagation by DEFAULT
+during the bubble phase, and the deepest binding wins: a field that handled `up`
+would silently take the arrows away from every list it sits in front of. The
+command palette navigates its results that way, and every picker after it will.
+The trade is that `up` in a lone single-line field no longer jumps the caret to
+the start — `home` and `cmd-left` already do that, and they are not contested.
+
+--------------------------------------------------------------------------------
+WHAT IS NOT DONE
+--------------------------------------------------------------------------------
+
+  - no soft wrap (see above)
+  - no autoscroll timer: a drag past the edge advances one row per pointer event
+  - no drag-and-drop of selected text, no spell check, no context menu
+  - a secure field still reports `accepts_text_input`, so a system input method
+    can compose into it. AppKit's own NSSecureTextField refuses; we do not.
+    It does refuse to yield its contents to `text_for_range`, to copy and to cut.

@@ -1,0 +1,75 @@
+================================================================================
+rise-widgets/overlay — everything that floats, inside the window
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt              workspace rules, boundaries, commands
+  ../../CONTEXT.txt                    what rise-widgets owns
+  ../../../../docs/PLATFORM_GLASS.md   "Nothing may escape the window bounds"
+  ../../../rise-platform/src/gpui_shim.rs   supports_native_popups()
+
+WHAT THIS DIRECTORY OWNS
+
+  overlay_placement.rs  `place()` — where a floating thing goes. Pure
+                        arithmetic over gpui geometry: no elements, no theme,
+                        no window, no App. It is the only place in the product
+                        that decides an overlay's origin.
+
+  overlay_layer.rs      `OverlayLayer`, the window-filling layer an overlay is
+                        drawn on, and `OverlayStack`, the bounded record of what
+                        is currently open.
+
+THE CONSTRAINT EVERYTHING HERE EXISTS FOR
+
+  gpui has NO native popups except on Wayland. `supports_native_popups()`
+  returns Unsupported unconditionally, and rise-platform has a test pinning that
+  so nobody designs against a popup that only one Linux compositor would give
+  them. Every menu, dropdown and tooltip is therefore a child of this window.
+
+  So there is no window manager to fall back on. If `place()` returns an origin
+  outside the viewport, the overlay is simply cut off — silently, and only on
+  the machine with the smaller screen.
+
+THE INVARIANT THAT DECIDES CORRECTNESS
+
+  `place()` is TOTAL. For every input — an overlay larger than the viewport, a
+  negative anchor, a zero or negative viewport, a margin wider than the window,
+  infinity, NaN — it returns an origin that is non-negative and, whenever the
+  overlay fits at all, fully inside the viewport. It never panics and never
+  unwraps caller geometry. `finite()` exists because `f32::clamp` panics on a
+  NaN bound, and `effective_margin()` exists because a margin wider than the
+  room left over satisfies the near edge by pushing the overlay out through the
+  far one.
+
+  `clamped` on the result means the ideal origin did not survive. A flip to the
+  opposite side is NOT a clamp — it is the preferred alternative — so a caller
+  drawing a tail can trust `side` and knows from `clamped` that it cannot align
+  the tail with the anchor.
+
+  The tokens are the theme's: `shell.overlay_margin` and `shell.overlay_gap`.
+  This file takes them as arguments and never names a number.
+
+OverlayStack IS BOUNDED, AND THAT IS THE POINT
+
+  A screen that opens an overlay and never dismisses it leaks one entry per
+  open. Capped at 8, dropping the oldest, so the failure shows up as a missing
+  overlay rather than as memory nothing reports. Opening an id that is already
+  open raises it instead of pushing a second copy — otherwise Esc would need two
+  presses to close one menu.
+
+WHAT IT MUST NEVER DO
+
+  Invent a second popup mechanism. Layout is gpui's absolute positioning and
+  `deferred()`; there is no third thing.
+
+  Position from a render pass. `place()` is called with a size and a viewport
+  the caller already has; it is not an element and cannot measure one. A menu's
+  ask comes from `ContextMenuState::asked_size`, and clamping is what makes an
+  ask safe.
+
+  Assume the layer knows the window. `OverlayLayer::render` returns an element
+  whose placement is in WINDOW coordinates, so the element it is given to must
+  fill the window. Mounted inside a pane, every overlay is offset by that pane.
+
+  Hold state. `OverlayLayer` renders; `OverlayStack` records. Neither decides
+  what is open — the shell does, from the events the overlay emits.

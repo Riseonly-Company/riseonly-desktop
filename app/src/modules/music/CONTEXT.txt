@@ -1,0 +1,27 @@
+================================================================================
+rise-music
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt      (the module convention — layout, store triad, hard rules)
+  ../../../CONTEXT.txt (workspace rules)
+
+REFERENCE
+  ../../../riseonly-ios/Riseonly/modules/music/
+  31,495 lines of Swift in the reference.
+
+FOLDERS HERE
+  engine, pages, shared, stores, widgets
+
+  This module owns a backend service, so it has engine/: the domain, the actor
+  repositories, the endpoint catalogue and the presentation snapshots.
+
+NOTES
+  31,495 lines in the reference. Audio stack is pure Rust (cpal + symphonia), so
+  it carries no ffmpeg licensing burden. Gapless for AAC is unsupported upstream
+  and must be written by hand.
+
+REMINDERS
+  pages/ holds screens and nothing else.
+  A view calls only <Feature>InteractionsStore.
+  This crate must not depend on another module crate.

@@ -1,0 +1,152 @@
+================================================================================
+assets/fonts/ — Inter, shipped with the binary
+================================================================================
+
+READ FIRST
+  ../CONTEXT.txt      (what assets/ holds and where it is copied at bundle time)
+  ../../CONTEXT.txt   (workspace rules, the three boundaries, commands)
+
+
+WHAT IS HERE
+
+  Inter-Light.ttf      300   412,844 bytes
+  Inter-Regular.ttf    400   411,640 bytes
+  Inter-Medium.ttf     500   417,300 bytes
+  Inter-SemiBold.ttf   600   419,744 bytes
+  Inter-Bold.ttf       700   420,428 bytes
+  Inter-Black.ttf      900   419,968 bytes
+  OFL.txt                      4,380 bytes   SIL Open Font License 1.1
+
+  Six faces, 2,501,924 bytes of font, because the reference draws with six
+  weights: .light, .regular, .medium, .semibold, .bold and .heavy. There is no
+  seventh weight silently falling back to a neighbour — rise_theme::Typography
+  snaps any requested weight to the nearest entry in SHIPPED_WEIGHTS before gpui
+  ever sees it, so an unshipped weight becomes one of these six by policy rather
+  than by whatever the host text stack would have substituted.
+
+  All six are static TrueType (sfnt 0x00010000, glyf outlines, no fvar),
+  unitsPerEm 2048, 2937 glyphs each, name-table version
+  "Version 4.001;git-9221beed3".
+
+
+WHICH RELEASE, AND HOW TO REPRODUCE IT
+
+  rsms/inter release v4.1, published 2024-11-16. One asset:
+
+    https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+    33,707,794 bytes
+    sha256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
+
+  The six faces come from extras/ttf/ inside that zip and are byte-identical
+  to it. OFL.txt is the zip's LICENSE.txt, renamed.
+
+    sha256  164414f0aacbe98a7e64addc43f7b3bfd2e32f7b90e101feeab227f14c371bda  Inter-Light.ttf
+    sha256  40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82  Inter-Regular.ttf
+    sha256  97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872  Inter-Medium.ttf
+    sha256  78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3  Inter-SemiBold.ttf
+    sha256  288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f  Inter-Bold.ttf
+    sha256  6342d3ea6dc088b43867f615e807d898adf100c93edb978b8e52c5eb71a264da  Inter-Black.ttf
+    sha256  262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a  OFL.txt
+
+  A version bump is scheduled work, not an incidental change: every measured
+  layout in the storybook is calibrated against these exact metrics. Re-derive
+  the hashes above and re-shoot the storybook when you move it.
+
+
+WHY WE SHIP A FONT AT ALL
+
+  Three text stacks sit under the three platform arms — CoreText on macOS,
+  cosmic-text on Linux, DirectWrite on Windows — and they resolve a system
+  family name to different files, with different metrics and different
+  hinting. Anything measured against the host font moves between operating
+  systems, so every layout the design system fixes would be fixed on one OS
+  only. On Linux there is no guarantee that "system-ui" or "sans-serif"
+  resolves to anything at all.
+
+  Inter is the neutral UI face closest to the SF Pro that riseonly-ios draws
+  with, and the OFL permits redistribution inside a closed-source application
+  bundle.
+
+
+WHY STATIC WEIGHTS AND NOT THE VARIABLE FONT
+
+  The release also carries InterVariable.ttf, which is one file instead of
+  six. gpui resolves fonts through font-kit, and font-kit's handling of
+  variable named instances and the wght axis is not something this project can
+  verify across CoreText, cosmic-text and DirectWrite at once. Six static
+  faces are unambiguous on all three: one file, one weight, no axis
+  negotiation. Revisit only with a per-platform screenshot that proves the
+  variable path picks the right instance.
+
+
+THE NAME-TABLE TRAP — LOAD BY FILE, NEVER BY FAMILY QUERY
+
+  The legacy name records are not uniform across these six files:
+
+    Inter-Regular.ttf    name 1 "Inter"            name 2 "Regular"
+    Inter-Bold.ttf       name 1 "Inter"            name 2 "Bold"
+    Inter-Light.ttf      name 1 "Inter Light"      name 2 "Regular"   name 16 "Inter"
+    Inter-Medium.ttf     name 1 "Inter Medium"     name 2 "Regular"   name 16 "Inter"
+    Inter-SemiBold.ttf   name 1 "Inter SemiBold"   name 2 "Regular"   name 16 "Inter"
+    Inter-Black.ttf      name 1 "Inter Black"      name 2 "Regular"   name 16 "Inter"
+
+  This is the RIBBI convention: only Regular/Italic/Bold/BoldItalic may share a
+  legacy family, so Light, Medium, SemiBold and Black each get their own legacy
+  family and carry the real family in the typographic name (ID 16). A backend
+  that reads only name ID 1 will therefore not find weight 300, 500, 600 or 900
+  under family "Inter", and will silently substitute Regular. Register these as
+  embedded assets and select the face by file; do not ask the system for family
+  "Inter" at weight 500 and assume you got Medium.
+
+  crates/rise-ui/tests/font_faces.rs reads these exact name records out of the
+  shipped bytes and asserts them, so the day the release stops needing the
+  workaround is the day that test fails rather than the day someone notices.
+
+  WHAT THE TRAP ACTUALLY DOES ON macOS — MEASURED, ONCE, ON ONE PLATFORM
+
+    macOS 26.1 (build 25B78), arm64. The app was built, bundled and launched
+    from build/macos/debug/Riseonly.app. rise_ui::fonts::load_bundled_fonts
+    resolves all six shipped weights against the real text system at startup and
+    compares the FontIds they come back with; two weights sharing one id is a
+    collapse. It reported none: FontLoad::misresolved was empty, so main.rs
+    never logged.
+
+    Confirmed independently against CoreText directly: register the six files
+    with CTFontManagerRegisterFontsForURL, then ask for family "Inter" at
+    kCTFontWeightTrait -0.4, 0.0, 0.23, 0.3, 0.4 and 0.62. Six distinct faces
+    come back — Inter-Light, Inter-Regular, Inter-Medium, Inter-SemiBold,
+    Inter-Bold, Inter-Black — each reporting family "Inter". CoreText reads the
+    typographic record, not the legacy one.
+
+    That result is macOS and nothing else. cosmic-text on Linux and DirectWrite
+    on Windows have not been run, and the name records above are what they would
+    have to get right. The warning stands everywhere the measurement does not.
+
+
+THE LICENCE OBLIGATION
+
+  SIL Open Font License 1.1. Copyright (c) 2016 The Inter Project Authors.
+  Embedding in a proprietary application is explicitly permitted. Two things
+  are binding on us:
+
+    - the copyright notice and the licence text must ship with the software,
+      which is why OFL.txt sits here and is bundled alongside the faces rather
+      than being a build-time-only file;
+    - the font files may not be sold on their own.
+
+  Inter declares no Reserved Font Name, so a subset or a rebuild may keep the
+  name "Inter". Nothing here is modified today.
+
+
+IN THE REPOSITORY, DELIBERATELY
+
+  .gitignore used to carry "/assets/fonts/*", from when this directory was a
+  placeholder, and it hid every file here — so a fresh clone had no typeface and
+  the app fell back to a different family on each OS. The rule is now narrowed to
+  "/assets/fonts/*.zip" and "/assets/fonts/*.woff2": build leftovers stay out,
+  the product's faces do not. `git check-ignore` names nothing here — not the six
+  TTFs, not OFL.txt, not this file.
+
+  Do not re-broaden it. The one thing that would make it tempting is the
+  2.4 MiB; that is the price of the layouts in the storybook meaning the same
+  thing on three operating systems.

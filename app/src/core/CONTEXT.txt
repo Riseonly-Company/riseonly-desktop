@@ -1,0 +1,154 @@
+================================================================================
+app/src/core — the application's own plumbing
+================================================================================
+
+READ FIRST
+  ../../../CONTEXT.txt                    workspace rules, boundaries, commands
+  ../../CONTEXT.txt                       what app/ owns
+  ../../../docs/STORE_ARCHITECTURE.md     the store triad
+  ../../../docs/PERFORMANCE_GUIDE.md      the performance contract
+  ../../../../riseonly-ios/CACHE-OPTIMIZATION-AUDIT.txt  sections 5 and 6 —
+                                          section 6 is the specification
+                                          active_screens.rs implements
+
+WHAT THIS DIRECTORY OWNS
+
+  account_scope.rs     EMPTY, deliberately. It is where the per-account root —
+                       the engine, its database, and every domain built on them —
+                       will live, dropped whole when the account changes. Nothing
+                       opens a per-account database yet: auth keeps its registry
+                       outside the engine by necessity (something has to answer
+                       "which accounts are there" before one is open), and
+                       session and presence hold no durable state. It lands with
+                       the first module that owns account data.
+  active_screens.rs    the visible-resource-lease stack: who is on the glass,
+                       who may revalidate this cycle, what may be evicted
+  session_activity.rs  what the OS tells us about the user's attention, and
+                       what the app is allowed to do with that
+  engine_bridge/       the one seam between the modules and rise-engine. The
+                       ENGINE does not own the socket — the host does, which is
+                       what makes every path in rise-engine testable without a
+                       network. Reconnect backoff, the `Bearer.<jwt>` handshake
+                       and the application-level heartbeat live here, and the
+                       policy half of each is pure so all of it is tested.
+  config/              environment, endpoints, their resolution order
+  assets/, utils/      bundled bytes and small shared helpers
+
+  Plumbing for THIS application. The test is not "is it general" but "could
+  another product link it" — if it could, it is a crate, and rise-core,
+  rise-navigation and rise-platform are where that lands. active_screens and
+  session_activity stay here because both encode product policy about refresh,
+  presence and notifications, not mechanics.
+
+THE TWO INVERSIONS FROM iOS, AND WHY THEY LIVE HERE
+
+  1. THE ACTIVE SCREEN IS A SET.
+
+     SaiNavigationBridge.currentScreen() returns exactly one screen, and the
+     reference builds four subsystems on that scalar: once-per-cycle
+     revalidation, route-driven cache eviction, the route matcher, and push
+     suppression for the chat you are reading. A desktop window shows sidebar,
+     conversation and profile at once, and the user rearranges it constantly.
+
+     So the scalar becomes a stack of leases, and the rule is restated:
+     ONCE PER CYCLE PER KEY, GLOBALLY — never per pane. A cycle begins only at
+     begin_cycle (cold start, foreground, reconnect, event gap, manual refresh)
+     and NEVER at a visibility change, because a resize carries no information
+     about whether data went stale. That is what makes the phase gate hold:
+     collapsing a 2560px window to 400px and back re-lays-out three screens and
+     re-fetches none of them.
+
+     Eligibility is the audit's own rule. With any overlay open only the topmost
+     overlay may refresh — a feed underneath an open comments sheet must not
+     fetch alongside it. With no overlay, the topmost lease of EVERY column is
+     eligible at once, and that simultaneity is the whole desktop difference.
+
+     Focus is derived, never assigned: topmost overlay, else the topmost lease
+     of the rightmost occupied column. A second source of truth for focus would
+     drift from the lease stack the first time a sheet closed during a resize.
+
+     appeared_at is a tick the registry increments itself. No wall clock: a
+     suspended laptop must not be able to reorder the stack, and the tests must
+     stay deterministic without a time source.
+
+  2. SessionActivity IS NOT scenePhase.
+
+     On iOS .background fails every pending request and blocks new ones. Here
+     the socket is kept in every combination of every signal, and no activity
+     change ever fails an in-flight request. SocketPolicy and
+     PendingRequestPolicy have one variant each so that a later "optimisation"
+     has to delete a type rather than flip a bool, and a test enumerates all
+     sixteen combinations to make the deletion loud.
+
+     There are four signals, not one — window focus, minimised, system idle,
+     screen locked — plus the window count, because on macOS closing the last
+     window leaves the app frontmost with its menu bar and nothing to look at.
+     Three different questions read them:
+
+       presence           focused, awake, unlocked, at least one window
+       is_user_present    pixels a human could see: NOT a question about focus,
+                          because an unfocused window on a second monitor is
+                          still on screen and freezing it would be visible.
+                          It gates speculative warmup (PERFORMANCE_GUIDE 10.3)
+                          and decorative animation, which on gpui is battery and
+                          compositor load that never appears in a frame trace
+       suppression        window in front, not minimised, not locked, and the
+                          target on screen
+
+     Suppression deliberately does not ask whether the user is idle: an idle
+     user with the conversation in front already has the message on screen when
+     they come back, which is exactly what the reference means by "no push for
+     the chat you are reading".
+
+  Neither half decides a notification alone. ActiveScreens answers the
+  visibility fact, SessionActivity answers the attention fact, and the CALLER
+  composes them:
+
+      let visible = screens.suppresses_notification(&key);
+      match activity.notification_delivery(visible) { ... }
+
+WHAT THIS DIRECTORY MUST NEVER DO
+
+  Import gpui in active_screens.rs or session_activity.rs. They are pure policy,
+  and if either needs a window, a length or a clock, the decision has been put
+  in the wrong half of the seam. The OS bindings belong in rise-platform.
+
+  Carry a #[cfg(target_os)]. CI greps app/ for it.
+
+  Own transport, a database or a second server cache. The engine bridge is the
+  only path to rise-engine and there is no compatibility layer.
+
+  Grow into a junk drawer. A file here that another product could link is a
+  crate that has not been extracted yet.
+
+THE HONEST LIMITS OF THE BOUNDED REGISTRIES
+
+  Both structures in active_screens.rs are capped, because the audit is explicit
+  that a screen-refresh registry may not keep every search query forever.
+
+  MAX_LEASES = 64, evicted oldest-tick-first. A window is three columns plus
+  overlays, so this is an order of magnitude past any real layout — but a screen
+  whose lease is evicted stops being eligible AND stops suppressing its
+  notifications, silently. If leases are ever seen being evicted, the bug is a
+  screen that never released, not the ceiling.
+
+  MAX_CLAIM_RECORDS = 128, cleared at every begin_cycle, evicted oldest-first on
+  overflow. Evicting a claim record forgets that a key was already refreshed
+  this cycle, so in the pathological case — more than 128 distinct keys claimed
+  inside ONE cycle — that key may be refreshed a second time. One extra request,
+  never a storm, and a test pins the behaviour rather than pretending it away.
+
+  Revisions are held on the lease and die with it. note_revision is a hint that
+  lets a grant skip republishing unchanged data; a lease released by a resize
+  loses it and the store remains the authority. Nothing here is durable state.
+
+  A grant only says "you may ask once this cycle". Freshness intervals, retry,
+  backoff and coalescing with an in-flight request belong to whoever holds the
+  grant; RefreshReason travels on the grant so a Manual refresh can bypass a
+  freshness check at that call site.
+
+  claim_refresh checks eligibility against the OWNER and deduplicates on the
+  KEY, because one screen can own several resources and one resource can be
+  shown by several screens. A screen that is not topmost cannot claim at all,
+  including for a manual refresh — the shell must not route a refresh through
+  this registry on behalf of a screen the user cannot see.
