@@ -1,0 +1,30 @@
+================================================================================
+rise-ui/tabs_ui — the segmented bar
+================================================================================
+
+  tabs_geometry.rs  layout and indicator interpolation. Pure.
+  tabs_ui.rs        the entity.
+
+WHY IT IS AN ENTITY AND NOT A FUNCTION
+
+  The indicator has to know each tab's rectangle, and a tab's width is the width
+  of its SHAPED text. SwiftUI collects that with a `PreferenceKey` — a second
+  layout pass — and gpui has no equivalent. So the widths are measured here,
+  once per (label, size, weight), and cached. Measuring inside `render` without
+  the cache would shape every label on every frame of a drag, which is the
+  text-layout-in-the-hot-path defect section 11 of the performance guide names.
+
+  Every label is measured in the SEMIBOLD face, active or not. The reference
+  switches the active label to semibold, and measuring each label in the face it
+  currently has would make the tabs change width as the selection moves — every
+  neighbour shifting under the finger.
+
+THE BAR OWNS ITS SELECTION AND ANNOUNCES IT
+
+  `set_active` moves it silently, for a screen restoring state; `select` moves it
+  and emits. Conflating the two makes a restore look like a user action, which
+  for a pager means an animation nobody asked for.
+
+  `set_drag_progress` is called on every frame of a drag and does NOTHING when
+  the value has not meaningfully moved. An unconditional notify there would
+  redraw the bar sixty times a second while a finger rests on the glass.

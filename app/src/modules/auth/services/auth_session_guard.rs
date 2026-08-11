@@ -1,25 +1,13 @@
 use super::access_token_user_id::AccessTokenUserId;
 
-/// What the app does when the server says the credential is no longer good.
-///
-/// A pure decision so the whole matrix is testable: the recovery itself belongs
-/// to the repository, which is the only thing that may touch tokens.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AuthRecovery {
-    /// Not an auth failure at all — the caller handles its own error.
     NotAuthRelated,
-    /// Rotate the pair and retry once the new access token is in hand.
     Refresh,
-    /// The refresh token is gone or expired. Nothing local can recover this.
     SignOut,
 }
 
-/// Whether the server's refusal means the credential rather than the request.
-///
-/// Matched on both code and message because the gateway is not consistent: a
-/// rejected JWT arrives as `AUTH_ERROR` from one path and as a plain message
-/// from another, and treating the second as an ordinary failure leaves the user
-/// staring at a screen that silently refuses to load.
+// Gateway is inconsistent: a rejected JWT arrives as `AUTH_ERROR` on one path and as a bare message on another.
 pub fn is_auth_error(code: Option<&str>, message: Option<&str>) -> bool {
     let code = code.unwrap_or_default().to_uppercase();
     if ["AUTH_ERROR", "UNAUTHORIZED", "UNAUTHENTICATED"]
@@ -53,9 +41,6 @@ pub fn recovery_for(
         return AuthRecovery::NotAuthRelated;
     }
 
-    // No leeway on the refresh token, unlike the access token: refreshing early
-    // is cheap and correct, but signing somebody out thirty seconds early is a
-    // lost session for nothing.
     if AccessTokenUserId::is_expired(refresh_token, now_seconds, 0) {
         return AuthRecovery::SignOut;
     }

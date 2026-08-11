@@ -1,12 +1,25 @@
 pub mod tokens;
 
 pub use tokens::auth::AuthMetrics;
+pub use tokens::avatar::{AvatarMetrics, AvatarPalette};
+pub use tokens::badge::BadgeColors;
+pub use tokens::comment::CommentMetrics;
 pub use tokens::density::Density;
+pub use tokens::feed::FeedMetrics;
+pub use tokens::grouped::GroupedMetrics;
+pub use tokens::header::HeaderMetrics;
 pub use tokens::icon::IconMetrics;
+pub use tokens::list::ListMetrics;
 pub use tokens::material::{Material, MaterialBacking, MaterialTokens, PaintedMaterial};
+pub use tokens::modal::ModalMetrics;
 pub use tokens::palette::ThemePalette;
+pub use tokens::panel::PanelMetrics;
+pub use tokens::profile::ProfileMetrics;
+pub use tokens::settings_icon::SettingsIconPalette;
 pub use tokens::shell::ShellMetrics;
 pub use tokens::spacing::SpacingValues;
+pub use tokens::story::StoryMetrics;
+pub use tokens::tabs::TabsMetrics;
 pub use tokens::typography::{FONT_FAMILY, SHIPPED_WEIGHTS, TextStyleToken, Typography};
 
 use gpui::{Hsla, Pixels, Rgba, px, rgb};
@@ -20,9 +33,7 @@ pub enum Appearance {
 
 /// Colours and lengths already resolved for one appearance and one density.
 ///
-/// Built once per theme change, never per frame: parsing hex and multiplying
-/// densities inside a render pass is exactly the work the performance contract
-/// keeps off the frame path.
+/// Built once per theme change, never per frame.
 #[derive(Clone, Debug)]
 pub struct AppTheme {
     pub appearance: Appearance,
@@ -37,10 +48,21 @@ pub struct AppTheme {
     pub radius: RadiusValues,
     pub gradient_primary: (Hsla, Hsla),
     pub auth: AuthMetrics,
+    pub avatar: AvatarMetrics,
+    pub comment: CommentMetrics,
+    pub feed: FeedMetrics,
+    pub grouped: GroupedMetrics,
+    pub header: HeaderMetrics,
     pub icon: IconMetrics,
+    pub list: ListMetrics,
     pub material: MaterialTokens,
+    pub modal: ModalMetrics,
+    pub panel: PanelMetrics,
+    pub profile: ProfileMetrics,
     pub shell: ShellMetrics,
     pub spacing: SpacingValues,
+    pub story: StoryMetrics,
+    pub tabs: TabsMetrics,
     pub typography: Typography,
 }
 
@@ -132,10 +154,21 @@ impl AppTheme {
                 c(&palette.gradient_primary_end),
             ),
             auth: AuthMetrics::new(density),
+            avatar: AvatarMetrics::new(density),
+            comment: CommentMetrics::new(density),
+            feed: FeedMetrics::new(density),
+            grouped: GroupedMetrics::new(density),
+            header: HeaderMetrics::new(density),
             icon: IconMetrics::new(density),
+            list: ListMetrics::new(density),
             material: MaterialTokens::new(palette, appearance, density),
+            modal: ModalMetrics::new(density),
+            panel: PanelMetrics::new(density),
+            profile: ProfileMetrics::new(density),
             shell: ShellMetrics::new(density),
             spacing: SpacingValues::new(density),
+            story: StoryMetrics::new(density),
+            tabs: TabsMetrics::new(density),
             typography: Typography::new(density),
         }
     }
@@ -143,9 +176,8 @@ impl AppTheme {
     /// The painted form of `material`, for the branch where nothing native is
     /// drawing it.
     ///
-    /// A caller reaches this only after `rise-platform` has said the backing is
-    /// [`MaterialBacking::Painted`]. Nothing here knows what the machine can
-    /// host, and nothing here may decide it.
+    /// Only valid once `rise-platform` has reported the backing as
+    /// [`MaterialBacking::Painted`]; this module never decides that itself.
     pub fn painted_material(&self, material: Material) -> PaintedMaterial {
         self.material.get(material)
     }
@@ -236,10 +268,6 @@ pub struct TextColors {
     pub secondary: Hsla,
 }
 
-/// The iOS palette carries the first six. The last three are desktop-only and
-/// have no counterpart in the reference, because a phone has no caret, no IME
-/// underline and no pointer selection: the reference's text fields are UIKit's,
-/// and UIKit draws all three itself.
 #[derive(Clone, Copy, Debug)]
 pub struct InputTheme {
     pub bg_100: Hsla,
@@ -249,16 +277,10 @@ pub struct InputTheme {
     pub height_300: Pixels,
     pub radius_300: Pixels,
     /// Inside the field, left and right.
-    ///
-    /// Its own token rather than "whatever the radius is": the radius became a
-    /// pill and the text would have followed it out to 30pt of dead space on
-    /// each side.
     pub padding_x: Pixels,
     pub caret: Hsla,
     pub caret_width: Pixels,
-    /// The mark an input method draws under uncommitted text. The only
-    /// underline in the kit, which is why it is here rather than in a general
-    /// stroke scale that would have exactly one member.
+    /// The mark an input method draws under uncommitted text.
     pub marked_underline: Pixels,
     pub selection: Hsla,
 }
@@ -310,11 +332,7 @@ pub fn length(value: f32) -> Pixels {
     px(value)
 }
 
-/// The same colour at a different opacity.
-///
-/// Lives here because constructing an `Hsla` is constructing a colour, and a
-/// component that spelled `Hsla { a: 0.0, ..token }` would be one struct literal
-/// away from spelling a whole colour.
+/// The same colour at a different opacity. `alpha` is clamped to `0.0..=1.0`.
 pub fn alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla {
         a: alpha.clamp(0.0, 1.0),

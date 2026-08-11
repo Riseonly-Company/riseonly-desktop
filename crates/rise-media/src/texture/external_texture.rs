@@ -1,25 +1,6 @@
-//! Getting a decoded frame onto the GPU without copying it through the CPU.
-//!
-//! THE PROBLEM THIS SOLVES
-//!
-//! `gpui::surface()` accepts only a `CVPixelBuffer` and exists only on macOS;
-//! on the wgpu backends its paint method is a silent no-op. Zed's own
-//! livekit_client therefore aliases `RemoteVideoFrame = Arc<gpui::RenderImage>`
-//! off macOS and performs a full I420 -> RGBA conversion on the CPU plus a
-//! fresh texture upload for every frame. At 30fps, 1080p, that is 250 MB/s of
-//! memcpy and a new allocation sixty times a second per stream. A vertical
-//! short-video feed cannot ship on it.
-//!
-//! The replacement is one persistent texture per stream, written into, with the
-//! decoder's own GPU memory imported where the platform allows it: an IOSurface
-//! on macOS, a DMA-BUF file descriptor on Linux, a DXGI shared NT handle on
-//! Windows. YUV becomes RGB in a shader (`nv12_to_rgb.wgsl`), never on the CPU.
-//!
-//! WHAT IS VERIFIED
-//!
-//! The policy in this file is a pure function of `HostOs`, so all three arms run
-//! in the suite on a Mac. The final call into the OS import API is behind
-//! `#[cfg(target_os)]` and only the macOS one has been executed.
+//! Getting a decoded frame onto the GPU without copying it through the CPU:
+//! one persistent texture per stream, the decoder's own GPU memory imported
+//! where the platform allows it, and YUV converted in a shader.
 
 use std::sync::Arc;
 
@@ -29,26 +10,20 @@ use rise_platform::HostOs;
 use super::frame::{FrameFormat, FrameGeometry};
 
 /// The WGSL that samples a biplanar or triplanar YUV frame and writes RGB.
-///
-/// Kept as a `&str` constant rather than a file read so a missing asset is a
-/// compile error rather than a black video element at runtime.
 pub const YUV_TO_RGB_SHADER: &str = include_str!("nv12_to_rgb.wgsl");
 
 /// How a decoded frame's memory reaches the GPU.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TextureImport {
-    /// macOS. VideoToolbox already decodes into an IOSurface-backed
-    /// CVPixelBuffer, which is GPU memory. Nothing is copied at all.
+    /// macOS. The IOSurface-backed CVPixelBuffer VideoToolbox decoded into.
     IoSurface,
-    /// Linux. VAAPI exports the decoded surface as a DMA-BUF fd, imported
-    /// through `wgpu_hal::vulkan` with VK_EXT_external_memory_dma_buf.
+    /// Linux. A VAAPI DMA-BUF fd, imported through `wgpu_hal::vulkan` with
+    /// VK_EXT_external_memory_dma_buf.
     DmaBuf,
-    /// Windows. D3D11VA decodes into an ID3D11Texture2D; sharing it as an NT
-    /// handle lets the DX12 device open it without a copy.
+    /// Windows. A D3D11VA texture shared as an NT handle and opened by DX12.
     DxgiSharedHandle,
-    /// Software decode, or hardware import unavailable. The frame is staged
-    /// into a buffer and copied into the SAME persistent texture each time.
-    /// Slower, but still one allocation per stream rather than per frame.
+    /// Software decode, or hardware import unavailable: the frame is staged and
+    /// copied into the same persistent texture each time.
     CpuUpload,
 }
 
@@ -58,9 +33,7 @@ impl TextureImport {
         !matches!(self, Self::CpuUpload)
     }
 
-    /// The import this host uses when the hardware path is unavailable — a
-    /// headless CI runner, a VM with no VAAPI, a machine whose driver refuses
-    /// the external-memory extension.
+    /// The import this host uses when the hardware path is unavailable.
     pub const fn fallback() -> Self {
         Self::CpuUpload
     }
@@ -72,15 +45,12 @@ pub enum Presentation {
     /// `gpui::surface()`. macOS only, and it takes the CVPixelBuffer directly.
     GpuiSurface,
     /// We own a `wgpu::Texture` and sample it in our own pass. The only option
-    /// on the wgpu backends, because `surface()` does not exist there.
+    /// on the wgpu backends, where `surface()` does not exist.
     OwnedTexture,
 }
 
-/// Named so it can be asserted against, never returned.
-///
-/// This is the path Zed's livekit code takes off macOS. It is written down as a
-/// type purely so `plans_never_use_a_per_frame_render_image` has something
-/// concrete to fail on if someone later "simplifies" the import away.
+/// The rejected per-frame-image path, named so it can be asserted against and
+/// never returned.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RejectedPerFrameRenderImage;
 
@@ -109,12 +79,8 @@ impl ImportPlan {
         }
     }
 
-    /// The plan when hardware decode or hardware import is unavailable.
-    ///
-    /// Note that the presentation does NOT change: on macOS a CPU-decoded frame
-    /// is still written into a CVPixelBuffer and shown through `surface()`,
-    /// because switching presentation paths mid-stream would mean two code
-    /// paths for the same element.
+    /// The plan when hardware decode or hardware import is unavailable. The
+    /// presentation does NOT change, so no stream switches paths mid-flight.
     pub const fn software(host: HostOs, format: FrameFormat) -> Self {
         Self {
             import: TextureImport::fallback(),
@@ -126,27 +92,19 @@ impl ImportPlan {
     const fn presentation_for(host: HostOs) -> Presentation {
         match host {
             HostOs::MacOs => Presentation::GpuiSurface,
-            // `gpui::surface()` is `#[cfg(target_os = "macos")]` and
-            // `SurfaceSource` has exactly one variant. There is nothing to fall
-            // back to here; the texture must be ours.
+            // `gpui::surface()` is macOS-only: off it, the texture must be ours.
             HostOs::Linux | HostOs::Windows => Presentation::OwnedTexture,
         }
     }
 
-    /// Every plan allocates once per stream. Nothing in this module may ever
-    /// produce a per-frame image.
+    /// Always false: every plan allocates once per stream, never per frame.
     pub const fn allocates_per_frame(&self) -> bool {
         false
     }
 }
 
-/// A hard ceiling on GPU-visible frame memory, in bytes.
-///
-/// A community report documents gpui's memory for six static images falling
-/// from 300 MB to 12 MB once CPU-side bytes stopped being retained after upload.
-/// Video multiplies that by frame rate and stream count, so the budget is
-/// enforced rather than estimated: a stream that would cross the ceiling is
-/// refused, and the scheduler tears down an offscreen one instead.
+/// A hard ceiling on GPU-visible frame memory, in bytes. A stream that would
+/// cross it is refused rather than admitted.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TextureBudget {
     ceiling_bytes: u64,
@@ -162,9 +120,7 @@ pub enum BudgetError {
 }
 
 impl TextureBudget {
-    /// 384 MiB. Three simultaneous 1080p streams at three buffered frames each
-    /// is roughly 28 MiB, so the ceiling leaves room for stickers and images
-    /// while staying far below the point where a laptop starts swapping.
+    /// 384 MiB. Three simultaneous 1080p streams cost roughly 28 MiB of it.
     pub const DEFAULT_CEILING: u64 = 384 * 1024 * 1024;
 
     pub const fn new(ceiling_bytes: u64) -> Self {
@@ -187,11 +143,8 @@ struct BudgetLedger {
     in_use: u64,
 }
 
-/// Tracks what the live stream textures actually cost.
-///
-/// Shared by clone; the scheduler and every stream texture hold the same
-/// ledger, which is what makes the ceiling a property of the process rather
-/// than of one list.
+/// Tracks what the live stream textures actually cost. Clones share one ledger,
+/// so the ceiling is a property of the process.
 #[derive(Clone, Debug)]
 pub struct BudgetTracker {
     budget: TextureBudget,
@@ -242,18 +195,12 @@ impl Default for BudgetTracker {
     }
 }
 
-/// How many decoded frames a stream keeps alive at once.
-///
-/// One being presented, one being written by the decoder, one in reserve for
-/// the next vsync. A fourth buys nothing and costs a full frame of memory per
-/// stream.
+/// How many decoded frames a stream keeps alive at once: one presented, one
+/// being written by the decoder, one in reserve for the next vsync.
 pub const FRAMES_IN_FLIGHT: u64 = 3;
 
 /// One persistent GPU texture, owned by one video stream for its lifetime.
-///
-/// The invariant this type exists to hold: frames are WRITTEN INTO it. It is
-/// allocated when the stream opens and freed when the stream closes, and
-/// nothing between those two points allocates GPU memory.
+/// Frames are written into it; nothing between open and close allocates.
 #[derive(Debug)]
 pub struct StreamTexture {
     geometry: FrameGeometry,
@@ -297,11 +244,9 @@ impl StreamTexture {
         self.frames_written
     }
 
-    /// Accept the next decoded frame.
-    ///
-    /// Returns whether the texture had to be reallocated, which happens only on
-    /// a resolution change. The caller cares because a reallocation is the one
-    /// moment a stream can fail on budget after it has already started.
+    /// Accept the next decoded frame, reporting whether the texture had to be
+    /// reallocated — a resolution change, and the only point after open at
+    /// which a running stream can fail on budget.
     pub fn write(&mut self, geometry: &FrameGeometry) -> Result<Reallocated, BudgetError> {
         if geometry.can_reuse_texture_of(&self.geometry) {
             self.frames_written += 1;
@@ -310,12 +255,9 @@ impl StreamTexture {
 
         let next_bytes = geometry.byte_len() * FRAMES_IN_FLIGHT;
 
-        // Released first: an adaptive-bitrate step DOWN must not fail on a
-        // ceiling that the old, larger allocation was itself responsible for.
+        // Release before reserve, or a step DOWN in resolution fails on the ceiling it frees.
         self.tracker.release(self.reserved_bytes);
         if let Err(error) = self.tracker.reserve(next_bytes) {
-            // Put the old reservation back so the ledger still describes the
-            // texture this stream is in fact still holding.
             let _ = self.tracker.reserve(self.reserved_bytes);
             return Err(error);
         }
@@ -341,10 +283,7 @@ pub enum Reallocated {
 }
 
 /// Whether this build can import decoder memory without a copy on the host it
-/// is running on.
-///
-/// The macOS answer is verified. The other two report what the code intends,
-/// and `docs/PLATFORM_MATRIX.md` records that neither has been executed.
+/// is running on. Only the macOS arm has been executed.
 pub fn zero_copy_import_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -352,11 +291,7 @@ pub fn zero_copy_import_available() -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        // Both remaining arms depend on a runtime driver capability
-        // (VK_EXT_external_memory_dma_buf, or D3D11 shared-NT-handle support),
-        // so this cannot be answered at compile time. Until the arm is
-        // actually exercised, claiming availability would be a lie in the one
-        // direction that hides a per-frame copy.
+        // Depends on a runtime driver capability, and neither arm is exercised yet.
         false
     }
 }

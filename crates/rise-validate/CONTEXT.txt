@@ -1,0 +1,74 @@
+================================================================================
+rise-validate — every rule about what a user may type, in one crate
+================================================================================
+
+READ FIRST
+  ../../CONTEXT.txt                    workspace rules, boundaries, commands
+  src/lib.rs                           the shape, with a worked example
+  ../../../backend/api/docs/VALIDATES_SUMMARY.md
+                                       why client validation here is load-bearing
+
+THE RULE
+
+  EVERY validation in the product goes through a schema in this crate.
+
+  A bare `if value.len() < 3` in a store, a screen or a repository is a bug even
+  when it is correct today, because it is a second copy of a server bound that
+  will move. Adding a rule means adding a `Check` to a schema, never an `if` at
+  a call site. Reviewing a change that validates something means asking which
+  schema it belongs to.
+
+WHY THAT RULE, AND NOT JUST "BE CAREFUL"
+
+  VALIDATES_SUMMARY.md records 712 fields with NO validation on any server
+  layer. Auth is among them: api-gateway reads a missing `name` as `""` and
+  never checks a tag at all — the real tag rules live three hops away in
+  tag-service and its refusal comes back as "Failed to reserve tag". So this is
+  not defence in depth. For a large part of the product it is the only defence,
+  and the only thing between a typo and an error the user cannot act on.
+
+  The failure this crate prevents is specific and had already happened here: the
+  screen, the store and the repository each grew their own idea of a valid tag,
+  and the desktop enforced a 6-character password minimum while the string it
+  showed on failure promised 8.
+
+THE THREE PROPERTIES THAT MAKE IT WORK
+
+  `check` RETURNS THE NORMALISED VALUE. `TAG.check(input)?` hands back the
+  trimmed, lowercased tag that goes on the wire. There is no second `normalize`
+  call to forget, so the value that was judged and the value that is sent cannot
+  differ. That is not a convenience: sending an untrimmed verification code
+  after validating a trimmed copy is a real bug this shape makes unwriteable.
+
+  VIOLATIONS ARE DATA. A `Violation` carries the rule, the numbers, the
+  offending character and an i18n KEY — never a sentence. Nothing here can put
+  English on a screen, and a caller can ask `offending_is_non_ascii()` to choose
+  between "только латиница" and "этот символ нельзя".
+
+  SCHEMAS ARE `const`. No allocation, no `LazyLock`, and the rules sit in the
+  same file as the field they describe.
+
+WHAT IT MUST NEVER DEPEND ON
+
+  Nothing. The `[dependencies]` table is empty and stays empty. This crate is
+  read by the engine, by stores and by headless tests, so a UI toolkit, a
+  runtime or an OS crate here would make the product's own rules unavailable to
+  half of the product. No regex engine either — the alphabets are simple, and a
+  named `Charset` predicate is what a violation needs so the UI can say what was
+  EXPECTED rather than echo a pattern at somebody.
+
+BE STRICTER THAN THE SERVER ONLY DELIBERATELY
+
+  Each bound mirrors a server bound unless a comment says otherwise and says
+  why. There is exactly one deliberate exception today — the registration
+  password minimum is the product's 8 rather than auth-service's 6, because the
+  string the refusal renders already promises 8 in all 41 locales. Being
+  stricter on a NEW password is safe; being stricter on SIGN-IN is not, which is
+  why `LOGIN_PASSWORD` is a separate schema. That asymmetry is the pattern to
+  copy, not an accident to tidy up.
+
+ORDER THE CHECKS
+
+  `check` returns the FIRST broken rule, because a field shows one message. Put
+  the most useful rule first: telling somebody their two-character tag is too
+  short beats telling them it may not end in an underscore.

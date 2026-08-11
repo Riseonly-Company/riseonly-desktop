@@ -23,11 +23,9 @@ pub enum Instance {
 
 /// Decides whether this process is the app or a messenger for the running one.
 ///
-/// A desktop app is launched twice constantly — from the dock, from a link,
-/// from a file association. The second launch must not open a second database;
-/// it must pass what it was asked to do to the process that already holds the
-/// lock and exit. The lock is advisory so the OS reclaims it if the primary
-/// crashes, instead of stranding the user behind a stale lock file.
+/// A second launch writes `arguments` to the primary's inbox and answers `HandedOff`.
+/// The lock is advisory, so the OS reclaims it if the primary crashes. `Err` means the
+/// lock syscall failed, never contention — the caller decides whether to start unguarded.
 pub fn acquire(runtime_dir: &Path, arguments: &[String]) -> Result<Instance, SingleInstanceError> {
     std::fs::create_dir_all(runtime_dir)?;
 
@@ -56,11 +54,8 @@ pub fn acquire(runtime_dir: &Path, arguments: &[String]) -> Result<Instance, Sin
             hand_off(&inbox_path, arguments)?;
             Ok(Instance::HandedOff)
         }
-        // A failed syscall is NOT contention, and folding the two together is
-        // how a network home directory locks the user out: flock returns
-        // ENOLCK on NFS and SMB, every launch would report HandedOff, and the
-        // app would exit without a window forever. The caller is told the lock
-        // is unavailable and decides — which is to start anyway, unguarded.
+        // Never folded into contention: flock returns ENOLCK on NFS and SMB, so every
+        // launch on a network home would report HandedOff and exit without a window.
         Err(error) => Err(SingleInstanceError::Io(error)),
     }
 }
@@ -68,8 +63,7 @@ pub fn acquire(runtime_dir: &Path, arguments: &[String]) -> Result<Instance, Sin
 fn hand_off(inbox: &Path, arguments: &[String]) -> Result<(), SingleInstanceError> {
     let mut file = File::options().create(true).append(true).open(inbox)?;
 
-    // One line per launch, so two near-simultaneous launches cannot interleave
-    // into a single unreadable record.
+    // One line per launch: two near-simultaneous launches must not interleave into one record.
     let line = arguments
         .iter()
         .map(|argument| argument.replace('\n', " "))
@@ -87,8 +81,7 @@ pub struct PrimaryInstance {
 }
 
 impl PrimaryInstance {
-    /// Drains everything handed over since the last call. Non-blocking, so the
-    /// caller polls it from its own loop rather than this crate owning a thread.
+    /// Drains everything handed over since the last call. Non-blocking: the caller polls it.
     pub fn take_pending(&self) -> Vec<Vec<String>> {
         if self.stopped.load(Ordering::Acquire) || !self.inbox.exists() {
             return Vec::new();
@@ -134,10 +127,7 @@ mod tests {
 
     #[test]
     fn a_lock_syscall_that_fails_is_an_error_not_a_handover() {
-        // A directory path where the lock file cannot be created at all stands
-        // in for the network filesystem case: what matters is that `acquire`
-        // does not answer HandedOff, because the caller reads that as "another
-        // instance owns the app" and exits without a window.
+        // An uncreatable lock file stands in for the network-filesystem ENOLCK case.
         let dir = runtime_dir("syscall").join("lock.file");
         std::fs::write(&dir, b"not a directory").unwrap();
 

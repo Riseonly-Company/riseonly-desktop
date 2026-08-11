@@ -5417,6 +5417,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "parking_lot",
+ "raw-window-handle",
  "rise-core",
  "serde",
  "serde_json",
@@ -5444,15 +5445,21 @@ name = "rise-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "gpui",
  "rise-core",
  "rise-i18n",
+ "rise-platform",
  "rise-theme",
  "serde",
  "serde_json",
  "smallvec",
  "tracing",
 ]
+
+[[package]]
+name = "rise-validate"
+version = "0.1.0"
 
 [[package]]
 name = "rise-widgets"
@@ -5491,6 +5498,7 @@ dependencies = [
  "rise-platform",
  "rise-theme",
  "rise-ui",
+ "rise-validate",
  "rise-widgets",
  "serde",
  "serde_json",

@@ -4,10 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use rise_core::RequestId;
 
-/// Whether a request may be sent again after an inconclusive failure.
+/// The message a gateway error field actually carries, or `None` when it carries
+/// nothing.
 ///
-/// This is a backend guarantee, never a client guess: replaying a mutation the
-/// server did not promise is idempotent duplicates user data.
+/// A proto `string` has no absent form, so `error` is present on SUCCESSFUL
+/// replies too, holding `""`. Test for a message, never for the field.
+pub fn remote_message(field: Option<&str>) -> Option<&str> {
+    field.map(str::trim).filter(|message| !message.is_empty())
+}
+
+/// Whether a request may be sent again after an inconclusive failure. Set it from
+/// the backend's guarantee, never from a client guess.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ReplayPolicy {
     Never,
@@ -140,6 +147,22 @@ pub struct RemoteError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unset_proto_string_is_not_a_message() {
+        assert_eq!(remote_message(Some("")), None);
+        assert_eq!(remote_message(Some("   ")), None);
+        assert_eq!(remote_message(Some("\n\t")), None);
+        assert_eq!(remote_message(None), None);
+    }
+
+    #[test]
+    fn a_real_message_survives_trimmed() {
+        assert_eq!(
+            remote_message(Some("  Tag already exists  ")),
+            Some("Tag already exists")
+        );
+    }
 
     #[test]
     fn only_never_forbids_replay() {

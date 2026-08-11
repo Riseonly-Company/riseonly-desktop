@@ -1,34 +1,21 @@
 //! Which videos in a scrolling feed are decoding, and which are not.
 //!
-//! A vertical short-video feed will happily ask for a hundred players. Hardware
-//! decoders are a fixed, small resource — VideoToolbox will refuse a session
-//! past its limit, and every live session holds frame buffers whether or not
-//! anyone is looking at it. So the feed does not get to decide; this does.
-//!
-//! The policy is pure and takes the viewport as input, which is what lets it be
-//! tested without a GPU, a decoder or a window.
+//! Hardware decode sessions are a small fixed resource, so the ceiling is
+//! enforced here rather than by the feed. The policy is pure: viewport in,
+//! transitions out.
 
 use std::collections::HashMap;
 
 use super::super::texture::external_texture::{BudgetError, BudgetTracker};
 
-/// A stream's identity in the feed. A stable server id, never an index: an
-/// index changes when a page is prepended and the scheduler would tear down and
-/// re-open every live decoder.
+/// A stream's identity in the feed. Must be a stable server id, never an index:
+/// a prepended page would otherwise re-open every live decoder.
 pub type StreamId = u64;
 
 /// How many hardware decode sessions may exist at once.
-///
-/// VideoToolbox tolerates more than this, but each session costs frame buffers
-/// and the ceiling exists to keep three visible videos smooth rather than
-/// twelve invisible ones alive.
 pub const MAX_LIVE_DECODERS: usize = 5;
 
 /// How many streams ahead of the viewport are opened before they are needed.
-///
-/// One is enough for a swipe; two covers a fast flick without the decoder
-/// start-up latency showing. Three would exceed the decoder cap the moment two
-/// are visible.
 pub const PRELOAD_AHEAD: usize = 2;
 
 /// How many already-passed streams stay open for a backwards swipe.
@@ -38,8 +25,7 @@ pub const PRELOAD_BEHIND: usize = 1;
 pub enum StreamState {
     /// Decoding and presenting.
     Playing,
-    /// Decoder open, frames being produced, not visible. The next swipe shows
-    /// it instantly.
+    /// Decoder open and producing frames, but not visible.
     Warm,
     /// No decoder, no GPU memory. A poster frame is all the UI has.
     Closed,
@@ -77,8 +63,7 @@ impl Viewport {
         let mut desired: Vec<(StreamId, StreamState)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
-        // Visible first and unconditionally: a visible video losing its decoder
-        // to a preload is the one failure a user always notices.
+        // Visible first and unconditionally: a preload must never take a decoder from a visible video.
         for id in &self.visible {
             if seen.insert(*id) {
                 desired.push((*id, StreamState::Playing));
@@ -170,10 +155,8 @@ impl FeedScheduler {
 
     /// Reconcile the pool against a viewport, returning what must happen.
     ///
-    /// Closes are emitted before opens. A decoder session and its frame buffers
-    /// are only released when the old one is torn down, so opening first would
-    /// momentarily need both and fail on exactly the transition — a fast scroll
-    /// — where failing is most visible.
+    /// Closes are emitted before opens and must be applied in that order: a
+    /// session's frame buffers are only released on teardown.
     pub fn reconcile(&mut self, viewport: &Viewport) -> Plan {
         let desired = viewport.desired();
         let wanted: HashMap<StreamId, StreamState> = desired.iter().copied().collect();
@@ -190,9 +173,7 @@ impl FeedScheduler {
             }
         }
 
-        // Evict the streams furthest from the viewport until the desired set
-        // fits, rather than refusing the newcomers. A visible video must never
-        // lose to a warm one that happens to have been opened first.
+        // Evict the streams furthest from the viewport rather than refusing newcomers, so a visible video never loses to a warm one.
         let deficit = desired.len().saturating_sub(self.max_live);
         if deficit > 0 {
             for id in self.eviction_candidates(&wanted).into_iter().take(deficit) {
@@ -233,7 +214,6 @@ impl FeedScheduler {
         plan
     }
 
-    /// Warm streams first, and among them the ones the viewport wants least.
     /// A playing stream is never a candidate.
     fn eviction_candidates(&self, wanted: &HashMap<StreamId, StreamState>) -> Vec<StreamId> {
         let mut candidates: Vec<StreamId> = self
@@ -253,8 +233,7 @@ impl FeedScheduler {
         self.order.retain(|other| *other != id);
     }
 
-    /// Tear everything down. Called when the feed leaves the screen entirely,
-    /// on account switch, and on window close.
+    /// Tear every decoder down.
     pub fn close_all(&mut self) -> Plan {
         let mut plan = Plan::default();
 
@@ -447,8 +426,6 @@ mod tests {
         let mut scheduler = scheduler();
         scheduler.reconcile(&Viewport::new(vec![100], vec![101, 102], vec![]));
 
-        // Ten older items arrive above; the ids are stable, so the viewport
-        // around the user is unchanged.
         let plan = scheduler.reconcile(&Viewport::new(vec![100], vec![101, 102], vec![99, 98]));
 
         assert!(

@@ -1,15 +1,7 @@
 //! Sample rates, channel counts and the arithmetic between frames and time.
-//!
-//! Small and dull on purpose. Every position bar, every seek, every gapless
-//! join and every buffer size is this arithmetic, and a rounding error here is
-//! a track that ends a few milliseconds early or a scrubber that drifts over
-//! an hour-long DJ set.
-//!
-//! Pure: no device, no decoder, no OS.
 
 /// One decoded frame is one sample per channel. Positions are counted in
-/// frames, never in samples — the difference is a factor of two that silently
-/// halves or doubles every duration on stereo.
+/// frames, never in samples.
 pub type Frames = u64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -35,10 +27,8 @@ pub enum FormatError {
     UnsupportedChannelCount { channels: u16 },
 }
 
-/// The narrowest and widest a file is allowed to claim.
-///
-/// A container is attacker-supplied. Without a bound, a header claiming
-/// 4 000 000 000 Hz sizes every buffer in the pipeline off that number.
+/// The narrowest and widest a file is allowed to claim. A container is
+/// attacker-supplied and its header sizes every buffer in the pipeline.
 pub const MINIMUM_SAMPLE_RATE: u32 = 4_000;
 pub const MAXIMUM_SAMPLE_RATE: u32 = 384_000;
 pub const MAXIMUM_CHANNELS: u16 = 8;

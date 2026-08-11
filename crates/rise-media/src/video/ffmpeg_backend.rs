@@ -1,14 +1,7 @@
 //! The libavcodec binding, through rsmpeg.
 //!
-//! rsmpeg rather than ffmpeg-next because it exposes `AVHWDeviceContext` and
-//! `AVCodecContext::hw_device_ctx`. Without those there is no way to ask
-//! libavcodec for a frame that stays in GPU memory, and every frame comes back
-//! on the CPU — which is the entire failure this crate exists to avoid.
-//!
 //! Compiled only with the `ffmpeg` feature. The FFmpeg it links against must be
-//! the LGPL prefix from `scripts/build-ffmpeg-lgpl.sh`; `build.rs` points
-//! rsmpeg at it and `scripts/check-ffmpeg-license.py` re-derives the licence
-//! from the artefact rather than trusting either.
+//! the LGPL prefix from `scripts/build-ffmpeg-lgpl.sh`.
 
 use std::ffi::{CStr, CString};
 
@@ -27,9 +20,7 @@ pub fn open(
 ) -> Result<Box<dyn VideoDecoder>, DecoderError> {
     match FfmpegDecoder::open(plan.clone(), request) {
         Ok(decoder) => Ok(Box::new(decoder)),
-        // A hardware device that will not open is the common case on a VM, an
-        // old driver or a CI runner. Degrading is correct; failing the whole
-        // stream because the GPU declined is not.
+        // A hardware device that will not open is routine on a VM or an old driver; degrade rather than fail the stream.
         Err(DecoderError::HardwareUnavailable { .. }) if plan.is_hardware() => {
             let software = plan.degraded_to_software(request)?;
             Ok(Box::new(FfmpegDecoder::open(software, request)?))
@@ -41,8 +32,8 @@ pub fn open(
 struct FfmpegDecoder {
     plan: DecoderPlan,
     context: AVCodecContext,
-    /// Held for the lifetime of the session. Dropping it invalidates every
-    /// frame libavcodec has handed out, including ones still being presented.
+    /// Dropping it invalidates every frame libavcodec has handed out, including
+    /// ones still being presented.
     _hw_device: Option<AVHWDeviceContext>,
     frame_index: usize,
 }
@@ -63,13 +54,7 @@ impl FfmpegDecoder {
             None => None,
             Some(device_name) => {
                 let mut device = open_hw_device(plan.accel, device_name)?;
-                // rsmpeg exposes set_hw_frames_ctx but not set_hw_device_ctx,
-                // and a decoder needs the device: the frames context is
-                // allocated by libavcodec from it, after the first packet has
-                // told it the real dimensions. So this is set directly.
-                //
-                // av_buffer_ref because avcodec_free_context unrefs this field,
-                // and `device` is still owned by the session.
+                // rsmpeg has no set_hw_device_ctx, so set it directly; av_buffer_ref because avcodec_free_context unrefs this field while `device` stays owned here.
                 unsafe {
                     (*context.as_mut_ptr()).hw_device_ctx = ffi::av_buffer_ref(device.as_mut_ptr());
                 }
@@ -126,11 +111,7 @@ impl VideoDecoder for FfmpegDecoder {
 
         let mut av_packet = rsmpeg::avcodec::AVPacket::new();
 
-        // av_new_packet rather than pointing AVPacket at a Rust buffer: it
-        // allocates AV_INPUT_BUFFER_PADDING_SIZE beyond the payload, and
-        // libavcodec's bitstream readers rely on that padding existing. Without
-        // it a truncated packet reads past the allocation, with a length the
-        // sender controls.
+        // av_new_packet, not a Rust buffer: libavcodec's bitstream readers read past the payload into the AV_INPUT_BUFFER_PADDING_SIZE it allocates.
         unsafe {
             if ffi::av_new_packet(av_packet.as_mut_ptr(), packet.len() as i32) < 0 {
                 return Err(DecoderError::Backend("av_new_packet failed".into()));
@@ -197,11 +178,7 @@ impl FfmpegDecoder {
             return FrameHandle::HostBuffer(self.frame_index);
         }
 
-        // On a hardware frame, data[3] carries the platform surface: a
-        // CVPixelBufferRef under VideoToolbox, an ID3D11Texture2D under
-        // D3D11VA, a VASurfaceID under VAAPI. data[0..2] are null, which is why
-        // reading a hw frame as if it were planar yields a null-pointer deref
-        // rather than a wrong picture.
+        // On a hardware frame data[3] carries the platform surface (CVPixelBufferRef / ID3D11Texture2D / VASurfaceID) and data[0..2] are null.
         let surface = frame.data[3] as usize;
 
         match self.plan.accel {
@@ -213,8 +190,7 @@ impl FfmpegDecoder {
     }
 }
 
-/// The FFmpeg build this binary is linked against, for the About box and for
-/// the licence check to read back.
+/// The FFmpeg build this binary is linked against.
 pub fn linked_configuration() -> String {
     unsafe { CStr::from_ptr(ffi::avcodec_configuration()) }
         .to_string_lossy()

@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Matches `MacOsVersion::VIBRANCY` and `LSMinimumSystemVersion` in the bundle.
-/// The Swift is compiled against the product's floor, not the build machine's
-/// SDK, so `#available(macOS 26.0, *)` inside it stays a real runtime check
-/// instead of being folded away.
+// Must match `MacOsVersion::VIBRANCY` and `LSMinimumSystemVersion`: compiling the Swift
+// against the product floor keeps `#available(macOS 26.0, *)` a real runtime check.
 const DEPLOYMENT_TARGET: &str = "13.0";
 
 const MODULE: &str = "riseglass";
@@ -12,8 +10,7 @@ const MODULE: &str = "riseglass";
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Not cfg!(target_os): a build script runs on the host, and the thing being
-    // decided is what the *target* needs.
+    // Not cfg!(target_os): a build script runs on the host, and this decides for the target.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
@@ -24,12 +21,8 @@ fn main() {
     compile_rise_glass(&source, &swift());
 }
 
-/// Where the Swift compiler is, and which SDK it must be told about.
-///
-/// `/usr/bin/swiftc` is a shim that asks `xcrun` for both; the compiler inside
-/// the toolchain is not, and invoking it with an explicit `-target` and no
-/// `-sdk` fails with "unable to load standard library". Resolving the pair
-/// together is what keeps that from depending on which one happens to be found.
+// Resolved as a pair: the in-toolchain swiftc (unlike the /usr/bin shim) fails with
+// "unable to load standard library" when given an explicit `-target` and no `-sdk`.
 struct Swift {
     compiler: PathBuf,
     sdk: Option<PathBuf>,
@@ -41,10 +34,7 @@ fn compile_rise_glass(source: &Path, swift: &Swift) {
 
     let mut command = Command::new(&swift.compiler);
     command
-        // Pinned rather than left at the toolchain default, so that a newer
-        // Swift shipping a new default language mode cannot change what this
-        // file means. Moving it is deliberate work, not a side effect of
-        // installing Xcode.
+        // Pinned so a newer Xcode's default language mode cannot change what this file means.
         .args(["-swift-version", "5"])
         .arg("-parse-as-library")
         .args(["-module-name", MODULE])
@@ -76,14 +66,10 @@ fn compile_rise_glass(source: &Path, swift: &Swift) {
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static={MODULE}");
 
-    // The Swift objects carry LC_LINKER_OPTION autolink directives for every
-    // stdlib and framework they touch, so nothing here has to enumerate them.
-    // What the linker still needs is somewhere to find them: the ABI-stable
-    // runtime that ships with macOS itself.
+    // LC_LINKER_OPTION autolink directives name the libraries; this is where they live.
     println!("cargo:rustc-link-search=native=/usr/lib/swift");
 
-    // The compatibility shims a newer compiler links against an older runtime
-    // are static archives in the toolchain rather than in /usr/lib/swift.
+    // Back-deployment shims are static archives in the toolchain, not in /usr/lib/swift.
     if let Some(toolchain) = toolchain_library_path() {
         println!("cargo:rustc-link-search=native={}", toolchain.display());
     }
@@ -106,10 +92,8 @@ fn optimisation() -> &'static str {
     }
 }
 
-/// Loud on purpose. A macOS build with no Swift compiler cannot produce a
-/// working app — the glass regions would be missing with no diagnostic anywhere
-/// — so this is a hard failure carrying the command that fixes it, never a
-/// silent skip that ships a blank rail.
+// Panics rather than skipping: a silent skip ships an app whose glass regions are
+// simply missing, with no diagnostic anywhere.
 fn swift() -> Swift {
     if let Some(compiler) = xcrun_path(&["--find", "swiftc"]) {
         return Swift {

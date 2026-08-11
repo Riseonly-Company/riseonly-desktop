@@ -3,13 +3,8 @@ use rusqlite::{Connection, params};
 use super::rise_store_cipher::{ValueCipher, cipher_context};
 use super::rise_store_models::{LocalId, Namespace, PositionKey, ViewId};
 
-/// One atomic unit of change.
-///
-/// The canon requires an entity and every projection that derives from it to
-/// move together: a realtime event must never leave the entity updated while its
-/// timeline, preview and unread counters still describe the previous state. That
-/// is why mutations are collected here and applied inside a single transaction
-/// rather than issued one at a time.
+/// One atomic unit of change: an entity and every projection derived from it must
+/// be collected here so they land in a single transaction, never one at a time.
 #[derive(Default)]
 pub struct WriteBatch {
     operations: Vec<Operation>,
@@ -166,9 +161,8 @@ impl WriteBatch {
         self
     }
 
-    /// Applies every operation inside one transaction. A failure anywhere rolls
-    /// the whole batch back, so a partially reduced realtime event can never
-    /// reach a reader.
+    /// Applies every operation inside one transaction; a failure anywhere rolls
+    /// the whole batch back.
     pub fn commit(
         self,
         connection: &mut Connection,

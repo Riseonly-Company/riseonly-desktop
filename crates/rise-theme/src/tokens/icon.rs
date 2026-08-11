@@ -2,11 +2,8 @@ use gpui::Pixels;
 
 use crate::tokens::density::Density;
 
-/// The sizes an icon is allowed to be.
-///
-/// SF Symbols scale with the text they sit beside; Lucide is a fixed 24-unit
-/// grid, so the size has to be chosen rather than inherited. Three steps, keyed
-/// to the type they accompany: caption, body and title.
+/// The sizes an icon is allowed to be: three steps, keyed to the type they
+/// accompany — caption, body and title.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct IconMetrics {
     pub small: Pixels,

@@ -1,0 +1,67 @@
+================================================================================
+modules/user/engine — user-service
+================================================================================
+
+  core/rise_user_rpc.rs       descriptors and wire DTOs. The ONLY place a
+                              service or method string is written.
+  rise_user_engine_models.rs  ProfileModel and ProfileKey — the presentation
+                              model, narrower than the wire row on purpose.
+  rise_user_presentation.rs   the immutable snapshot the services store reads.
+  rise_user_repository.rs     the actor.
+  rise_user_domain.rs         the composition root.
+
+REPLAY POLICY, PER METHOD, NONE OF IT GUESSED
+
+  reads                 ReadOnly
+  send_friend_request   Never — the response IS the row this call created, so a
+                        retry answers about the first attempt rather than the
+                        second.
+  unfollow_user         Never
+  delete_friend         Never
+
+  There is no idempotency key on any of them: the proto states no no-op outcome
+  the way post's toggles do, and inventing one would be a client guess.
+
+THE PAYLOAD IS NESTED, UNLIKE THE FEED'S
+
+  `json!(response)` on the whole gateway message, so `data` is
+  `{success, error, profile: {...}}` and `profile` keeps its own key. Fields are
+  snake_case, because nothing in the gateway renames them; the camelCase aliases
+  on every DTO are belt and braces for the methods that hand-build their JSON.
+
+  Every field is optional. The gateway drops proto3 defaults, so a profile with
+  no followers has no `subscribers_count` key at all, and a required field would
+  fail the whole read. Counters fall back to their copy inside `more`, which is
+  where the older shape put them.
+
+  `logo` and `banner` live inside `more`, not on the row. A profile with no
+  avatar sends an EMPTY STRING rather than omitting the field, so
+  `avatar_url: Option` is built by rejecting empties — an empty URL handed to
+  the image element is a request for nothing that still occupies a cache slot.
+
+GENERATIONS
+
+  Bumped per profile on every load, every follow toggle and every reset. A
+  response carrying an old generation is DROPPED rather than installed: the
+  account may have changed while the request was out. `SetViewer` resets the
+  whole map whenever the account id moves, which is also what stops a follow
+  being committed under the wrong user.
+
+ONE DEBOUNCER PER PROFILE, NOT ONE PER REPOSITORY
+
+  The reference debounces `id: userId, groupKey: "follow_toggle"`. A single
+  Debouncer here would let a follow on one profile cancel the pending commit of
+  a follow the user just made on another. The map is cleared on commit and on
+  reset, so it is bounded by the profiles in flight rather than by the profiles
+  ever seen.
+
+WHAT IS NOT HERE YET
+
+  No RiseStore persistence. Profiles are memory-only, so a relaunch refetches.
+  Same gap as modules/post/engine, and the same reason: cache-first is
+  implemented across the ACTIVATE path but not across a cold start, and the
+  entity/view plumbing to close it belongs with AccountScope, which PHASES.txt
+  defers until something opens a per-account database.
+
+  No realtime. The gateway publishes nothing this subscribes to, so a follow
+  from another device shows up on the next read.

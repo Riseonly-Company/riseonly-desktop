@@ -1,36 +1,11 @@
 //! System notifications raised locally from socket events.
 //!
-//! The reference has two halves. One registers an APNs token and hands the
-//! decision of what reaches the device to Apple; that half has no counterpart
-//! here, because this client already holds the socket and builds its own
-//! banners. The other half is the filtering policy the user actually
-//! configured, and that is ported here — scopes, the mute window, and the rule
-//! that you are never told about your own action.
+//! The policy fails open at every step — an unrecognised scope, an absent scope
+//! set or a missing mute state all present — so an event kind the server adds
+//! after this build ships still reaches the user.
 //!
-//! The policy fails open at every step. An unrecognised scope, an absent scope
-//! set, a payload with no mute state: all of them present. That is deliberate
-//! in the reference and preserved exactly — a new server-side event kind must
-//! reach the user rather than vanish until the client is updated.
-//!
-//! Two things change shape on a desktop, and they are the reason this is not a
-//! transliteration:
-//!
-//! - **The active screen is a set.** A phone suppresses the banner for the one
-//!   chat on screen. A window shows a sidebar, a conversation and a profile at
-//!   once, and can show two conversations side by side. The suppression input
-//!   is therefore a slice of route keys, opaque to this crate and compared only
-//!   by equality.
-//! - **Losing focus suppresses nothing.** `scenePhase` going inactive on a
-//!   phone means the app is gone. A desktop app keeps its socket and stays
-//!   useful behind another window, so an unfocused window must still notify —
-//!   including for the conversation it is displaying.
-//!
-//! gpui implements `show_system_notification` on all three backends, so posting
-//! is `Performed` everywhere; macOS is not special here. What differs is what
-//! happens afterwards — whether a repeated tag replaces or stacks, and whether
-//! a posted notification can be retracted — and those are pure functions of
-//! [`HostOs`]. The Windows and Linux answers are read off gpui's source at the
-//! pinned rev, not observed on those systems.
+//! Two deviations from a phone: the visible screen is a *set* of route keys,
+//! and losing window focus suppresses nothing.
 
 use serde::Deserialize;
 
@@ -48,8 +23,7 @@ pub enum NotificationScope {
 }
 
 impl NotificationScope {
-    /// Trimmed and case-folded, because the value arrives as free text from the
-    /// server and the reference normalises it the same way before matching.
+    /// Trimmed and case-folded: the value arrives as free text from the server.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "messages" => Some(Self::Messages),
@@ -80,11 +54,8 @@ impl NotificationScope {
 }
 
 /// A conversation's per-scope notification switches, as stored in the
-/// `mute_scopes` JSON column.
-///
-/// Every field defaults to enabled. A value built with `..Default::default()`
-/// therefore un-mutes rather than mutes, which is the fail-open direction the
-/// rest of this module also takes.
+/// `mute_scopes` JSON column. Every field defaults to enabled, so a value built
+/// with `..Default::default()` un-mutes rather than mutes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize)]
 pub struct MuteScopes {
     pub messages: bool,
@@ -116,23 +87,17 @@ impl MuteScopes {
         !(self.messages || self.mentions || self.reactions || self.events)
     }
 
-    /// All four keys or nothing. The reference decodes this column with a
-    /// synthesised Swift `Codable`, which rejects an object missing any key and
-    /// falls back to all-enabled; half-applying a partial payload here would
-    /// silently mute scopes the server never spoke about.
+    /// All four keys or nothing: half-applying a partial payload would silently
+    /// mute scopes the server never spoke about.
     pub fn parse(raw: &str) -> Option<Self> {
         serde_json::from_str(raw).ok()
     }
 
-    /// The column as the chat row carries it, resolved the way the reference's
-    /// `notificationScopes` does: anything unparseable means everything is on.
+    /// The column as the chat row carries it; anything unparseable means all on.
     pub fn from_stored(raw: Option<&str>) -> Self {
         raw.and_then(Self::parse).unwrap_or(Self::ALL_ENABLED)
     }
 
-    /// Written by hand rather than through `serde_json::to_string` so the
-    /// signature carries no `Result` that a caller could not act on and no
-    /// fallback that would silently write the wrong switches.
     pub fn to_json(&self) -> String {
         format!(
             "{{\"messages\":{},\"mentions\":{},\"reactions\":{},\"events\":{}}}",
@@ -147,13 +112,9 @@ impl Default for MuteScopes {
     }
 }
 
-/// The reference's `PushChatNotificationPolicy.allows(scope:scopes:)`.
-///
-/// Fails open twice over, and both are load-bearing. A scope the client does
-/// not recognise is a scope the server added after this build shipped, and
-/// dropping it would make the feature invisible until an update. An absent
-/// scope set means the conversation was never configured, which is not the same
-/// as configured to silence.
+/// Fails open twice over: a scope this build does not recognise is one the
+/// server added later, and an absent scope set means never configured — which
+/// is not the same as configured to silence.
 pub fn scope_allows(scope: Option<&str>, scopes: Option<&MuteScopes>) -> bool {
     let (Some(raw), Some(scopes)) = (scope, scopes) else {
         return true;
@@ -165,20 +126,17 @@ pub fn scope_allows(scope: Option<&str>, scopes: Option<&MuteScopes>) -> bool {
     }
 }
 
-/// Any real timestamp above this is milliseconds: as seconds it would be the
-/// year 33658, as milliseconds it is September 2001.
+/// Above this a timestamp must be milliseconds: as seconds it would be 33658.
 const MILLISECOND_FLOOR: i64 = 1_000_000_000_000;
 
-/// `mute_until` reaches the client in seconds from some paths and milliseconds
-/// from others, and nothing on the wire says which. The reference disambiguates
-/// by magnitude; this does the same, normalising upward instead of down because
-/// the rest of the desktop client works in milliseconds.
+/// `mute_until` arrives in seconds on some paths and milliseconds on others,
+/// and nothing on the wire says which; magnitude disambiguates, and the result
+/// is always milliseconds.
 pub const fn mute_until_millis(value: i64) -> i64 {
     if value > MILLISECOND_FLOOR {
         value
     } else {
-        // A corrupt row near i64::MIN would otherwise overflow the conversion;
-        // saturating keeps it firmly in the past, which is what it means.
+        // A corrupt row near i64::MIN would overflow; saturating keeps it past.
         value.saturating_mul(1_000)
     }
 }
@@ -191,9 +149,8 @@ pub const fn mute_is_active(mute_until: Option<i64>, now_ms: i64) -> bool {
 }
 
 /// What the caller knows about the conversation this notification belongs to.
-///
 /// Both fields absent is the ordinary shape for a notification that is not
-/// about a conversation at all — a follow, a comment — and it presents.
+/// about a conversation at all, and it presents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct MuteState {
     pub mute_until: Option<i64>,
@@ -201,8 +158,7 @@ pub struct MuteState {
 }
 
 impl MuteState {
-    /// Nothing known about this conversation, which presents. Same value as
-    /// `Default`, which a `const fn` cannot call.
+    /// Nothing known about this conversation, which presents.
     pub const NONE: Self = Self {
         mute_until: None,
         scopes: None,
@@ -227,8 +183,7 @@ impl MuteState {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NotificationRequest<'a> {
     /// The route this notification would open, in the caller's own vocabulary.
-    /// It is compared against the visible set by equality and never parsed —
-    /// this crate must not learn what a chat is.
+    /// Compared against the visible set by equality and never parsed.
     pub route_key: &'a str,
     /// The wire's `notification_scope`, unparsed. Unknown and absent both pass.
     pub scope: Option<&'a str>,
@@ -259,8 +214,8 @@ impl<'a> NotificationRequest<'a> {
 /// Everything about the running client that can change the answer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PresentationContext<'a> {
-    /// Every route the window is currently displaying. A desktop window shows
-    /// several at once, so this is a set and not the one screen a phone has.
+    /// Every route the window is currently displaying — a set, because a window
+    /// shows several at once.
     pub visible_route_keys: &'a [String],
     /// Whether the window has keyboard focus. On its own this suppresses
     /// nothing — see [`decide`].
@@ -323,9 +278,7 @@ impl NotificationDecision {
     }
 }
 
-/// Why nothing appeared. A bare `false` here costs an afternoon later: "the
-/// banner did not show" has four causes and three of them are the user's own
-/// settings.
+/// Why nothing appeared.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SuppressionReason {
     /// The event was caused by this account.
@@ -334,22 +287,16 @@ pub enum SuppressionReason {
     ConversationMuted,
     /// The conversation has this class of event switched off.
     ScopeDisabled,
-    /// The route is on screen in a focused window, so the user is already
-    /// looking at it.
+    /// The route is on screen in a focused window.
     AlreadyOnScreen,
 }
 
 /// The whole policy, as a pure function.
 ///
-/// The order is deliberate: an event you caused yourself is never yours to be
-/// told about, then the user's standing preferences, then the transient state
-/// of the window. When two reasons apply the durable one is reported, because
-/// "muted" explains tomorrow's silence too and "on screen" does not.
-///
-/// The last check is where a desktop inverts a phone. Focus alone suppresses
-/// nothing: an unfocused window is still showing the conversation, but the user
-/// is elsewhere and needs the banner. Only a focused window looking at exactly
-/// this route already delivered the message.
+/// The order is part of the contract: self-authored first, then the user's
+/// standing preferences, then the window — so when two reasons apply the
+/// durable one is reported. Focus alone suppresses nothing; only a focused
+/// window showing exactly this route does.
 pub fn decide(
     request: &NotificationRequest<'_>,
     context: &PresentationContext<'_>,
@@ -373,15 +320,9 @@ pub fn decide(
     NotificationDecision::Present
 }
 
-/// The reference restricts this to follow-shaped payloads, because APNs never
-/// delivers your own action to you and those three kinds were the only ones
-/// that leaked. A socket does not have that property: every session of an
-/// account receives that account's own events, so a like sent from the phone
-/// arrives here as a fully-formed notification about yourself.
-///
-/// Ids are trimmed and an empty one is nobody, matching the reference's
-/// `normalized` helper — two blank ids must not compare equal and silence a
-/// real notification.
+/// Every session of an account receives that account's own events, so a like
+/// sent from the phone arrives here. Ids are trimmed and an empty one is
+/// nobody: two blank ids must not compare equal and silence a real event.
 fn is_self_authored(actor_id: Option<&str>, current_user_id: Option<&str>) -> bool {
     let (Some(actor), Some(viewer)) = (actor_id, current_user_id) else {
         return false;
@@ -400,30 +341,20 @@ fn is_visible(visible_route_keys: &[String], route_key: &str) -> bool {
 const CONVERSATION_TAG_PREFIX: &str = "conv:";
 const UNIQUE_TAG_PREFIX: &str = "one:";
 
-/// The identity gpui replaces on.
-///
-/// Posting a notification whose tag matches a live one replaces it, so a
-/// conversation that receives forty messages must reuse one tag instead of
-/// stacking forty banners. The two constructors are namespaced against each
-/// other: a route key and an event id can be the same string without their tags
-/// colliding.
-///
-/// Windows hashes the tag down to sixteen hex characters before handing it to
-/// the toast API, so tags are matched by gpui on the full string but by Windows
-/// on a digest of it.
+/// The identity gpui replaces on: posting a notification whose tag matches a
+/// live one replaces it. The two constructors are namespaced against each
+/// other, so a route key and an event id can be the same string.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NotificationTag(String);
 
 impl NotificationTag {
-    /// One tag for a whole conversation: the newest message replaces the
-    /// previous banner rather than adding to it.
+    /// One tag per conversation: the newest message replaces the previous one.
     pub fn conversation(route_key: &str) -> Self {
         Self(format!("{CONVERSATION_TAG_PREFIX}{route_key}"))
     }
 
-    /// One banner per key, for notifications that must not swallow each other —
-    /// a follow, a comment, an invite. The caller supplies something already
-    /// unique, usually the event id.
+    /// One banner per key, for notifications that must not swallow each other.
+    /// The caller supplies something already unique, usually the event id.
     pub fn unique(key: &str) -> Self {
         Self(format!("{UNIQUE_TAG_PREFIX}{key}"))
     }
@@ -439,13 +370,9 @@ impl NotificationTag {
     }
 }
 
-/// A button on a notification.
-///
-/// The reference offers an inline reply field through
-/// `UNTextInputNotificationAction`. gpui's action carries a label and an id and
-/// nothing else, on all three backends, so there is no text field to port:
-/// [`NotificationAction::reply`] is a button that brings the conversation
-/// forward, not a place to type.
+/// A button on a notification. gpui's action carries a label and an id and
+/// nothing else, so [`NotificationAction::reply`] is a button that brings the
+/// conversation forward, not a place to type.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NotificationAction {
     pub id: String,
@@ -453,8 +380,7 @@ pub struct NotificationAction {
 }
 
 impl NotificationAction {
-    /// Kept identical to the reference's identifiers so one response handler
-    /// can serve both clients when the routing table is shared.
+    /// Identical to the iOS identifiers, so one response handler serves both.
     pub const REPLY_ID: &str = "REPLY_ACTION";
     pub const MARK_READ_ID: &str = "MARK_READ_ACTION";
 
@@ -465,8 +391,7 @@ impl NotificationAction {
         }
     }
 
-    /// Labels arrive translated. This crate has no locale and must not acquire
-    /// one — it would put every OS seam behind the i18n crate.
+    /// Labels arrive already translated; this crate has no locale.
     pub fn reply(label: impl Into<String>) -> Self {
         Self::new(Self::REPLY_ID, label)
     }
@@ -524,15 +449,14 @@ impl From<LocalNotification> for gpui::SystemNotification {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeliveryPrecondition {
     /// `UNUserNotificationCenter` aborts the process outside a bundle, so gpui
-    /// disables notifications entirely when the main bundle has no identifier.
-    /// A bare `cargo run` binary is exactly that case, which is why macOS
-    /// always runs from `Riseonly.app` here.
+    /// disables notifications when the main bundle has no identifier — which a
+    /// bare `cargo run` binary is.
     AppBundle,
-    /// An unpackaged Windows process has no AUMID to post under, so gpui logs
-    /// and drops the toast unless `App::set_app_identity` ran during startup.
+    /// An unpackaged Windows process has no AUMID to post under, so gpui drops
+    /// the toast unless `App::set_app_identity` ran during startup.
     AppIdentity,
     /// The XDG path needs an `org.freedesktop.Notifications` owner on the
-    /// session bus; without one the connection fails and gpui logs and drops.
+    /// session bus; without one gpui logs and drops.
     NotificationServer,
 }
 
@@ -547,8 +471,7 @@ pub const fn delivery_precondition(host: HostOs) -> DeliveryPrecondition {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NotificationAvailability {
     /// gpui will hand the post to the OS. Not a promise that the user sees it:
-    /// authorization can be denied and the delivery can fail, and gpui reports
-    /// neither back to us.
+    /// authorization can be denied and gpui reports neither that nor a failure.
     Available,
     /// The precondition is unmet, so every post would be a silent no-op.
     Blocked(DeliveryPrecondition),
@@ -569,13 +492,8 @@ pub const fn availability_for(host: HostOs, precondition_met: bool) -> Notificat
 }
 
 /// Whether posting over a live notification with the same tag replaces it.
-///
-/// macOS reuses the tag as the `UNNotificationRequest` identifier and Windows
-/// hides the previous toast carrying the tag, so both collapse. The XDG path
-/// does not: gpui builds a fresh notification per post and never sets the
-/// replaces-id, so forty messages in one conversation become forty entries in
-/// the shade. A caller that wants one banner per conversation everywhere has to
-/// throttle by tag itself.
+/// gpui never sets the XDG replaces-id, so on Linux a busy conversation fills
+/// the shade and a caller wanting one banner must throttle by tag itself.
 pub const fn tag_replaces_previous(host: HostOs) -> PlatformSupport {
     match host {
         HostOs::MacOs | HostOs::Windows => PlatformSupport::Performed,
@@ -583,12 +501,9 @@ pub const fn tag_replaces_previous(host: HostOs) -> PlatformSupport {
     }
 }
 
-/// Whether a notification can be retracted once posted.
-///
-/// The XDG protocol can only close a notification through the server-assigned
-/// id carried by a live handle, and gpui's Linux handle is consumed waiting for
-/// the user's action, so its `dismiss` is a no-op and stale notifications age
-/// out of the shade on their own.
+/// Whether a notification can be retracted once posted. gpui's Linux handle is
+/// consumed waiting for the user's action, so its `dismiss` is a no-op and
+/// stale notifications age out of the shade on their own.
 pub const fn supports_dismissal(host: HostOs) -> PlatformSupport {
     match host {
         HostOs::MacOs | HostOs::Windows => PlatformSupport::Performed,
@@ -596,23 +511,16 @@ pub const fn supports_dismissal(host: HostOs) -> PlatformSupport {
     }
 }
 
-/// Posting and retracting, so the policy above can be exercised against a
-/// double instead of the notification centre.
-///
-/// Unlike [`crate::secure_store::SecureStore`] this is not `Send + Sync`: the
-/// real implementation borrows the gpui `App`, and a notification is posted
-/// from the thread that owns it.
+/// Posting and retracting. Not `Send + Sync`: the real implementation borrows
+/// the gpui `App`, and a notification is posted from the thread that owns it.
 pub trait NotificationPresenter {
     /// `Performed` means the post reached gpui, not that a banner appeared.
-    /// Authorization, focus assistant and the notification daemon all sit
-    /// downstream and none of them report back.
     fn present(&self, notification: &LocalNotification) -> PlatformSupport;
     fn dismiss(&self, tag: &NotificationTag) -> PlatformSupport;
     fn availability(&self) -> NotificationAvailability;
 }
 
-/// The real one. Built per call site from a borrowed `App`, because both gpui
-/// entry points take `&App` and nothing needs to be kept between posts.
+/// The real one. Built per call site from a borrowed `App`.
 pub struct GpuiNotificationPresenter<'a> {
     app: &'a gpui::App,
 }
@@ -648,9 +556,9 @@ impl NotificationPresenter for GpuiNotificationPresenter<'_> {
     }
 }
 
-/// The same probe gpui makes before it will build a notification centre at all.
-/// `App::app_path` is not a substitute: it only checks that `mainBundle` is
-/// non-nil, which it is for a bare binary too.
+/// The same probe gpui makes before it builds a notification centre at all.
+/// `App::app_path` is not a substitute: `mainBundle` is non-nil for a bare
+/// binary too.
 #[cfg(target_os = "macos")]
 fn host_precondition_met() -> bool {
     objc2_foundation::NSBundle::mainBundle()
@@ -658,19 +566,15 @@ fn host_precondition_met() -> bool {
         .is_some()
 }
 
-/// Neither the Windows AUMID registration nor the presence of an XDG
-/// notification server is observable from this process without duplicating
-/// state gpui keeps private, so this reports availability rather than inventing
-/// a probe. A blocked post is logged by gpui on both.
+/// Neither the Windows AUMID registration nor an XDG notification server is
+/// observable from this process, so this reports available and lets gpui log.
 #[cfg(not(target_os = "macos"))]
 fn host_precondition_met() -> bool {
     true
 }
 
-/// Records instead of posting.
-///
-/// It is deliberately not a fallback for a host that cannot notify: a caller
-/// that ends up here believes it notified the user and did not.
+/// Records instead of posting. Not a fallback for a host that cannot notify: a
+/// caller that ends up here believes it notified the user and did not.
 pub struct InMemoryNotificationPresenter {
     availability: NotificationAvailability,
     presented: parking_lot::Mutex<Vec<LocalNotification>>,

@@ -1,31 +1,21 @@
 //! The status-area icon and the unread badge.
 //!
-//! gpui has no tray on any of its three backends, so every line of this is ours,
-//! including the parts that on other seams would be a one-line forward.
-//!
-//! The three OSes do not merely spell the same idea differently here. They
-//! disagree about whether a number can be drawn at all, about whether the icon
-//! needs a window to hang off, and about whether a status area exists in the
-//! first place. Those disagreements are why most of this file is pure functions
-//! of [`HostOs`]: the decisions are exercised on a Mac, and only the last call
-//! into the OS is behind a `cfg`.
+//! gpui has no tray on any of its three backends, so every line of this is ours.
+//! The three OSes disagree about whether a number can be drawn, whether the icon
+//! needs a window, and whether a status area exists at all, so the decisions are
+//! pure functions of [`HostOs`] and only the last call is behind a `cfg`.
 
 use thiserror::Error;
 
 use crate::gpui_shim::PlatformSupport;
 use crate::host_os::HostOs;
 
-/// The largest unread count shown as a number. Past it the badge collapses, so
-/// a client that falls a week behind does not grow a five-digit menu bar item.
-///
-/// The overflow marker is derived from this rather than written out, because the
-/// classic bug in this policy is the cap and the label drifting apart by one.
+/// The largest unread count shown as a number; past it the badge collapses.
+/// The overflow marker is derived from this so the two cannot drift apart.
 pub const BADGE_CAP: u32 = 99;
 
-/// What the badge should read, or `None` when nothing should be drawn.
-///
-/// Zero is `None` and never `Some("0")`. A badge showing zero is worse than no
-/// badge: it draws the eye in order to say that nothing happened.
+/// What the badge should read, or `None` when nothing should be drawn. Zero is
+/// `None`: a badge showing zero draws the eye to say that nothing happened.
 pub fn badge_text(count: u32) -> Option<String> {
     match count {
         0 => None,
@@ -35,11 +25,8 @@ pub fn badge_text(count: u32) -> Option<String> {
 }
 
 /// The macOS Dock tile's `badgeLabel`, which follows exactly the same rule.
-///
-/// Only macOS has an OS-drawn numeric badge. Windows can put an overlay *icon*
-/// on the taskbar button and the freedesktop desktops disagree among themselves,
-/// so neither gets a label from here — [`tray_tooltip`] is where the count goes
-/// on those.
+/// Only macOS has an OS-drawn numeric badge; elsewhere the count goes into
+/// [`tray_tooltip`] instead.
 pub fn dock_badge_label(host: HostOs, count: u32) -> Option<String> {
     match host {
         HostOs::MacOs => badge_text(count),
@@ -47,14 +34,9 @@ pub fn dock_badge_label(host: HostOs, count: u32) -> Option<String> {
     }
 }
 
-/// The text on the macOS status item's button.
-///
-/// The item carries no icon asset yet, so this string is the whole of what the
-/// user sees, and it must never come back empty: a status item with neither
-/// image nor title is a zero-width gap in the menu bar that cannot be clicked,
-/// and nothing then tells the user the app is running. The badge is therefore
-/// appended to the label rather than replacing it, and the label must not be
-/// empty to begin with.
+/// The text on the macOS status item's button. It must never come back empty:
+/// a status item with neither image nor title is a zero-width, unclickable gap
+/// in the menu bar, so the badge is appended to the label, never replaces it.
 pub fn menu_bar_title(label: &str, count: u32) -> String {
     match badge_text(count) {
         Some(badge) => format!("{label} {badge}"),
@@ -62,11 +44,9 @@ pub fn menu_bar_title(label: &str, count: u32) -> String {
     }
 }
 
-/// The hover text, with the unread count folded in where the OS cannot draw one.
-///
-/// On macOS the count is already on the Dock tile and repeating it here is
-/// noise. Everywhere else the tooltip is the only surface that can carry a
-/// number at all, so leaving it out would lose the count entirely.
+/// The hover text, with the unread count folded in where the OS cannot draw
+/// one. On macOS the Dock tile already carries it; everywhere else the tooltip
+/// is the only surface that can.
 pub fn tray_tooltip(host: HostOs, base: &str, count: u32) -> String {
     let composed = match badge_text(count) {
         Some(badge) if tray_mechanism(host).numeric_badge_api.is_none() => {
@@ -79,11 +59,8 @@ pub fn tray_tooltip(host: HostOs, base: &str, count: u32) -> String {
 }
 
 /// The tooltip cap, in UTF-16 code units rather than characters.
-///
-/// `NOTIFYICONDATAW::szTip` is `[u16; 128]` and the shell reads it until a NUL,
-/// so 127 units are usable and the last slot belongs to the terminator. Counting
-/// characters is the trap: one emoji is a single `char` and two units, so a
-/// 127-character tooltip can be a 254-unit overrun of a fixed buffer.
+/// `NOTIFYICONDATAW::szTip` is `[u16; 128]`, so 127 units are usable and the
+/// last slot is the terminator; counting characters would overrun the buffer.
 pub const fn tooltip_limit(host: HostOs) -> Option<usize> {
     match host {
         HostOs::Windows => Some(127),
@@ -92,10 +69,6 @@ pub const fn tooltip_limit(host: HostOs) -> Option<usize> {
 }
 
 /// Cuts at a character boundary, never between the halves of a surrogate pair.
-///
-/// A `String` cannot hold a lone surrogate, so a cut made by counting code units
-/// would have to either panic or corrupt. Stepping whole characters can do
-/// neither.
 fn truncate_utf16(text: &str, limit: Option<usize>) -> String {
     let Some(limit) = limit else {
         return text.to_owned();
@@ -116,13 +89,8 @@ fn truncate_utf16(text: &str, limit: Option<usize>) -> String {
     fitted
 }
 
-/// How a status icon reaches the screen, per OS, as data.
-///
-/// This exists so all three answers can be asserted from a Mac. Two of the three
-/// bindings below have never been compiled, and what is most likely to be wrong
-/// about them is not their syntax but the shape of the mechanism: whether there
-/// is a badge, whether a window is needed first, whether another process has to
-/// be listening. That shape lives here, in one place, and it is tested.
+/// How a status icon reaches the screen, per OS, as data — so all three answers
+/// can be asserted from a Mac, including for the two bindings never compiled.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TrayMechanism {
     /// The call that places the icon in the status area.
@@ -139,8 +107,8 @@ pub struct TrayMechanism {
     pub host_guarantee: TrayHostGuarantee,
 }
 
-/// How far the call travels, which is what decides whether it can fail for
-/// reasons that have nothing to do with this process.
+/// How far the call travels, which decides whether it can fail for reasons
+/// outside this process.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TrayTransport {
     /// A direct call into a framework already linked into this process.
@@ -155,9 +123,8 @@ pub enum TrayTransport {
 pub enum TrayHostGuarantee {
     /// The OS owns the status area. If the app runs, the icon has a home.
     Guaranteed,
-    /// Only the running session can answer. On Linux the status area belongs to
-    /// the desktop shell rather than to X11 or Wayland, so a bare session has
-    /// none and no amount of build-time configuration changes that.
+    /// Only the running session can answer: on Linux the status area belongs to
+    /// the desktop shell rather than to X11 or Wayland.
     SessionDependent,
 }
 
@@ -195,20 +162,16 @@ pub const fn tray_mechanism(host: HostOs) -> TrayMechanism {
 pub enum TrayAvailability {
     /// There is a status area and this build can reach it.
     Available,
-    /// The OS has the concept but nothing in this session is hosting one: a bare
-    /// X11 desktop with no `StatusNotifierHost` registered and no XEmbed tray
-    /// either. The app is fine, it simply has no icon, and the user has to be
-    /// told that rather than left wondering where it went.
+    /// The OS has the concept but nothing in this session is hosting one. The
+    /// app is fine; it simply has no icon, and the user has to be told.
     NoHost,
     /// This build has no binding for this platform's status area.
     Unsupported,
 }
 
-/// A native window handle, as a plain integer.
-///
-/// `HWND` on Windows and ignored elsewhere. Deliberately not the OS type: this
-/// crate exists so nothing above it learns which OS it is on, and the caller is
-/// only forwarding a number the window system already gave it.
+/// A native window handle, as a plain integer: `HWND` on Windows, ignored
+/// elsewhere. Deliberately not the OS type, so nothing above this crate learns
+/// which OS it is on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct NativeWindowHandle(pub u64);
 
@@ -219,10 +182,8 @@ pub struct TrayConfig {
     pub label: String,
     /// The hover text, before any unread count is folded into it.
     pub tooltip: String,
-    /// Required on Windows and nowhere else, per
-    /// [`TrayMechanism::attaches_to_a_window`]: `Shell_NotifyIconW` posts its
-    /// callback messages to a window and rejects an icon added with a null
-    /// `hWnd`.
+    /// Required on Windows and nowhere else: `Shell_NotifyIconW` rejects an
+    /// icon added with a null `hWnd`.
     pub window: Option<NativeWindowHandle>,
 }
 
@@ -255,16 +216,9 @@ pub enum TrayError {
 
 /// The status icon, for as long as this value lives.
 ///
-/// Deliberately neither `Send` nor `Sync`, unlike `SecureStore`. The macOS
-/// implementation holds AppKit objects and a main-thread token, and AppKit off
-/// the main thread is undefined behaviour rather than a lint. Adding the bounds
-/// would mean an `unsafe impl Send` that is simply false, so instead the tray
-/// stays on the thread that opened it and the compiler enforces that — including
-/// for the drop, which is where the icon is removed.
-///
-/// Every method says whether it did the thing. A tray that silently no-ops is
-/// the worst outcome available here: the app goes on believing the user can see
-/// the unread count, and stops trying to tell them any other way.
+/// Neither `Send` nor `Sync`: the macOS implementation holds AppKit objects, so
+/// the tray — including its drop, which is where the icon is removed — stays on
+/// the thread that opened it. Every method reports whether the OS did the thing.
 pub trait Tray {
     fn set_tooltip(&mut self, text: &str) -> PlatformSupport;
     fn set_badge(&mut self, count: u32) -> PlatformSupport;
@@ -272,12 +226,9 @@ pub trait Tray {
     fn availability(&self) -> TrayAvailability;
 }
 
-/// Whether a status icon could be placed, answered without placing one.
-///
-/// A different question from whether [`open`] will succeed: on Windows the
-/// status area is there but `open` still needs a window handle. A caller that
-/// wants to offer the user an alternative before the first icon exists asks
-/// this one.
+/// Whether a status icon could be placed, answered without placing one. A
+/// different question from whether [`open`] will succeed: on Windows the status
+/// area is there but `open` still needs a window handle.
 pub fn availability() -> TrayAvailability {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -289,10 +240,9 @@ pub fn availability() -> TrayAvailability {
     }
 }
 
-/// Places the icon and returns the handle that owns it.
-///
-/// The value must be kept alive for as long as the icon should exist, and
-/// dropped on the thread that created it.
+/// Places the icon and returns the handle that owns it. The value must be kept
+/// alive for as long as the icon should exist, and dropped on the thread that
+/// created it.
 pub fn open(config: TrayConfig) -> Result<Box<dyn Tray>, TrayError> {
     #[cfg(target_os = "macos")]
     {
@@ -309,12 +259,9 @@ pub fn open(config: TrayConfig) -> Result<Box<dyn Tray>, TrayError> {
 }
 
 /// Records what it was asked to show instead of drawing it.
-///
-/// For tests above this crate, and for a case a caller has to handle anyway:
 /// [`InMemoryTray::with_availability`] can be built with
-/// [`TrayAvailability::NoHost`], which is the shape a Linux session without a
-/// status notifier host presents. Code that has only ever run against a working
-/// tray is code that has never taken that branch.
+/// [`TrayAvailability::NoHost`], the shape a Linux session without a status
+/// notifier host presents — a branch a caller has to handle anyway.
 pub struct InMemoryTray {
     availability: TrayAvailability,
     tooltip: String,
@@ -400,15 +347,9 @@ mod macos {
 
     use super::*;
 
-    /// `objc2-app-kit` 0.3 generates every call used here as a safe `fn`, so
-    /// there is no `unsafe` block to justify: the message sends are checked.
-    ///
-    /// The one invariant that really is unsafe to break — AppKit is main-thread
-    /// only — is *not* carried by those signatures for `NSStatusBar`, because
-    /// Apple's headers do not mark the class main-thread-only and the generator
-    /// only mirrors the headers. The `MainThreadMarker` taken here is what
-    /// carries it instead, and it is taken before the first AppKit call rather
-    /// than after.
+    /// AppKit is main-thread only, and `NSStatusBar`'s generated signatures do
+    /// not carry that. The `MainThreadMarker` does, and is taken before the
+    /// first AppKit call rather than after.
     pub fn open(config: TrayConfig) -> Result<Box<dyn Tray>, TrayError> {
         let Some(mtm) = MainThreadMarker::new() else {
             return Err(TrayError::NotMainThread);
@@ -448,9 +389,7 @@ mod macos {
             let label = badge.map(|text| NSString::from_str(&text));
             self.dock.setBadgeLabel(label.as_deref());
 
-            // The Dock tile is the canonical macOS unread badge and exists as
-            // soon as NSApplication does, so the count has already landed by
-            // here even when the status item has no button to write to.
+            // The Dock badge has already landed even with no button to write to.
             let Some(button) = self.item.button(self.mtm) else {
                 return PlatformSupport::Unsupported;
             };
@@ -486,9 +425,8 @@ mod macos {
         }
     }
 
-    /// The status bar owns the item, not this handle. Dropping the `Retained`
-    /// alone leaves the icon in the menu bar for the rest of the process, and a
-    /// relaunch then shows two.
+    /// The status bar owns the item, not this handle: dropping the `Retained`
+    /// alone leaves the icon in the menu bar for the rest of the process.
     impl Drop for StatusItemTray {
         fn drop(&mut self) {
             self.bar.removeStatusItem(&self.item);
@@ -505,8 +443,8 @@ mod windows_status_area {
 
     use super::*;
 
-    /// Identifies the icon within our window. There is one tray icon, so one id;
-    /// it only has to stay the same between the `NIM_ADD` and the `NIM_DELETE`.
+    /// One tray icon, so one id; it only has to match between the `NIM_ADD` and
+    /// the `NIM_DELETE`.
     const ICON_ID: u32 = 1;
 
     pub fn open(config: TrayConfig) -> Result<Box<dyn Tray>, TrayError> {
@@ -515,9 +453,8 @@ mod windows_status_area {
         };
 
         // SAFETY: a null instance handle with a stock `IDI_*` ordinal is the
-        // documented way to ask for a system icon and is valid in any process.
-        // The icon that comes back is shared, which is why it is only stored
-        // and never destroyed in `Drop`.
+        // documented way to ask for a system icon. The icon is shared, which is
+        // why it is stored and never destroyed in `Drop`.
         let stock = unsafe { win::LoadIconW(None, win::IDI_APPLICATION) };
         let icon = match stock {
             Ok(icon) => icon,
@@ -565,11 +502,9 @@ mod windows_status_area {
                 ..Default::default()
             };
 
-            // `szTip` is filled through a local and then assigned whole. On
-            // 32-bit x86 the struct is `packed(1)`, where borrowing the field in
-            // order to slice into it would be a reference to unaligned memory;
-            // assigning the array is not. `take` leaves the last slot zeroed,
-            // and the shell reads `szTip` until a NUL.
+            // `szTip` is assigned whole: on 32-bit x86 the struct is `packed(1)`
+            // and borrowing the field to slice it would be an unaligned
+            // reference. The last slot stays zeroed for the terminator.
             let mut tip = [0u16; 128];
             let text = tray_tooltip(HostOs::Windows, &self.tooltip, self.unread);
             for (slot, unit) in tip.iter_mut().zip(text.encode_utf16().take(127)) {
@@ -578,8 +513,7 @@ mod windows_status_area {
             data.szTip = tip;
 
             // SAFETY: `data` is fully initialised, its `cbSize` is the size of
-            // the struct this build compiled against, and it outlives the call —
-            // the shell copies what it needs before returning.
+            // the struct this build compiled against, and it outlives the call.
             let placed = unsafe { shell::Shell_NotifyIconW(message, &data) };
 
             if placed.as_bool() {
@@ -597,10 +531,7 @@ mod windows_status_area {
         }
 
         /// The notification area has no numeric badge, so the count goes into
-        /// the tooltip. A drawn badge would be `ITaskbarList3::SetOverlayIcon`
-        /// on the taskbar button, which is a different surface and wants a
-        /// rendered `HICON` per digit — an asset problem rather than a binding
-        /// problem, and not one to solve blind.
+        /// the tooltip.
         fn set_badge(&mut self, count: u32) -> PlatformSupport {
             self.unread = count;
             self.push(shell::NIM_MODIFY)
@@ -617,8 +548,7 @@ mod windows_status_area {
     }
 
     /// An icon whose `NIM_DELETE` never arrives stays in the notification area
-    /// as a ghost until the user happens to hover it, so this is not optional
-    /// cleanup.
+    /// as a ghost until the user happens to hover it.
     impl Drop for NotifyIconTray {
         fn drop(&mut self) {
             let data = shell::NOTIFYICONDATAW {
@@ -639,29 +569,9 @@ mod windows_status_area {
 mod freedesktop {
     use super::{Tray, TrayConfig, TrayError};
 
-    /// Why there is no code here rather than blind code.
-    ///
-    /// The mechanism is not in doubt. A freedesktop status icon is a
-    /// `StatusNotifierItem`: the app exports the `org.kde.StatusNotifierItem`
-    /// interface on the session bus, owns a bus name of the form
-    /// `org.kde.StatusNotifierItem-<pid>-<n>`, and hands that name to
-    /// `org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem`. Tooltip and
-    /// visibility are the `ToolTip` and `Status` properties, each with a
-    /// `NewToolTip` or `NewStatus` signal to announce the change. There is no
-    /// numeric badge anywhere in the specification.
-    ///
-    /// What is missing is somewhere to run it. That object server has to answer
-    /// method calls for the whole life of the process, and this crate owns no
-    /// executor. zbus is pinned here with `default-features = false` and only
-    /// the `tokio` feature, which leaves `blocking-api` off, so `zbus::blocking`
-    /// does not exist; and `rise-platform` does not depend on tokio, so it
-    /// cannot start a reactor for the async API either. Giving this crate a
-    /// runtime is a decision about the whole crate rather than about the tray,
-    /// and making it quietly here would be the wrong place to make it.
-    ///
-    /// The older XEmbed system tray protocol is not a way around that. It is
-    /// exactly the fallback that is absent on the desktops this would be for:
-    /// GNOME dropped it, and a bare X11 session with no panel never had it.
+    /// Unimplemented: `org.kde.StatusNotifierItem` needs an object server
+    /// answering method calls for the life of the process, and this crate owns
+    /// no executor — zbus is built without `blocking-api` and there is no tokio.
     pub fn open(_config: TrayConfig) -> Result<Box<dyn Tray>, TrayError> {
         let reason = "org.kde.StatusNotifierItem needs an executor this crate lacks";
         Err(TrayError::Unsupported(reason))
@@ -910,10 +820,8 @@ mod tests {
         );
     }
 
-    /// Skipped rather than asserted if the harness ever runs this on the main
-    /// thread, in the same spirit as the keyring probes. The guarantee is that
-    /// the refusal comes *before* any AppKit call; creating a real status item
-    /// from the test suite is exactly what must not happen.
+    /// Proves the refusal comes *before* any AppKit call; skipped rather than
+    /// asserted if the harness ever runs this on the main thread.
     #[cfg(target_os = "macos")]
     #[test]
     fn a_status_item_is_refused_off_the_main_thread_rather_than_touching_appkit() {

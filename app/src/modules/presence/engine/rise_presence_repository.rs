@@ -2,22 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::core::rise_presence_rpc::PresenceUpdate;
 
-/// What is known about one user's presence.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct PresenceState {
     pub is_online: bool,
     pub last_seen_ms: Option<i64>,
     pub in_chat_id: Option<String>,
-    /// Whether the server has ever said anything about this user.
-    ///
-    /// The difference between "offline" and "not known yet" is what decides
-    /// whether a row shows its own cached `is_online` from the chat payload or
-    /// the live one. Without it every user reads as offline for the first frame
-    /// after a reconnect.
     pub is_known: bool,
 }
 
-/// What a row shows next to an avatar.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PresenceIndicator {
     Hidden,
@@ -25,12 +17,6 @@ pub enum PresenceIndicator {
     InChat,
 }
 
-/// The subscription set, reconciled.
-///
-/// Several screens observe overlapping sets of users, so the desired set is
-/// per-OWNER and the wire only ever sees the union's changes. That is the whole
-/// point: opening a second screen onto the same conversation must not
-/// re-subscribe to everybody in it.
 #[derive(Default)]
 pub struct PresenceRepository {
     states: BTreeMap<String, PresenceState>,
@@ -39,7 +25,6 @@ pub struct PresenceRepository {
     revision: u64,
 }
 
-/// What the reconciliation decided to send.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SubscriptionDelta {
     pub subscribe: Vec<String>,
@@ -69,7 +54,6 @@ impl PresenceRepository {
         self.subscribed.iter().cloned().collect()
     }
 
-    /// Applies one push. Returns whether anything a view draws changed.
     pub fn apply(&mut self, update: PresenceUpdate) -> bool {
         let entry = self.states.entry(update.user_id.clone()).or_default();
         let before = entry.clone();
@@ -94,10 +78,6 @@ impl PresenceRepository {
         changed
     }
 
-    /// Sets what one screen wants to watch and returns what the wire owes.
-    ///
-    /// `self_id` is excluded: the server never pushes a user their own presence,
-    /// so subscribing to it spends a slot and gets nothing.
     pub fn set_desired(
         &mut self,
         owner: &str,
@@ -139,17 +119,11 @@ impl PresenceRepository {
         delta
     }
 
-    /// After a reconnect the server knows nothing about what this socket wanted.
-    ///
-    /// The subscription lives on the CONNECTION, so a reconnect silently drops
-    /// every one of them and presence quietly freezes at whatever it last was.
-    /// This is what the reference's `saiWsDidConnect` handler is for.
+    // Subscriptions live on the connection: a reconnect silently drops every one.
     pub fn resubscribe_all(&self) -> Vec<String> {
         self.subscribed.iter().cloned().collect()
     }
 
-    /// Drops everything. An account switch must not show the previous account's
-    /// contacts as online.
     pub fn reset(&mut self) {
         self.states.clear();
         self.desired_by_owner.clear();
@@ -157,11 +131,6 @@ impl PresenceRepository {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// What a row draws, given what the payload it was built from claimed.
-    ///
-    /// `fallback_online` is the value that came with the chat or profile
-    /// payload. Live presence wins where it exists; the fallback is what stops
-    /// every row reading offline until the first push arrives.
     pub fn indicator(
         &self,
         user_id: &str,

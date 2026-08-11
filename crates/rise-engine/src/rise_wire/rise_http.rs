@@ -8,19 +8,10 @@ use serde_json::Value;
 use super::rise_wire::WireError;
 use super::rise_wire_contracts::{RemoteError, ReplayPolicy};
 
-/// The second transport, and the reason it exists.
+/// Verb for an [`HttpDescriptor`].
 ///
-/// Everything the app does goes over the one socket, with two exceptions the
-/// gateway itself forces. `auth.refresh_token` and tag availability are actions
-/// an UNauthenticated caller has to make, and the socket's action gate
-/// (`requires_authentication` in the gateway's raw_websocket handler) admits
-/// only send_code, register, login, ping and the two QR web-login verbs without
-/// a session. Refreshing precisely when the access token has expired is
-/// therefore impossible on the socket, by construction.
-///
-/// So this is not a compatibility layer and not a second way to reach a method
-/// the socket already offers: the descriptor catalogue has the same shape, the
-/// replay policy is still a backend guarantee, and a method the socket can carry
+/// HTTP carries only what the socket's action gate refuses to an unauthenticated
+/// caller (`auth.refresh_token`, tag availability). A method the socket can carry
 /// must never appear here.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HttpVerb {
@@ -101,11 +92,8 @@ pub struct HttpReply {
     pub body: String,
 }
 
-/// Whatever actually performs the request.
-///
-/// The engine does not own an HTTP client any more than it owns the socket: the
-/// host supplies both. That keeps TLS, proxy and cookie policy out of here, and
-/// it is what lets every path below be tested without a server.
+/// Performs the request. The host supplies it, so TLS, proxy and cookie policy
+/// stay outside the engine.
 pub trait HttpSender: Send + Sync {
     fn send(&self, call: HttpCall) -> BoxFuture<'static, Result<HttpReply, WireError>>;
 }
@@ -143,12 +131,7 @@ impl RiseHttp {
     }
 }
 
-/// A non-2xx carries the server's own message where there is one.
-///
-/// The gateway answers a refused refresh with `{"error": "..."}` and a 401, and
-/// a caller that only saw "HTTP 401" could not tell an expired token from a
-/// reused one — which is the difference between refreshing again and sending the
-/// user back to the sign-in screen.
+// A non-2xx keeps the gateway's own message: 401-expired and 401-reused recover differently.
 fn decode_reply(reply: HttpReply) -> Result<Value, WireError> {
     let payload: Value = if reply.body.trim().is_empty() {
         Value::Null

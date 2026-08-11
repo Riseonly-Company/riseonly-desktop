@@ -45,9 +45,18 @@ DESKTOP_ONLY = {
     "app/router/deep_link_route.rs",
     # A phone has no pointer and no file manager: there is nothing to drop.
     "app/shell/file_drop.rs",
+    # The reference names its Lottie animations inline at each `LottieView(name:)`
+    # call, because SwiftUI resolves the asset itself. Here the asset root, the
+    # rasteriser and the frame budget all have to be chosen somewhere, and that
+    # somewhere is one catalogue rather than every screen.
+    "core/animations.rs",
     # UIKit resolves bundle resources itself; here the asset root has to be
     # found, because a dev run and a .app lay it out differently.
     "core/assets.rs",
+    # gpui asks the host for an HttpClient to fetch remote images with. On the
+    # phone that job belongs to Core/UI/CleverImageUi.swift, which is outside the
+    # tree this compares, and it is a UIKit image loader rather than a transport.
+    "core/media_http.rs",
     # The reference expresses these through ~60 singletons and an
     # AccountStateResetCoordinator that tears them down in a specific order.
     # Here they are ownership, which has no file to be a port of.
@@ -80,6 +89,11 @@ DESKTOP_ONLY = {
     "modules/auth/engine/",
     "modules/session/engine/",
     "modules/presence/engine/",
+    # user/engine EXISTS in the reference, but only for theme and locale
+    # settings: profile reads and the follow verbs never migrated and still go
+    # through SaiWs from user-actions.swift. The repository that owns them here
+    # is that redesign, and has no Swift file to correspond to.
+    "modules/user/engine/rise_user_repository.rs",
     # The reference splits a store into <domain>-actions / -services /
     # -interactions plus a -wire-types file. DTOs live beside their descriptors
     # here, because a store may not import rise_engine and a descriptor must, so
@@ -95,6 +109,8 @@ DESKTOP_ONLY = {
     "modules/auth/engine/rise_auth_repository_tests.rs",
     "modules/auth/pages/sign/auth_step_flow_tests.rs",
     "modules/session/engine/rise_session_repository_tests.rs",
+    "modules/post/engine/rise_post_repository_tests.rs",
+    "modules/user/engine/rise_user_repository_tests.rs",
 }
 
 

@@ -14,20 +14,9 @@ use super::socket_policy::{
     BackoffSchedule, ConnectionState, SocketCredential, requires_reconnect,
 };
 
-/// How often the app sends `gateway.ping`.
-///
-/// The gateway evicts a connection after sixty seconds of silence, and a
-/// protocol Pong does not reset that timer — its reaper counts APPLICATION
-/// activity only (`raw_websocket/connection.rs`). A client that relied on the
-/// WebSocket keepalive would be dropped every minute while looking perfectly
-/// healthy to itself.
+// The gateway's 60s reaper counts application frames only; a protocol Pong does not reset it.
 const HEARTBEAT: Duration = Duration::from_secs(25);
 
-/// Enough frames to cover a burst while a reconnect is in flight.
-///
-/// Bounded rather than unbounded: an app that queues forever while the network
-/// is gone replays a minute of stale intent the moment it comes back. A full
-/// queue answers NotConnected, which the caller can show.
 const OUTBOUND_CAPACITY: usize = 512;
 
 pub(crate) enum SocketCommand {
@@ -36,25 +25,12 @@ pub(crate) enum SocketCommand {
     Shutdown,
 }
 
-/// Owns the one socket. The engine does not.
-///
-/// This is the host half of the contract in `docs/ENGINE.md`: `rise-engine`
-/// correlates and dispatches, and everything about reconnect, backoff and the
-/// handshake credential lives out here, where it can be replaced without
-/// touching the engine and where the engine's own tests need no network.
 pub struct SocketHost {
     commands: mpsc::Sender<SocketCommand>,
     state: watch::Receiver<ConnectionState>,
 }
 
 impl SocketHost {
-    /// Builds the sender, hands it to `make_wire`, then starts the connection
-    /// loop around the wire that came back.
-    ///
-    /// The closure exists because the two halves refer to each other: the wire
-    /// needs somewhere to put an outbound frame, and the loop needs somewhere to
-    /// put an inbound one. Threading the channel through a callback keeps both
-    /// fields non-optional, so neither can be observed half-built.
     pub fn spawn(
         runtime: &Handle,
         url: String,
@@ -92,10 +68,7 @@ impl SocketHost {
         self.commands.clone()
     }
 
-    /// Re-handshakes under a new credential.
-    ///
-    /// The gateway reads the user and session once, at upgrade, and never again,
-    /// so a rotated token only takes effect on a new connection.
+    // The gateway reads user and session once at upgrade: a rotated token needs a new connection.
     pub(crate) fn authenticate_through(
         commands: &mpsc::Sender<SocketCommand>,
         credential: SocketCredential,
@@ -137,8 +110,6 @@ async fn run(
         let delay = backoff.delay_for(attempt);
         if !delay.is_zero() {
             let _ = state.send(ConnectionState::Reconnecting);
-            // Commands are still drained while waiting: a sign-out during a
-            // backoff must not wait out a minute of it before taking effect.
             match wait_for_delay(&mut inbox, &mut queued, &mut credential, delay).await {
                 Wait::Elapsed => {}
                 Wait::Reauthenticated => attempt = 0,
@@ -174,8 +145,6 @@ async fn run(
         )
         .await;
 
-        // Every caller awaiting a response learns now rather than waiting out
-        // its own timeout, and nothing survives the connection that authorised it.
         wire.fail_all_pending();
 
         match outcome {
@@ -222,10 +191,6 @@ async fn wait_for_delay(
     }
 }
 
-/// The queue is the same size as the channel and drops the OLDEST frame.
-///
-/// Dropping the newest would silently discard the action the user just took
-/// while keeping a minute-old one, which is the wrong way round.
 fn push_queued(queued: &mut Vec<String>, frame: String) {
     if queued.len() >= OUTBOUND_CAPACITY {
         queued.remove(0);
@@ -316,8 +281,6 @@ async fn pump(
 
             inbound = reader.next() => match inbound {
                 Some(Ok(Message::Text(text))) => wire.accept(text.as_str()),
-                // The gateway defaults to text mode, but a bincode frame from a
-                // build with it switched off must not be read as UTF-8 garbage.
                 Some(Ok(Message::Binary(_))) => tracing::warn!(
                     target: "riseonly",
                     "binary frame received; this client speaks the gateway's text protocol"
@@ -333,11 +296,6 @@ async fn pump(
     }
 }
 
-/// An application-level ping, allocated from the same counter as every request.
-///
-/// Sharing the allocator is what keeps a heartbeat from ever colliding with a
-/// real correlation id; the reply carries an id the wire has no pending entry
-/// for and is dropped, which is the documented behaviour rather than an error.
 fn heartbeat_frame(requests: &Arc<RequestIdAllocator>) -> String {
     let id = requests.next().get();
     let timestamp = SystemTime::now()

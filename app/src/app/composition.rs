@@ -11,6 +11,10 @@ use crate::modules::auth::engine::rise_auth_repository::AuthCommand;
 use crate::modules::auth::stores::auth_actions::AuthActionsStore;
 use crate::modules::auth::stores::auth_interactions::AuthInteractionsStore;
 use crate::modules::auth::stores::auth_services::{AuthServicesStore, AuthStores};
+use crate::modules::post::engine::rise_post_domain::RisePostDomain;
+use crate::modules::post::stores::post_actions::PostActionsStore;
+use crate::modules::post::stores::post_interactions::PostInteractionsStore;
+use crate::modules::post::stores::post_services::{PostServicesStore, PostStores};
 use crate::modules::presence::engine::wire::{LivePresenceWire, PresenceWire};
 use crate::modules::presence::stores::presence::presence_actions::PresenceActionsStore;
 use crate::modules::presence::stores::presence::presence_interactions::PresenceInteractionsStore;
@@ -21,27 +25,22 @@ use crate::modules::session::engine::rise_session_domain::RiseSessionDomain;
 use crate::modules::session::stores::session_actions::SessionActionsStore;
 use crate::modules::session::stores::session_interactions::SessionInteractionsStore;
 use crate::modules::session::stores::session_services::{SessionServicesStore, SessionStores};
+use crate::modules::user::engine::rise_user_domain::RiseUserDomain;
+use crate::modules::user::stores::user::user_actions::UserActionsStore;
+use crate::modules::user::stores::user::user_interactions::UserInteractionsStore;
+use crate::modules::user::stores::user::user_services::{UserServicesStore, UserStores};
 
-/// Where the transport lives for the life of the process.
-///
-/// A global rather than a field on the shell: the socket is not a window's, and
-/// a second window must not open a second connection. Nothing reads it — holding
-/// it IS the point, because dropping the bridge would take the runtime, the
-/// socket and every in-flight request with it.
 pub struct Transport {
     _bridge: Arc<EngineBridge>,
 }
 
 impl gpui::Global for Transport {}
 
-/// The interaction stores a screen reaches for.
-///
-/// One place a new module joins the composition. A module appears here when a
-/// screen calls it; until then its stores are held alive by their own globals,
-/// which is ownership rather than API.
 #[derive(Clone)]
 pub struct Interactions {
     pub auth: AuthInteractionsStore,
+    pub post: PostInteractionsStore,
+    pub user: UserInteractionsStore,
 }
 
 impl gpui::Global for Interactions {}
@@ -50,18 +49,10 @@ pub fn interactions(cx: &App) -> Option<&Interactions> {
     cx.try_global::<Interactions>()
 }
 
-/// Opens the transport and every module that exists so far.
-///
-/// Called once, before the first window. The order matters in one place only:
-/// the presence router has to be subscribed before the socket is told to
-/// authenticate, or the first pushes after a sign-in land with nobody listening.
 pub fn install(endpoints: &Endpoints, data_directory: &Path, cx: &mut App) {
     let bridge = match EngineBridge::new(endpoints) {
         Ok(bridge) => Arc::new(bridge),
         Err(error) => {
-            // Not fatal, and deliberately so: the app still draws, every request
-            // fails with NotConnected, and the user sees the error state a screen
-            // already has rather than a process that will not start.
             tracing::error!(
                 target: "riseonly",
                 "the engine transport could not start ({error}); the app will run offline"
@@ -72,9 +63,6 @@ pub fn install(endpoints: &Endpoints, data_directory: &Path, cx: &mut App) {
 
     let secrets: Arc<dyn SecureStore> = Arc::new(KeyringSecureStore::new());
     if !secrets.is_available() {
-        // Stated rather than hidden. On Linux without a running secret service
-        // this is the difference between "signed in" and "signed in until you
-        // quit", and the user is about to find out either way.
         tracing::warn!(
             target: "riseonly",
             "no OS credential store is available; sessions will not survive a restart"
@@ -96,6 +84,20 @@ pub fn install(endpoints: &Endpoints, data_directory: &Path, cx: &mut App) {
     let presence_actions = PresenceActionsStore::new(presence_wire);
     let presence_services = cx.new(|_| PresenceServicesStore::new(presence_actions.clone()));
 
+    let post_domain = Arc::new(RisePostDomain::open(
+        &bridge.handle(),
+        Arc::clone(bridge.wire()),
+    ));
+    let post_actions = PostActionsStore::new(Arc::clone(&post_domain));
+    let post_services = cx.new(|cx| PostServicesStore::new(Arc::clone(&post_domain), cx));
+
+    let user_domain = Arc::new(RiseUserDomain::open(
+        &bridge.handle(),
+        Arc::clone(bridge.wire()),
+    ));
+    let user_actions = UserActionsStore::new(Arc::clone(&user_domain));
+    let user_services = cx.new(|cx| UserServicesStore::new(Arc::clone(&user_domain), cx));
+
     let session_domain = Arc::new(RiseSessionDomain::open(
         &bridge.handle(),
         Arc::clone(bridge.wire()),
@@ -103,12 +105,34 @@ pub fn install(endpoints: &Endpoints, data_directory: &Path, cx: &mut App) {
     let session_actions = SessionActionsStore::new(Arc::clone(&session_domain));
     let session_services = cx.new(|cx| SessionServicesStore::new(Arc::clone(&session_domain), cx));
 
+    // Must be subscribed before the socket authenticates, or the first pushes land unrouted.
     route_pushes(&bridge, presence_services.clone(), cx);
     follow_connection(&bridge, presence_services.clone(), cx);
-    follow_account(auth_services.clone(), presence_services.clone(), cx);
+    follow_account(
+        auth_services.clone(),
+        presence_services.clone(),
+        post_actions.clone(),
+        user_actions.clone(),
+        cx,
+    );
+
+    let post_interactions = PostInteractionsStore::new(post_actions.clone(), post_services.clone());
+    let user_interactions = UserInteractionsStore::new(user_actions.clone(), user_services.clone());
 
     cx.set_global(Interactions {
         auth: AuthInteractionsStore::new(auth_actions.clone(), auth_services.clone()),
+        post: post_interactions.clone(),
+        user: user_interactions.clone(),
+    });
+    cx.set_global(UserStores {
+        interactions: user_interactions,
+        actions: user_actions,
+        services: user_services,
+    });
+    cx.set_global(PostStores {
+        interactions: post_interactions,
+        actions: post_actions,
+        services: post_services,
     });
     cx.set_global(SessionStores {
         interactions: SessionInteractionsStore::new(session_actions, session_services),
@@ -124,27 +148,15 @@ pub fn install(endpoints: &Endpoints, data_directory: &Path, cx: &mut App) {
         _bridge: Arc::clone(&bridge),
     });
 
-    // A clean close rather than a dropped socket: the gateway then takes the
-    // user offline immediately instead of waiting out its sixty-second silence
-    // reaper, which is the difference between a contact going offline when the
-    // app quits and a minute later.
     cx.on_app_quit(move |_| {
         bridge.shutdown();
         async {}
     })
     .detach();
 
-    // The cold start: read the account registry, refresh if the access token has
-    // aged out, and point the socket at whoever it finds.
     auth_domain.dispatch(AuthCommand::Restore);
 }
 
-/// The one place an inbound push becomes a module's business.
-///
-/// The gateway has no subscribe protocol — it fans out by session and the client
-/// dispatches by event-type string — so this is the router the reference builds
-/// out of `SaiWsEventHandlerRegistration`. Each module answers whether the type
-/// was its own, which is what makes an unrouted event visible instead of silent.
 fn route_pushes(
     bridge: &Arc<EngineBridge>,
     presence: gpui::Entity<PresenceServicesStore>,
@@ -168,10 +180,6 @@ fn route_pushes(
                         );
                     }
                 }
-                // The bus is bounded, so a burst can outrun this task. Losing a
-                // presence push is recoverable — the next one corrects it — but
-                // it must be visible rather than silent, because for a module
-                // with durable state it would not be.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
                     tracing::warn!(target: "riseonly::events", "dropped {missed} push(es)");
                 }
@@ -182,11 +190,7 @@ fn route_pushes(
     .detach();
 }
 
-/// Re-subscribes presence when the socket comes back.
-///
-/// Subscriptions live on the CONNECTION. A reconnect silently drops every one of
-/// them, and without this presence freezes at whatever it last showed — which
-/// looks exactly like everybody going quiet.
+// Subscriptions live on the connection: a reconnect silently drops every one of them.
 fn follow_connection(
     bridge: &Arc<EngineBridge>,
     presence: gpui::Entity<PresenceServicesStore>,
@@ -209,14 +213,11 @@ fn follow_connection(
     .detach();
 }
 
-/// Keeps presence pointed at the right account.
-///
-/// Two things change together on a switch: who "me" is, so nothing subscribes to
-/// its own presence, and everything the previous account was watching, which
-/// must not survive into the next one.
 fn follow_account(
     auth: gpui::Entity<AuthServicesStore>,
     presence: gpui::Entity<PresenceServicesStore>,
+    posts: PostActionsStore,
+    users: UserActionsStore,
     cx: &mut App,
 ) {
     let mut previous: Option<String> = None;
@@ -232,6 +233,10 @@ fn follow_account(
             store.reset_account_state(cx);
             store.set_self_id(active.clone(), cx);
         });
+
+        posts.set_identity_action(active.clone());
+        users.set_viewer_action(active.clone());
+
         previous = active;
     })
     .detach();

@@ -6,12 +6,8 @@ pub mod global_hotkey;
 pub mod gpui_shim;
 pub mod host_os;
 pub mod keyring_store;
-// Not `pub`. A public `macos` module is a compile-time OS oracle: a consumer
-// could write `rise_platform::macos::glass::MacGlassSurface::new()`, and that
-// path resolves on exactly one host — which is the property this crate exists to
-// deny. `materials::current_glass_surface()` is the only way in, and it answers
-// on every platform. The boundary checker greps for `#[cfg(target_os` and cannot
-// see this, so the visibility is the enforcement.
+// Must stay non-`pub`: a public `macos` module is a compile-time OS oracle, and the
+// boundary checker only greps `#[cfg(target_os`, so visibility is the enforcement.
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 pub mod materials;
@@ -21,6 +17,7 @@ pub mod paths;
 pub mod reveal_in_file_manager;
 pub mod secure_store;
 pub mod single_instance;
+pub mod text_capabilities;
 pub mod tray;
 pub mod updater;
 pub mod window_chrome;

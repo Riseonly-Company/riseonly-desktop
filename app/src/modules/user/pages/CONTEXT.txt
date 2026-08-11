@@ -1,0 +1,47 @@
+================================================================================
+modules/user/pages — screens only
+================================================================================
+
+  profile/  the profile. Header, tab bar and the active tab's rows.
+
+ONE LIST CARRIES THE HEADER, THE TABS AND THE ROWS
+
+  Row 0 is ProfileTop, row 1 is the tab bar, and everything after them is the
+  active tab. The alternative — a scrolling column with a list inside it — puts
+  two scroll owners on one axis, and gpui gives the inner one the wheel, so the
+  header could never scroll away and `ListUi::on_edge` would measure a viewport
+  that never moves.
+
+  `Profile::HEADER_ROWS` is that offset, and it is why `row_count` adds two.
+
+  What this does NOT reproduce is the reference's pinned tab bar: there the tabs
+  stop under the header and stay there while the rows keep going. That needs a
+  sticky element, which gpui's list does not have, and faking it with a second
+  layer would put the tab bar outside the scroll it belongs to.
+
+THE FIRST TAB CANNOT BE ASKED FOR UNTIL THE PROFILE LANDS
+
+  `post.get_user_publications` keys on the owner's TAG, and a route by user id
+  does not have one. So `sync_feed_tag` watches the profile snapshot and
+  activates the tab the moment the tag arrives — which is also why the tabs are
+  not activated in `new`.
+
+ONE LIST PER TAB
+
+  A `ListUi` carries a scroll position and gpui's `ListState` is a SumTree of
+  MEASURED rows. Sharing one across tabs would either lose the position on every
+  switch or keep it and scroll the new tab to a row that is not there.
+
+GOALS AND PLANS COST NO REQUEST
+
+  Both arrive inside the profile payload's `more`, so their tabs read the
+  snapshot the header is already drawn from. Only the three post tabs reach the
+  network.
+
+THE ABOUT DIALOG IS A ModalUi
+
+  Because everything that floats over the page is (root CONTEXT.txt). It mirrors
+  ProfileAboutSheet.swift's fields — tag, description, gender, languages — plus
+  the social links the reference shows in its own sheet. Birthday and phone are
+  absent: `hb` is carried but never rendered, and a phone the owner published is
+  a privacy decision this slice does not make.

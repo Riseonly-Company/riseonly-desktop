@@ -5,16 +5,12 @@ use crate::tokens::density::Density;
 /// The pre-auth screens' geometry.
 ///
 /// Onboarding, sign-in and sign-up own the whole window rather than a column, so
-/// their layout is the one place in the app that is neither a pane nor an
-/// overlay. The reference's numbers, read off `Onboarding.swift` and
-/// `AuthStepFlow.swift`, with one desktop addition: a content width, because a
-/// phone form is as wide as the phone and a 2560px form would be unreadable.
+/// their layout is neither a pane nor an overlay.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct AuthMetrics {
     /// How wide the form column is allowed to grow, whatever the window does.
-    /// The reference's `frame(maxWidth: 500)`.
     pub content_width: Pixels,
-    /// Around the form column: `padding(.horizontal, 22)`.
+    /// Around the form column.
     pub content_padding: Pixels,
     /// The onboarding slide's animation square.
     pub slide_art_size: Pixels,
@@ -32,14 +28,8 @@ pub struct AuthMetrics {
     pub skip_inset: Pixels,
 
     /// ONE height for the step's field and for the button under it.
-    ///
-    /// Deliberately a single token rather than two that happen to match: a
-    /// button that is taller than the field it submits reads as a different
-    /// control, and the two drifting apart is exactly what a shared token makes
-    /// impossible.
     pub field_height: Pixels,
-    /// The wizard's animation, smaller than an onboarding slide's because a form
-    /// step has a field under it. The reference's 168.
+    /// The wizard's animation, smaller than an onboarding slide's.
     pub step_art_size: Pixels,
     /// Between the wizard's animation and the step title.
     pub step_art_gap: Pixels,
@@ -53,9 +43,19 @@ pub struct AuthMetrics {
     /// The circular back button, and the band the header occupies.
     pub header_button_size: Pixels,
     pub header_height: Pixels,
-    /// One cell of the verification-code field, and the gap between cells.
+    /// One cell of the verification-code field. The width is a maximum: cells
+    /// share the row and shrink before they overflow.
     pub code_cell_width: Pixels,
+    pub code_cell_height: Pixels,
     pub code_gap: Pixels,
+    pub code_radius: Pixels,
+    /// The digit itself.
+    pub code_digit_size: f32,
+    /// The active cell is marked by a thicker border and nothing else — no
+    /// caret, no scale, no shake.
+    pub code_active_border: Pixels,
+    /// The flag on the country button and in its list.
+    pub flag_width: Pixels,
 }
 
 impl AuthMetrics {
@@ -82,8 +82,13 @@ impl AuthMetrics {
             progress_gap: l(5.0),
             header_button_size: l(40.0),
             header_height: l(54.0),
-            code_cell_width: l(48.0),
+            code_cell_width: l(62.0),
+            code_cell_height: l(58.0),
             code_gap: l(10.0),
+            code_radius: l(16.0),
+            code_digit_size: 23.0,
+            code_active_border: l(1.5),
+            flag_width: l(24.0),
         }
     }
 }
@@ -112,8 +117,7 @@ mod tests {
         assert_eq!(metrics.pagination_dot_active_width, px(24.0));
     }
 
-    /// The user-facing rule this token exists for: the submit button is the same
-    /// size as the field above it.
+    /// The submit button is the same size as the field above it.
     #[test]
     fn the_field_and_the_button_under_it_are_one_height() {
         for density in [Density::COMPACT, Density::NORMAL, Density::COMFORTABLE] {

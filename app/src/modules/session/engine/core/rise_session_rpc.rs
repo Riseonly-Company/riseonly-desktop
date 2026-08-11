@@ -1,13 +1,6 @@
 use rise_engine::MethodDescriptor;
 use serde::{Deserialize, Serialize};
 
-/// session-service, through the gateway's `session` service.
-///
-/// `delete_user_sessions_advanced` is a plain mutation with no replay: ending a
-/// session is not idempotent from the client's side — a retry after an
-/// inconclusive failure could end a session the user has since started from
-/// another device, and the backend contract promises nothing that would make it
-/// safe.
 pub const GET_USER_SESSIONS: MethodDescriptor =
     MethodDescriptor::read("session", "get_user_sessions");
 pub const DELETE_USER_SESSIONS: MethodDescriptor =
@@ -66,8 +59,6 @@ pub struct DeleteUserSessionsResponse {
     pub error: Option<String>,
     #[serde(alias = "remainingSessions", default)]
     pub remaining_sessions: Option<Vec<UserSessionDto>>,
-    /// The server ending the session this client is running on. The only correct
-    /// answer is a local sign-out: every subsequent request would be refused.
     #[serde(alias = "shouldLogout")]
     pub should_logout: Option<bool>,
 }

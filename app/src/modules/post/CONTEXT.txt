@@ -1,22 +1,120 @@
 ================================================================================
-rise-post
+modules/post — the feed
 ================================================================================
 
-READ FIRST
-  ../CONTEXT.txt      (the module convention — layout, store triad, hard rules)
-  ../../../CONTEXT.txt (workspace rules)
+WHAT THIS OWNS
 
-REFERENCE
-  ../../../riseonly-ios/Riseonly/modules/post/
-  15,195 lines of Swift in the reference.
+  Everything post-service answers for: the three feeds, one post, and the four
+  interactions a card offers. Mirrors riseonly-ios/Riseonly/modules/post.
 
-FOLDERS HERE
-  components, engine, pages, stores
+  engine/      the data layer. Descriptor catalogue, hand-written DTOs, the
+               repository actor, the domain that owns it.
+  stores/post/ the triad. Thin command facade, snapshot selectors, one entry
+               point for views.
+  components/  the card, and nothing that is a screen.
+  pages/posts/ the screen, and its skeleton.
+  shared/      relative time.
 
-  This module owns a backend service, so it has engine/: the domain, the actor
-  repositories, the endpoint catalogue and the presentation snapshots.
+THE ONE RULE THAT IS NOT OBVIOUS: interaction_id VS row_id
 
-REMINDERS
-  pages/ holds screens and nothing else.
-  A view calls only <Feature>InteractionsStore.
-  This crate must not depend on another module crate.
+  A repost is TWO posts. The row is the wrapper — the reposter's line, their
+  opinion, and the original quoted inside a box — and the counters belong to the
+  original. So:
+
+    row_id()          the wrapper's own id. The list's identity. Two people
+                      reposting one post are two rows, and keying both on the
+                      original merges them into one, which gpui does silently.
+    interaction_id()  the ROOT original's id. What every mutating verb is sent.
+                      The proto says so for each of them; sending the wrapper's
+                      id likes the wrapper.
+
+  `counters()` is the same distinction on the read side: what a card's action row
+  displays.
+
+WHY ONE REPOSITORY FOR EVERY LIST OF POSTS
+
+  They overlap. A post in "All" is usually also in "Publications", and one shown
+  in a profile's tab is usually in the feed too; a like has to move all of them
+  or the tabs disagree until the next refresh. Separate repositories would each
+  hold their own copy of the row. The optimistic toggle therefore walks EVERY
+  page and applies to every position holding that interaction id, and the
+  rollback restores by (page, index) only after checking the row is still the
+  same post — a refresh may have landed while the mutation was out.
+
+  `PostScope` is what a page is keyed by: `Feed(kind)` for the three tabs of the
+  feed, `User { tag, kind }` for the three post tabs of a profile. modules/user
+  owns the screen; the rows are still this module's.
+
+  A profile's lists are addressed by the owner's TAG, lowercased on the way in,
+  because that is what the gateway takes — `get_user_publications` has no user-id
+  form.
+
+THE PROFILE CURSOR IS A NUMBER AND THE FEED CURSOR IS A STRING
+
+  Not a style choice. `execute_get_feed` reads `relative_id` through
+  `ParamExtractor::optional_i32`, which parses a JSON string; the user-scoped
+  `execute_get_user_posts` reads it with a bare `as_i64()`, where a string is
+  silently no cursor at all and the second page repeats the first. There is a
+  test for each.
+
+THE WIRE, AND WHAT IS TOLERATED
+
+  Requests are snake_case, and so are responses: the gateway hands `json!(..)` to
+  the socket and nothing renames a field. The camelCase alias on every DTO field
+  is belt and braces, not the primary spelling — EXCEPT where the gateway sends
+  both spellings at once, where an alias is not belt and braces but a bug.
+
+  Every successful response leaves `grpc_routes/mod.rs` through
+  `add_canonical_pagination_aliases`, which stamps ALL THREE of `has_more`,
+  `is_have_more` and `hasMore` onto it (and both of `next_cursor`/`nextCursor`).
+  Two of those keys folded onto one field with `#[serde(alias)]` is a serde
+  `duplicate field` error, which fails the WHOLE page — every row, not the flag.
+  `FeedResponse` therefore gives each wire spelling its OWN field and `more()`
+  picks the first one present. Reading only `is_have_more` would work today and
+  break the day a handler stops emitting it; reading all four cannot.
+
+  A page that does not decode is a FAILURE, never a page of no posts. `fetch`
+  used to `unwrap_or_default()` the response, which spelled every wire drift
+  "empty feed" — a Loaded page with zero rows, no error and no retry.
+
+  Every field is optional, because
+  the gateway drops proto3 defaults — a post with no likes has no `likes_count`
+  key at all and a required field would fail the whole page. Ids arrive as
+  numbers or strings; `WireId` takes both.
+
+  `relative_id` is serialised EVEN WHEN NULL and `feed_session_id` is omitted
+  when absent. That asymmetry is the reference's, copied deliberately: its
+  hand-written encoder uses `encode` for the first and `encodeIfPresent` for the
+  second one line later, and the gateway reads the difference.
+
+  Dropping `feed_session_id` on a later page makes the ranker start a new session
+  and repeat rows. There is a test.
+
+REPLAY POLICY, PER METHOD, NONE OF IT GUESSED
+
+  reads                        ReadOnly
+  set_post_like/favorite       IdempotencyKey{client_request_id}
+  create_repost/delete_repost  IdempotencyKey{client_request_id} — the proto
+                               states the no-op outcome for both
+  record_post_views            Never. The server dedupes by (user, post) but
+                               promises nothing about a retried BATCH.
+
+THE CARD'S WIDTH CAP LIVES ON A ROW, NEVER IN A COLUMN
+
+  A feed row is `w_full` + `justify_center` with the capped card as its child, so
+  the cap is on the ROW's MAIN axis. Put the same `w_full()+max_w()` on a child of
+  a flex COLUMN and taffy measures that child's HEIGHT at the resolved `w_full` —
+  the whole list width — and clamps the width to `max_w` only afterwards. The
+  card then wraps its text twice: once at 1100pt to be measured, once at 600pt to
+  be drawn. It draws about twice the lines it was measured for and paints over
+  the row below it; what the user sees is the likers line sliced by the next post.
+
+  crates/rise-ui/tests/row_width_cap.rs pins both shapes side by side.
+
+WHAT IS NOT BUILT, SO NOBODY LOOKS FOR IT
+
+  The three-dot menu, the likes sheet, hashtag search, the media viewer, the
+  image pager (a multi-image post draws its first image and honest dots),
+  reposting with an opinion, music, shorts playback, view receipts. Each is its
+  own screen or its own subsystem; `PostAction` carries the intents already so
+  wiring one is a match arm rather than a redesign.

@@ -2,20 +2,16 @@ use gpui::Pixels;
 
 use crate::tokens::density::Density;
 
-/// The desktop frame's own geometry — the one part of the design that is not the
-/// phone's.
+/// The desktop frame's own geometry: how wide each column is.
 ///
-/// `docs/PLATFORM_GLASS.md` fixes the shape: rail 56, list 320, content
-/// flexible, aside 300. Those numbers live here rather than in the shell because
-/// they are lengths, and a length outside `rise-theme` is a length density can
-/// never reach.
-///
-/// `rise-navigation`'s `PanePolicy` decides how many columns a width affords;
-/// this decides how wide each column is. The two must be built from the same
-/// numbers, which is what `PanePolicy::from_shell_metrics` is for.
+/// `rise-navigation`'s `PanePolicy` decides how many columns a width affords,
+/// and must be built from these same numbers via `PanePolicy::from_shell_metrics`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ShellMetrics {
     pub rail_width: Pixels,
+    /// The Telegram-style breathing room around the rail only. Content columns
+    /// remain edge-to-edge with the window.
+    pub rail_outer_inset: Pixels,
     pub rail_item_size: Pixels,
     pub rail_item_gap: Pixels,
     pub rail_padding: Pixels,
@@ -23,29 +19,17 @@ pub struct ShellMetrics {
     pub sidebar_width: Pixels,
     pub aside_width: Pixels,
     pub content_min_width: Pixels,
-    /// What the window opens at the first time.
-    ///
-    /// Wide enough for all three columns plus the rail, so a first run shows the
-    /// shell the design is about rather than the phone-shaped stack it collapses
-    /// to. It scales with density for the same reason everything else does: a
-    /// comfortable-density user wants a bigger window, not a more crowded one.
+    /// What the window opens at the first time; wide enough for all three
+    /// columns plus the rail.
     pub window_default_width: Pixels,
     pub window_default_height: Pixels,
     /// How far a resize must travel past a column boundary before the layout is
-    /// allowed to flip. Without it a window dragged along a threshold strobes
-    /// between one and two columns.
+    /// allowed to flip, or a window dragged along a threshold strobes.
     pub pane_hysteresis: Pixels,
-    /// How far a second window opens down and to the right of the last one, so
-    /// two windows onto the same account are not one window as far as the eye
-    /// can tell.
+    /// How far a second window opens down and to the right of the last one.
     pub window_cascade_offset: Pixels,
-    /// How close an overlay may come to the window edge.
-    ///
-    /// gpui has no native popups on X11 or Windows, so every menu, dropdown and
-    /// tooltip is drawn inside the window. These are the numbers that keep one
-    /// from touching the frame, and they are here rather than in the widget for
-    /// the same reason every other length is: a widget that spells a number is a
-    /// widget density cannot reach.
+    /// How close an overlay may come to the window edge. gpui has no native
+    /// popups on X11 or Windows, so every menu is drawn inside the window.
     pub overlay_margin: Pixels,
     /// Between an overlay and the rectangle it is anchored to.
     pub overlay_gap: Pixels,
@@ -57,18 +41,19 @@ pub struct ShellMetrics {
     pub palette_top_inset: Pixels,
     pub palette_max_height: Pixels,
     pub palette_row_height: Pixels,
-    /// How far in from the window's top-left the macOS traffic lights sit.
-    ///
-    /// The window has no titlebar strip — content runs to the top edge, the way
-    /// Telegram for macOS and Zed do it — so the buttons are placed over the
-    /// content and everything else has to keep out of their way.
+    /// How far in from the window's top-left the macOS traffic lights sit, which
+    /// is exactly what AppKit is told — see [`Self::traffic_light_origin`].
     pub traffic_light_inset: Pixels,
-    /// The band across the top of the window that belongs to the window
-    /// controls and to dragging, and that no screen may put anything in.
-    ///
-    /// It exists on every platform, not only where the traffic lights are: a
-    /// frameless window still needs somewhere the user can grab it.
+    /// The band across the top of the window that belongs to the window controls
+    /// and to dragging, on every platform, and that no screen may draw into.
     pub window_drag_height: Pixels,
+
+    /// A floating panel's corner — a popover, a resizable side panel. NOT the
+    /// window's, which is AppKit's and is not a value we hold.
+    pub block_radius: Pixels,
+    /// The hairline between two flush columns, which is what separates them now
+    /// that there is no gap.
+    pub column_divider: Pixels,
 }
 
 impl ShellMetrics {
@@ -76,7 +61,11 @@ impl ShellMetrics {
         let l = |value: f32| density.scale(value);
 
         Self {
-            rail_width: l(56.0),
+            // Floor, because density scales the rail but not the AppKit-drawn buttons.
+            rail_width: l(90.0).max(gpui::px(
+                Self::TRAFFIC_LIGHT_SPAN + Self::TRAFFIC_LIGHT_INSET * 2.0,
+            )),
+            rail_outer_inset: gpui::px(5.0),
             rail_item_size: l(40.0),
             rail_item_gap: l(6.0),
             rail_padding: l(6.0),
@@ -84,7 +73,7 @@ impl ShellMetrics {
             sidebar_width: l(320.0),
             aside_width: l(300.0),
             content_min_width: l(460.0),
-            window_default_width: l(1180.0),
+            window_default_width: l(1196.0),
             window_default_height: l(760.0),
             pane_hysteresis: l(24.0),
             window_cascade_offset: l(28.0),
@@ -97,13 +86,29 @@ impl ShellMetrics {
             palette_top_inset: l(96.0),
             palette_max_height: l(420.0),
             palette_row_height: l(40.0),
-            // Not scaled by density. The traffic lights are drawn by AppKit at a
-            // fixed size, so an inset that grew with density would stop lining
-            // up with them.
-            traffic_light_inset: gpui::px(19.0),
-            window_drag_height: gpui::px(38.0),
+            // Not density-scaled: AppKit draws the traffic lights at a fixed size.
+            traffic_light_inset: gpui::px(Self::TRAFFIC_LIGHT_INSET),
+            window_drag_height: gpui::px(46.0),
+
+            block_radius: l(10.0),
+            column_divider: gpui::px(1.0),
         }
     }
+}
+
+impl ShellMetrics {
+    /// Where AppKit is told to put the window buttons, measured from the
+    /// window's top-left. The rail itself starts after [`Self::rail_outer_inset`],
+    /// then keeps the same inset around the fixed-size AppKit buttons.
+    pub fn traffic_light_origin(&self) -> gpui::Point<Pixels> {
+        let origin = self.rail_outer_inset + self.traffic_light_inset;
+        gpui::point(origin, origin)
+    }
+
+    /// How wide the three window buttons and their gaps are, together. Fixed by
+    /// AppKit; the rail must be at least this wide plus its insets.
+    pub const TRAFFIC_LIGHT_SPAN: f32 = 14.0 * 3.0 + 9.0 * 2.0;
+    const TRAFFIC_LIGHT_INSET: f32 = 15.0;
 }
 
 impl Default for ShellMetrics {
@@ -137,11 +142,68 @@ mod tests {
         );
     }
 
+    /// The window buttons sit inside the rail, so it must hold them with
+    /// their inset on both sides.
+    #[test]
+    fn the_rail_is_wide_enough_to_hold_the_window_buttons() {
+        for density in [Density::COMPACT, Density::NORMAL, Density::COMFORTABLE] {
+            let metrics = ShellMetrics::new(density);
+            let needed = px(ShellMetrics::TRAFFIC_LIGHT_SPAN) + metrics.traffic_light_inset * 2.0;
+
+            assert!(
+                metrics.rail_width >= needed,
+                "at {density:?} a {:?} rail cannot hold {needed:?} of window buttons",
+                metrics.rail_width
+            );
+        }
+    }
+
+    /// AppKit is handed a window-space origin. The rail alone floats five
+    /// points inside the window, so that outer inset must be added exactly once.
+    #[test]
+    fn the_buttons_are_placed_inside_the_inset_rail() {
+        let metrics = ShellMetrics::default();
+        let origin = metrics.traffic_light_origin();
+
+        assert_eq!(
+            origin.x,
+            metrics.rail_outer_inset + metrics.traffic_light_inset
+        );
+        assert_eq!(
+            origin.y, origin.x,
+            "the buttons are inset equally on both axes"
+        );
+    }
+
+    /// AppKit rounds the window itself and we hold no radius for it. The buttons
+    /// still have to clear that corner, and the OS radius is not a number this
+    /// crate knows — so the check is against a generous upper bound on it.
+    #[test]
+    fn the_close_button_clears_any_plausible_macos_window_corner() {
+        const WIDEST_PLAUSIBLE_OS_RADIUS: f32 = 26.0;
+
+        for density in [Density::COMPACT, Density::NORMAL, Density::COMFORTABLE] {
+            let metrics = ShellMetrics::new(density);
+            let origin = f32::from(metrics.traffic_light_origin().x);
+            let centre = WIDEST_PLAUSIBLE_OS_RADIUS;
+
+            let offset = (centre - origin).max(0.0);
+            assert!(
+                offset * offset * 2.0 <= centre * centre,
+                "at {density:?} the close button would ride on the window's rounding"
+            );
+        }
+    }
+
     #[test]
     fn the_default_shell_is_the_documented_geometry() {
         let metrics = ShellMetrics::default();
 
-        assert_eq!(metrics.rail_width, px(56.0));
+        assert_eq!(metrics.rail_width, px(90.0));
+        assert_eq!(metrics.rail_outer_inset, px(5.0));
+        assert_eq!(metrics.block_radius, px(10.0));
+        assert_eq!(metrics.column_divider, px(1.0));
+        assert_eq!(metrics.traffic_light_inset, px(15.0));
         assert_eq!(metrics.sidebar_width, px(320.0));
         assert_eq!(metrics.aside_width, px(300.0));
     }
@@ -150,7 +212,7 @@ mod tests {
     fn density_scales_every_column() {
         let dense = ShellMetrics::new(Density::new(1.25));
 
-        assert_eq!(dense.rail_width, px(56.0 * 1.25));
+        assert_eq!(dense.rail_width, px(90.0 * 1.25));
         assert_eq!(dense.sidebar_width, px(320.0 * 1.25));
         assert_eq!(dense.aside_width, px(300.0 * 1.25));
     }
@@ -172,11 +234,8 @@ mod tests {
         assert!(metrics.rail_icon_size < metrics.rail_item_size);
     }
 
-    /// `palette_width` and `menu_max_width` are what an overlay asks for, not
-    /// what it gets: a 400px window clamps both, which is the placement code's
-    /// job. What the tokens owe is that the ask is sane at every density — it
-    /// fits the window the app opens at, and a menu fits the narrowest column
-    /// the shell will ever draw.
+    /// An overlay's asked-for width is sane at every density; clamping it is the
+    /// placement code's job.
     #[test]
     fn what_an_overlay_asks_for_fits_the_window_the_app_opens_at() {
         for density in [Density::COMPACT, Density::NORMAL, Density::COMFORTABLE] {
@@ -211,6 +270,7 @@ mod tests {
         for density in [Density::COMPACT, Density::NORMAL, Density::COMFORTABLE] {
             let metrics = ShellMetrics::new(density);
             let three_columns = metrics.rail_width
+                + metrics.rail_outer_inset * 2.0
                 + metrics.sidebar_width
                 + metrics.content_min_width
                 + metrics.aside_width;

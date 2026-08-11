@@ -32,11 +32,8 @@ pub struct EngineConfig {
 
 /// One account, one engine, one database.
 ///
-/// Two guards, because they cover different failures. The in-process lease stops
-/// a second engine inside this process, which would give two writers their own
-/// idea of the current revision. The advisory file lock stops a second *process*
-/// — the case the phone never had, because a desktop app can simply be launched
-/// twice from Finder.
+/// Opening is refused when the account is already open: an in-process lease
+/// guards a second engine here, an advisory file lock guards a second process.
 pub struct RiseEngine {
     account: AccountId,
     directory: PathBuf,
@@ -99,10 +96,8 @@ impl RiseEngine {
         &self.cipher
     }
 
-    /// Drains the store and releases both guards.
-    ///
-    /// Explicit because Drop cannot await, and an account switch must know the
-    /// previous engine finished before the next one opens the same file.
+    /// Drains the store and releases both guards. Await it before opening the
+    /// same account again; Drop cannot do this.
     pub async fn close(self) -> Result<(), EngineError> {
         self.store.close().await?;
         Ok(())
@@ -164,13 +159,7 @@ impl ProcessLock {
             .truncate(false)
             .open(path)?;
 
-        // An advisory lock rather than a lock file, because the OS releases it
-        // when the process dies. A lock file survives a crash and locks the user
-        // out of their own app.
-        //
-        // Contention is Ok(false), not Err — Err is reserved for a failed
-        // syscall. Treating the result as a plain Result silently admits the
-        // second process.
+        // Contention is Ok(false), not Err; Err is reserved for a failed syscall.
         let acquired =
             FileExt::try_lock_exclusive(&file).map_err(|_| EngineError::OwnedByAnotherProcess)?;
         if !acquired {

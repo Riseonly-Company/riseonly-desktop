@@ -1,25 +1,12 @@
 //! The strip along the top of the window: whether the OS draws it or we do,
 //! where its buttons sit, and who owns the frame around it.
 //!
-//! The product shell is Telegram-for-macOS shaped — a vertical rail down the
-//! left edge that has to reach the top of the window — so the stock titlebar is
-//! suppressed and the strip is ours. That one decision lands differently on each
-//! OS, and none of the three is obvious:
-//!
-//! - macOS hides the titlebar but keeps drawing and hit-testing the traffic
-//!   lights, which then float over our client area. We only get to move them.
-//! - Windows hides the caption bar outright, buttons included, so the shell has
-//!   to paint minimise, maximise and close itself.
-//! - Linux has no titlebar to hide. Asking for an app-drawn one is asking the
-//!   compositor for client-side decorations, which it may refuse, and which drag
-//!   the resize border, the drop shadow and the rounded corners into our lap.
-//!
-//! So what we asked for and what we were given are two different values here,
-//! and both are representable. Everything above the handful of gpui calls at the
-//! bottom is a pure function of [`HostOs`].
+//! What was asked for and what the platform granted are two values here: only
+//! Linux disagrees, and only the compositor can answer.
 
 use crate::gpui_shim::PlatformSupport;
 use crate::host_os::HostOs;
+use crate::materials::MacOsVersion;
 
 /// Who draws the strip along the top of the window.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -31,8 +18,7 @@ pub enum ChromeStyle {
 }
 
 impl ChromeStyle {
-    /// The shell's own choice, on every platform: the left rail is part of the
-    /// window, and a stock titlebar would cut it off at the top.
+    /// The shell's own choice on every platform, so the left rail reaches the top.
     pub const fn preferred(host: HostOs) -> Self {
         match host {
             HostOs::MacOs | HostOs::Windows | HostOs::Linux => Self::AppDrawn,
@@ -41,9 +27,7 @@ impl ChromeStyle {
 
     /// Whether the shell has to reproduce the double-click-the-titlebar gesture.
     ///
-    /// Once the strip is our content nothing else will fire it, because the OS
-    /// no longer sees a titlebar there. Forwarding it under a system titlebar
-    /// instead would act on a gesture the OS has already handled.
+    /// Under a system titlebar the OS has already handled it; forwarding acts twice.
     pub const fn app_handles_titlebar_double_click(self) -> bool {
         matches!(self, Self::AppDrawn)
     }
@@ -58,16 +42,11 @@ pub enum ControlSide {
 
 /// The `button-layout` GNOME ships in `org.gnome.desktop.wm.preferences`.
 ///
-/// `appmenu` is not a window button, so what GNOME actually shows by default is
-/// a lone close button on the trailing side; minimise and maximise appear only
-/// once the user turns them on.
+/// `appmenu` is not a window button, so GNOME's default is a lone trailing close.
 pub const GNOME_DEFAULT_BUTTON_LAYOUT: &str = "appmenu:close";
 
 impl ControlSide {
-    /// Which side wins when buttons are present on one, on the other, or on
-    /// neither. Leading takes precedence: a desktop that puts anything on the
-    /// left is a left-handed desktop, and whatever it also parks on the right is
-    /// decoration we do not have to lead with.
+    /// Which side wins; leading takes precedence, and neither answers `None`.
     pub const fn from_button_sides(has_leading: bool, has_trailing: bool) -> Option<Self> {
         if has_leading {
             Some(Self::Leading)
@@ -81,15 +60,9 @@ impl ControlSide {
     /// Parses a GNOME-style `button-layout` string, e.g. GNOME's own
     /// `appmenu:close` or elementary's `close:maximize`.
     ///
-    /// gpui has this parser too, but it is compiled only on Linux and FreeBSD,
-    /// so the policy cannot call it and could not be tested through it. The two
-    /// rules that are easy to get wrong are reproduced here: a string with no
-    /// colon is entirely the *trailing* side, and a token that is not a window
-    /// button (`appmenu`, `icon`, `menu`, `spacer`) claims no side at all —
-    /// which is exactly why GNOME's default reads as trailing and not leading.
-    ///
-    /// `None` means the string named no window button, and the caller should
-    /// fall back to [`window_control_side`] rather than guess.
+    /// A string with no colon is entirely the *trailing* side, and a non-button
+    /// token (`appmenu`, `icon`, `menu`, `spacer`) claims no side. `None` means
+    /// no window button was named — fall back to [`window_control_side`].
     pub fn from_desktop_layout(layout: &str) -> Option<Self> {
         fn has_button(side: &str) -> bool {
             side.split(',')
@@ -102,13 +75,86 @@ impl ControlSide {
     }
 }
 
-/// macOS puts the traffic lights on the leading edge and Windows puts
-/// minimise/maximise/close on the trailing one; neither is configurable.
+/// The shape AppKit gives a window's own outer corner.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct WindowCorner {
+    /// Logical pixels.
+    pub radius: f32,
+    /// Whether the arc is the continuous squircle macOS 26 moved windows to,
+    /// rather than the plain circular quadrant of every release before it.
+    pub continuous: bool,
+}
+
+/// macOS 26 and later, measured on this product's own machine.
 ///
-/// Linux is whatever the desktop environment says, so this is only the fallback
-/// for when nothing has told us yet. It matches GNOME's shipped layout — see
-/// [`GNOME_DEFAULT_BUTTON_LAYOUT`] — because guessing leading on a GNOME session
-/// would stack our own buttons underneath the compositor's.
+/// 26.5, and NOT the sixteen `-[NSThemeFrame cornerRadius]` answers: the
+/// property and the shape AppKit actually draws disagree. This value was fitted
+/// against a System Settings window captured on the same 1x display. From rows
+/// 2 through 24 the half-coverage edge differs by at most 0.2 physical pixels.
+const TAHOE_WINDOW_RADIUS: f32 = 26.5;
+
+/// Big Sur through Sequoia. NOT measured here — see [`macos_window_corner`].
+const LEGACY_WINDOW_RADIUS: f32 = 10.0;
+
+/// The corner macOS gives a titled window, by release.
+///
+/// This is a table rather than a runtime question because every selector that
+/// answers it — `-[NSWindow _cornerRadius]`, `-[NSThemeFrame cornerRadius]` — is
+/// private on every release that has one. The macOS bridge intentionally uses
+/// `_setCornerRadius:` to apply this policy because no public API changes the
+/// WindowServer mask; that compatibility risk is documented in PLATFORM_GLASS.
+///
+/// The macOS 26 row is MEASURED, not guessed — and not from that selector
+/// either, which turned out to disagree with the shape AppKit draws. It is
+/// fitted to the drawn corner itself; see [`TAHOE_WINDOW_RADIUS`]. The older row
+/// cannot be measured from a machine running 26, so it stands on AppKit's
+/// long-standing value instead — and is what an unreadable version falls back
+/// to, because a radius that is too small leaves a sliver of square showing
+/// while one that is too large eats into the app.
+pub const fn macos_window_corner(version: Option<MacOsVersion>) -> WindowCorner {
+    if let Some(version) = version
+        && version.is_at_least(MacOsVersion::LIQUID_GLASS)
+    {
+        return WindowCorner {
+            radius: TAHOE_WINDOW_RADIUS,
+            continuous: true,
+        };
+    }
+
+    WindowCorner {
+        radius: LEGACY_WINDOW_RADIUS,
+        continuous: false,
+    }
+}
+
+/// Whether the app has to shape the window's corner itself on this host.
+///
+/// Only macOS, and only because gpui's own rounding never reaches the Metal
+/// layer there. Windows rounds server-side through DWM, and on Linux the corner
+/// is already [`DecorationMode::corner_radius`] under client-side decorations —
+/// neither wants a second one drawn over the top.
+pub const fn window_corner(host: HostOs, version: Option<MacOsVersion>) -> Option<WindowCorner> {
+    match host {
+        HostOs::MacOs => Some(macos_window_corner(version)),
+        HostOs::Windows | HostOs::Linux => None,
+    }
+}
+
+/// The corner this process applies to its windows, including the one-run tuning
+/// override. UI surfaces that must mirror the window can resolve this once when
+/// they are constructed instead of duplicating the platform table.
+pub fn current_window_corner() -> Option<WindowCorner> {
+    let mut corner = window_corner(HostOs::current(), crate::materials::macos_version())?;
+
+    if let Some(radius) = tuned_corner_radius(std::env::var(CORNER_RADIUS_VAR).ok().as_deref()) {
+        corner.radius = radius;
+    }
+
+    Some(corner)
+}
+
+/// macOS leads and Windows trails; neither is configurable. On Linux this is
+/// only the fallback until the desktop answers — see [`desktop_control_side`].
 pub const fn window_control_side(host: HostOs) -> ControlSide {
     match host {
         HostOs::MacOs => ControlSide::Leading,
@@ -125,21 +171,14 @@ pub enum DecorationMode {
     ClientSide,
 }
 
-/// Width of the invisible margin outside the visible window that has to stay
-/// grabbable for edge resizing under client-side decorations. GTK's own resize
-/// handle is about this wide; conventional rather than measured.
+/// Grab margin for edge resizing under client-side decorations; conventional.
 const CLIENT_SIDE_RESIZE_BORDER: f32 = 10.0;
 
-/// Corner radius the app paints under client-side decorations, matching
-/// libadwaita's window rounding. Conventional rather than measured.
+/// Matches libadwaita's window rounding; conventional rather than measured.
 const CLIENT_SIDE_CORNER_RADIUS: f32 = 12.0;
 
 impl DecorationMode {
-    /// Under client-side decorations the compositor draws nothing outside our
-    /// surface, so the resize border, the drop shadow and the rounded corners
-    /// are all ours to paint *and* to hit-test. Under server-side they are the
-    /// compositor's, and painting our own on top of them only produces a second
-    /// rounding inside the first.
+    /// Under CSD the resize border, shadow and corners are ours to paint and hit-test.
     pub const fn app_draws_window_frame(self) -> bool {
         matches!(self, Self::ClientSide)
     }
@@ -161,9 +200,8 @@ impl DecorationMode {
         }
     }
 
-    /// What gpui reports the window is actually configured as. `Decorations`
-    /// also carries the edge-tiling state, which only the corner painter cares
-    /// about and is deliberately dropped here.
+    /// What gpui reports the window is actually configured as; the edge-tiling
+    /// state `Decorations` also carries is dropped here.
     pub const fn from_gpui(decorations: gpui::Decorations) -> Self {
         match decorations {
             gpui::Decorations::Server => Self::ServerSide,
@@ -181,11 +219,8 @@ impl DecorationMode {
     }
 }
 
-/// macOS keeps the frame whatever we do to the titlebar: `appears_transparent`
-/// makes the strip see-through, it does not hand us the window border, and
-/// gpui's macOS backend never overrides `window_decorations`. Windows is the
-/// same. Linux is the only platform where the question is open, and there the
-/// compositor answers it — see [`effective_style`].
+/// What to ask gpui for. Only Linux can be handed the frame; macOS and Windows
+/// keep it whatever the titlebar does — see [`effective_style`].
 pub const fn requested_decorations(host: HostOs, style: ChromeStyle) -> DecorationMode {
     match host {
         HostOs::MacOs | HostOs::Windows => DecorationMode::ServerSide,
@@ -198,13 +233,8 @@ pub const fn requested_decorations(host: HostOs, style: ChromeStyle) -> Decorati
 
 /// The style actually in force once the platform has answered.
 ///
-/// Only Linux can disagree, and it disagrees in both directions. A compositor
-/// with no `xdg-decoration` support keeps drawing its own titlebar above our
-/// surface, so an app-drawn strip would leave the user looking at two. A GNOME
-/// Wayland session does the reverse and hands us client-side decorations whether
-/// we asked or not, so there is no system titlebar left to fall back to. On
-/// Linux the granted decoration mode *is* the style; the request only survives
-/// where it was never in question.
+/// Only Linux can disagree, and in both directions: there the granted decoration
+/// mode *is* the style, and the request survives only elsewhere.
 pub const fn effective_style(
     host: HostOs,
     requested: ChromeStyle,
@@ -221,10 +251,8 @@ pub const fn effective_style(
 
 /// Height of one platform's titlebar, in logical pixels.
 ///
-/// - macOS 28: the standard AppKit titlebar of a regular-size `.titled` window.
-/// - Windows 32: Microsoft's title bar guidance sizes the caption buttons
-///   46x32 dip, so the caption strip is 32 tall.
-/// - Linux 37: GNOME's Adwaita headerbar minimum height.
+/// macOS is the AppKit `.titled` height, Windows Microsoft's 32dip caption strip,
+/// Linux the Adwaita headerbar minimum.
 pub const fn titlebar_height(host: HostOs) -> f32 {
     match host {
         HostOs::MacOs => 28.0,
@@ -243,21 +271,15 @@ pub struct ControlLayout {
     pub side: ControlSide,
     pub button_width: f32,
     pub button_height: f32,
-    /// Gap between two adjacent buttons. Zero on Windows, where the caption
-    /// buttons are flush hit targets rather than separated glyphs.
+    /// Gap between two adjacent buttons. Zero on Windows, where they are flush.
     pub gap: f32,
-    /// Space between the window edge and the outermost button, applied at both
-    /// ends of the group so the strip does not look bolted to the frame.
+    /// Space between the window edge and the outermost button, at both ends.
     pub edge_padding: f32,
 }
 
 impl ControlLayout {
-    /// The macOS numbers are the stock traffic lights — 14x14 frames 6 apart,
-    /// the group starting 20 in from the leading edge — and the Linux ones are
-    /// Adwaita's round 24pt titlebuttons with headerbar padding. Both sets are
-    /// read off a standard window rather than taken from a published constant,
-    /// so treat them as conventional. The Windows 46x32 is Microsoft's own
-    /// documented caption-button size.
+    /// The macOS and Linux numbers are read off a standard window and are
+    /// conventional; the Windows 46x32 is Microsoft's documented caption size.
     pub const fn for_host(host: HostOs) -> Self {
         match host {
             HostOs::MacOs => Self {
@@ -286,10 +308,7 @@ impl ControlLayout {
 
     /// Room the controls need, measured from [`ControlLayout::side`].
     ///
-    /// It takes a count because Linux is where the count varies: GNOME ships
-    /// close alone and the user may add minimise and maximise, so a fixed
-    /// three-button budget would leave a hole in the middle of the strip. On
-    /// macOS and Windows the count is always [`FULL_CONTROL_SET`].
+    /// The count varies only on Linux; elsewhere it is [`FULL_CONTROL_SET`].
     pub fn reserved_inset(&self, buttons: usize) -> f32 {
         if buttons == 0 {
             return 0.0;
@@ -301,12 +320,9 @@ impl ControlLayout {
 
 /// Where the macOS traffic lights go inside a titlebar we drew ourselves.
 ///
-/// gpui's macOS backend treats the vertical value as *symmetric* padding: it
-/// resizes the AppKit titlebar container to `button height + 2 * padding` and
-/// then places the buttons at that offset. So the buttons are centred in a strip
-/// of a given height only when the padding is half of what is left over, and
-/// reusing a value picked for a 28pt bar in a taller one silently leaves them
-/// riding high.
+/// gpui treats the vertical value as *symmetric* padding and sizes the AppKit
+/// titlebar container to `button height + 2 * padding`, so a value picked for a
+/// shorter strip leaves the buttons riding high.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TrafficLightOrigin {
     /// Inset from the window's leading edge to the close button's frame.
@@ -336,14 +352,11 @@ impl TrafficLightOrigin {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct WindowChrome {
     pub style: ChromeStyle,
-    /// Under [`ChromeStyle::AppDrawn`] this is the row the shell lays out
-    /// itself. Under [`ChromeStyle::System`] it is the OS's own strip, which
-    /// sits above the client area and costs the shell's layout nothing.
+    /// The row the shell lays out itself when app-drawn; the OS's strip otherwise.
     pub titlebar_height: f32,
     pub controls: ControlLayout,
-    /// Whether the shell has to paint the buttons. False on macOS even with the
-    /// titlebar suppressed, because AppKit goes on drawing and hit-testing the
-    /// traffic lights over our content; painting our own there would double them.
+    /// Whether the shell has to paint the buttons. False on macOS even when the
+    /// titlebar is suppressed: AppKit still draws and hit-tests the traffic lights.
     pub controls_drawn_by_app: bool,
     /// Logical pixels at `controls.side` that app content must not enter. Zero
     /// under a system titlebar, where the buttons are not in our area at all.
@@ -388,9 +401,7 @@ impl WindowChrome {
         Self::resolve(host, ChromeStyle::preferred(host))
     }
 
-    /// Re-lays the strip at a different height, keeping the traffic lights
-    /// centred in it. A taller strip is the reason this exists: the rail's first
-    /// row sets the height, not the OS.
+    /// Re-lays the strip at a different height, keeping the traffic lights centred.
     pub fn with_titlebar_height(mut self, height: f32) -> Self {
         self.titlebar_height = height;
         if self.traffic_lights.is_some() {
@@ -425,9 +436,7 @@ pub struct GrantedChrome {
     /// `Window::set_traffic_light_position` does not exist elsewhere.
     pub traffic_lights: PlatformSupport,
     /// Whether the invisible resize margin was registered. Only reachable under
-    /// client-side decorations: gpui's macOS and Windows backends leave
-    /// `set_client_inset` at its empty default, so reporting Performed there
-    /// would be a lie.
+    /// client-side decorations; gpui's macOS and Windows backends no-op it.
     pub client_inset: PlatformSupport,
 }
 
@@ -439,11 +448,8 @@ impl GrantedChrome {
 
 /// The titlebar half of `gpui::WindowOptions`.
 ///
-/// `appears_transparent` is the macOS and Windows switch only. Linux's
-/// equivalent is `WindowOptions::window_decorations`, which takes
-/// [`DecorationMode::into_gpui`]. Both have to be set from the same
-/// [`WindowChrome`], or the two families of platform disagree about what was
-/// even asked for.
+/// Linux's equivalent switch is `WindowOptions::window_decorations`
+/// ([`DecorationMode::into_gpui`]); both must come from the same [`WindowChrome`].
 pub fn titlebar_options(chrome: &WindowChrome, title: &str) -> gpui::TitlebarOptions {
     gpui::TitlebarOptions {
         title: Some(title.into()),
@@ -458,13 +464,8 @@ fn traffic_light_point(origin: TrafficLightOrigin) -> gpui::Point<gpui::Pixels> 
 
 /// Applies `chrome` to an already-open window and reports what came back.
 ///
-/// The read-back is not a formality, and it is not uniformly trustworthy. On X11
-/// gpui downgrades a client-side request to server-side on the spot when no
-/// compositor is running, so the answer here is true immediately. On Wayland it
-/// is optimistic: the request is recorded as if granted, and the compositor only
-/// confirms or contradicts it on the next `configure`. A shell that stores this
-/// value and never looks again therefore paints a Wayland window wrong for as
-/// long as it lives — re-read with [`granted_decorations`] instead of caching.
+/// On Wayland the read-back is optimistic — the compositor only confirms on the
+/// next `configure` — so re-read with [`granted_decorations`] instead of caching.
 pub fn apply(window: &mut gpui::Window, chrome: &WindowChrome) -> GrantedChrome {
     window.request_decorations(chrome.decorations.into_gpui());
 
@@ -483,6 +484,61 @@ pub fn apply(window: &mut gpui::Window, chrome: &WindowChrome) -> GrantedChrome 
         traffic_lights,
         client_inset,
     }
+}
+
+/// Masks an already-open window to the corner its OS gives windows.
+///
+/// This exists because gpui does not: AppKit's rounding never reaches the one
+/// Metal layer the whole app renders into, so a gpui window is square-cornered
+/// on a desktop where every other window is not. Matching masks go on AppKit's
+/// actual `NSWindow` corner mask and gpui's Metal layer: the first shapes the
+/// WindowServer surface and its shadow, while the second clips the compositor
+/// surface inside it. AppKit resizes both with the window, so this is called
+/// once at open.
+///
+/// It shows only on a window that is not opaque, which is what
+/// [`crate::materials::preferred_window_material`] answers for. `Unsupported`
+/// means the corner stayed the square one it already was — never a broken
+/// window.
+pub fn round_window_corner(window: &gpui::Window) -> PlatformSupport {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(corner) = current_window_corner() else {
+            return PlatformSupport::Unsupported;
+        };
+
+        if let Some(radius) = tuned_corner_radius(std::env::var(CORNER_RADIUS_VAR).ok().as_deref())
+        {
+            tracing::info!(
+                target: "riseonly",
+                "{CORNER_RADIUS_VAR} overrides the window corner: {radius}pt"
+            );
+        }
+
+        crate::macos::window_corner::apply(window, corner)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        PlatformSupport::Unsupported
+    }
+}
+
+/// Overrides [`macos_window_corner`] for one run: `RISE_CORNER=27 cargo make dev`.
+///
+/// The radius has to match an OS shape that no public API reports, so the number
+/// in the table above was fitted from a captured window rather than read. This
+/// is how the next one gets fitted against a real screen instead of a capture:
+/// try a value, look at it beside a system window, keep the winner.
+pub const CORNER_RADIUS_VAR: &str = "RISE_CORNER";
+
+/// Parses that variable. Refuses anything that is not a plausible window
+/// radius, so a typo leaves the measured default in place instead of opening a
+/// window with no corners or with circular ones.
+pub fn tuned_corner_radius(raw: Option<&str>) -> Option<f32> {
+    let radius: f32 = raw?.trim().parse().ok()?;
+
+    (radius.is_finite() && (0.0..=64.0).contains(&radius)).then_some(radius)
 }
 
 /// What the window is configured as right now. Cheap; call it per frame rather
@@ -509,11 +565,8 @@ fn place_traffic_lights(window: &gpui::Window, chrome: &WindowChrome) -> Platfor
     }
 }
 
-/// Which window operations the platform actually offers.
-///
-/// An app-drawn titlebar that paints a maximise button on a platform that cannot
-/// maximise hands the user a dead control, and there is no way to know that
-/// without asking the open window.
+/// Which window operations the platform actually offers. Painting a control the
+/// platform cannot perform hands the user a dead button.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AvailableControls {
     pub minimize: bool,
@@ -534,11 +587,8 @@ pub fn available_controls(window: &gpui::Window) -> AvailableControls {
 
 /// The side the desktop environment puts its window buttons on.
 ///
-/// gpui answers this only on Linux, where it comes from the XDG settings portal;
-/// macOS and Windows answer `None` and fall through to [`window_control_side`].
-/// Until the portal replies gpui reports its own built-in default, which is all
-/// three buttons trailing — the same side as GNOME's, so a session that never
-/// answers still lands somewhere the user recognises.
+/// Answered only on Linux, from the XDG settings portal; elsewhere, and until the
+/// portal replies, this falls through to [`window_control_side`].
 pub fn desktop_control_side(app: &gpui::App, host: HostOs) -> ControlSide {
     app.button_layout()
         .and_then(|layout| {
@@ -551,10 +601,8 @@ pub fn desktop_control_side(app: &gpui::App, host: HostOs) -> ControlSide {
 
 /// Whether forwarding a titlebar double click does anything on this host.
 ///
-/// `Window::titlebar_double_click` is an empty default on gpui's `PlatformWindow`
-/// trait and only `gpui_macos` overrides it, so on Windows and Linux the call
-/// compiles, runs, and does nothing. Reporting success there would leave the
-/// gesture silently dead — the caller has to know to handle it itself.
+/// Only `gpui_macos` implements it; elsewhere the call compiles, runs and does
+/// nothing, so the caller has to handle the gesture itself.
 pub const fn forwards_titlebar_double_click(host: HostOs) -> PlatformSupport {
     match host {
         HostOs::MacOs => PlatformSupport::Performed,
@@ -564,11 +612,9 @@ pub const fn forwards_titlebar_double_click(host: HostOs) -> PlatformSupport {
 
 /// Forwards a double click on empty titlebar space to the OS.
 ///
-/// The gesture is a user preference rather than a fixed action — macOS reads
-/// `AppleActionOnDoubleClick`, which can be zoom, minimise or nothing — and gpui
-/// resolves it for us. Reports Unsupported under a system titlebar, where the OS
-/// has already acted on the click and forwarding it would act twice, and on the
-/// hosts where gpui has no implementation to forward to.
+/// The OS resolves it against the user's own preference. Reports Unsupported
+/// under a system titlebar, where the OS has already acted, and where gpui has
+/// no implementation to forward to.
 pub fn titlebar_double_click(window: &gpui::Window, chrome: &WindowChrome) -> PlatformSupport {
     if !chrome.style.app_handles_titlebar_double_click() {
         return PlatformSupport::Unsupported;
@@ -586,10 +632,88 @@ pub fn titlebar_double_click(window: &gpui::Window, chrome: &WindowChrome) -> Pl
 mod tests {
     use super::*;
 
-    /// gpui's `titlebar_double_click` is an empty default on the platform trait
-    /// and only `gpui_macos` overrides it. Claiming Performed on the other two
-    /// would be the exact failure this crate exists to prevent: a call that
-    /// compiles everywhere and quietly does nothing on two thirds of the targets.
+    /// The measured row. If this number ever moves, it moved because someone
+    /// re-measured a real window, not because it looked about right.
+    #[test]
+    fn macos_26_uses_the_measured_continuous_corner() {
+        let corner = macos_window_corner(Some(MacOsVersion::LIQUID_GLASS));
+
+        assert_eq!(corner.radius, 26.5);
+        assert!(corner.continuous);
+    }
+
+    #[test]
+    fn the_tuning_variable_replaces_the_measured_radius() {
+        assert_eq!(tuned_corner_radius(Some("22")), Some(22.0));
+        assert_eq!(tuned_corner_radius(Some(" 17.5 ")), Some(17.5));
+        assert_eq!(tuned_corner_radius(Some("0")), Some(0.0));
+    }
+
+    /// A typo must leave the measured default standing rather than open a window
+    /// with no corner at all or with one bigger than the titlebar.
+    #[test]
+    fn an_implausible_radius_is_refused_rather_than_applied() {
+        for raw in [
+            None,
+            Some(""),
+            Some("wide"),
+            Some("-4"),
+            Some("400"),
+            Some("NaN"),
+        ] {
+            assert_eq!(tuned_corner_radius(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn the_releases_before_it_keep_the_smaller_circular_corner() {
+        for version in [MacOsVersion::VIBRANCY, MacOsVersion::new(15, 6, 1)] {
+            let corner = macos_window_corner(Some(version));
+
+            assert_eq!(corner.radius, 10.0, "{version:?}");
+            assert!(!corner.continuous, "{version:?}");
+        }
+    }
+
+    /// Falling *down* to the older radius: too small only shows a sliver of
+    /// square, too large cuts a bite out of the app.
+    #[test]
+    fn an_unreadable_version_takes_the_smaller_corner_rather_than_the_larger() {
+        assert_eq!(
+            macos_window_corner(None),
+            macos_window_corner(Some(MacOsVersion::VIBRANCY))
+        );
+    }
+
+    #[test]
+    fn only_macos_asks_the_app_to_shape_the_window_corner() {
+        assert!(window_corner(HostOs::MacOs, Some(MacOsVersion::LIQUID_GLASS)).is_some());
+
+        for host in [HostOs::Windows, HostOs::Linux] {
+            assert!(
+                window_corner(host, None).is_none(),
+                "{host:?} rounds the window without us, and a second corner over \
+                 the top of the first is a notch"
+            );
+        }
+    }
+
+    /// The traffic lights sit inside the corner's bounding box, so a radius the
+    /// shell never learns could still put the close button on the curve.
+    #[test]
+    fn the_close_button_clears_the_corner_this_module_actually_holds() {
+        let corner = macos_window_corner(Some(MacOsVersion::LIQUID_GLASS));
+        let layout = ControlLayout::for_host(HostOs::MacOs);
+        let inset = layout.edge_padding;
+
+        let offset = (corner.radius - inset).max(0.0);
+        assert!(
+            offset * offset * 2.0 <= corner.radius * corner.radius,
+            "at a {}pt radius the button at {inset}pt would ride on the rounding",
+            corner.radius
+        );
+    }
+
     #[test]
     fn only_macos_can_hand_a_titlebar_double_click_back_to_the_os() {
         assert!(forwards_titlebar_double_click(HostOs::MacOs).is_supported());

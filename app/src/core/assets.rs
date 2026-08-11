@@ -3,16 +3,6 @@ use std::path::{Path, PathBuf};
 
 use gpui::{AssetSource, Result, SharedString};
 
-/// Everything under `assets/`, wherever this build put it.
-///
-/// The paths callers use are the ones the repository lays out —
-/// `fonts/Inter-Regular.ttf`, `icons/lucide/arrow-left.svg` — so a component
-/// never learns whether it is running from a bundle or from a checkout.
-///
-/// No `#[cfg(target_os)]`, deliberately: the candidate list is tried in order on
-/// every host, and the macOS bundle layout simply happens to be first. A `cfg`
-/// here would be the first one in `app/`, and the boundary check exists to keep
-/// that number at zero.
 pub struct RiseAssets {
     root: Option<PathBuf>,
 }
@@ -33,27 +23,34 @@ impl RiseAssets {
     }
 
     fn resolve(&self, path: &str) -> Option<PathBuf> {
-        // A path escaping the asset root is a bug in a caller, not a hostile
-        // input — but resolving it would still read an arbitrary file, so it is
-        // refused rather than normalised.
         if path.contains("..") || Path::new(path).is_absolute() {
             return None;
         }
         Some(self.root.as_ref()?.join(path))
     }
-}
 
-impl AssetSource for RiseAssets {
-    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+    fn read(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let Some(full) = self.resolve(path) else {
             return Ok(None);
         };
 
         match std::fs::read(&full) {
-            Ok(bytes) => Ok(Some(Cow::Owned(bytes))),
+            Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
+    }
+}
+
+impl AssetSource for RiseAssets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(plain) = rise_ui::IconUi::plain_path_for_filled(path) {
+            return Ok(self
+                .read(&plain)?
+                .map(|bytes| Cow::Owned(rise_ui::IconUi::fill_document(&bytes))));
+        }
+
+        Ok(self.read(path)?.map(Cow::Owned))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
@@ -74,9 +71,6 @@ impl AssetSource for RiseAssets {
     }
 }
 
-/// `assets/locales` is the marker rather than `assets` itself: a stray empty
-/// directory called `assets` beside the binary would otherwise win over the real
-/// one and every icon would silently resolve to nothing.
 fn locate_assets() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
@@ -146,6 +140,34 @@ mod tests {
                 .is_some()
         );
         assert!(assets.load("icons/flags/ru.svg").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_filled_icon_resolves_even_though_no_such_file_exists() {
+        let assets = repo_assets();
+        let path = "icons/lucide/heart.filled.svg";
+        assert!(
+            !assets.resolve(path).unwrap().is_file(),
+            "the point of this path is that nothing is on disk behind it"
+        );
+
+        let bytes = assets
+            .load(path)
+            .unwrap()
+            .expect("the plain document stands in for it");
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("fill=\"currentColor\""));
+    }
+
+    #[test]
+    fn a_filled_path_with_no_plain_document_is_still_none() {
+        let assets = repo_assets();
+        assert!(
+            assets
+                .load("icons/lucide/not-an-icon.filled.svg")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

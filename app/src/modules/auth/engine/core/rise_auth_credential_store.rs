@@ -6,14 +6,6 @@ use sha2::{Digest, Sha256};
 
 use crate::modules::auth::engine::rise_auth_engine_models::{PersistedAccount, StoredTokens};
 
-/// Where the account list and its credentials live.
-///
-/// Deliberately outside RiseEngine, and the reason is a chicken and egg: the
-/// engine's database is keyed by account, and this is what answers "which
-/// accounts are there" before any account is open. The reference splits it the
-/// same way — metadata in UserDefaults, secrets in the Keychain — and the split
-/// is the point: the file is readable without unlocking anything, and the tokens
-/// are not in it.
 pub struct AuthCredentialStore {
     registry_path: PathBuf,
 }
@@ -85,13 +77,7 @@ impl AuthCredentialStore {
         self.write(&registry)
     }
 
-    /// Rotates a pair only if the one on disk is still the one the caller
-    /// started from.
-    ///
-    /// This is the whole defence against a stale refresh: two refreshes can be
-    /// in flight for the same account, and the loser must not overwrite the
-    /// winner's newer pair with the one it was handed. `false` means "somebody
-    /// else already rotated" and is not an error.
+    // Compare-and-swap against concurrent refreshes: `false` means somebody else rotated first.
     pub fn rotate_if_matching(
         &self,
         user_id: &str,
@@ -141,11 +127,6 @@ impl AuthCredentialStore {
         self.write(&registry)
     }
 
-    /// A malformed or missing file reads as "no accounts" rather than failing.
-    ///
-    /// The alternative is an app that will not start because a JSON file got
-    /// truncated by a power cut, and the recovery from "no accounts" is signing
-    /// in again — which is the same recovery a hard failure would force anyway.
     fn registry(&self) -> Registry {
         std::fs::read(&self.registry_path)
             .ok()
@@ -153,11 +134,6 @@ impl AuthCredentialStore {
             .unwrap_or_default()
     }
 
-    /// Written through a temporary file and renamed.
-    ///
-    /// A half-written registry is the one failure that loses every account at
-    /// once, and truncating in place makes that the outcome of any crash during
-    /// the write.
     fn write(&self, registry: &Registry) -> Result<(), CredentialError> {
         if let Some(parent) = self.registry_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -172,11 +148,6 @@ impl AuthCredentialStore {
     }
 }
 
-/// The account id is hashed before it becomes a credential-store entry name.
-///
-/// The entry name is visible in Keychain Access, in `secret-tool search` and in
-/// Credential Manager, and a user id there is a piece of the account's identity
-/// sitting in a list anybody at the machine can read.
 fn secret_key(user_id: &str) -> SecretKey {
     let digest = Sha256::digest(user_id.as_bytes());
     let hex: String = digest

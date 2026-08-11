@@ -14,16 +14,38 @@ pub enum IconSize {
 
 /// An icon, addressed the way `riseonly-ios` addresses it.
 ///
-/// Call sites name an SF Symbol — `IconUi::render("bubble.left.and.bubble.right")` —
-/// exactly as the Swift they were ported from does, and this maps it to the
-/// Lucide asset the bundle actually carries. Keeping the key on the Apple side
-/// is what makes a ported screen diff cleanly against its reference; naming the
-/// Lucide icon at the call site would make every screen a second translation
-/// nobody can check.
+/// Call sites name an SF Symbol — `IconUi::render("bubble.left.and.bubble.right")`
+/// — and this maps it to the Lucide asset the bundle actually carries.
 pub struct IconUi;
 
 impl IconUi {
     pub const ASSET_PREFIX: &'static str = "icons/lucide/";
+
+    /// What a filled glyph is addressed as.
+    ///
+    /// Lucide is stroke-only, so this path has no file on disk: the asset source
+    /// synthesises it from the plain document.
+    pub const FILLED_SUFFIX: &'static str = ".filled.svg";
+    const PLAIN_SUFFIX: &'static str = ".svg";
+
+    /// A Lucide document with its interior painted.
+    pub fn fill_document(source: &[u8]) -> Vec<u8> {
+        const UNFILLED: &str = "fill=\"none\"";
+        const FILLED: &str = "fill=\"currentColor\"";
+
+        match std::str::from_utf8(source) {
+            Ok(text) if text.contains(UNFILLED) => text.replacen(UNFILLED, FILLED, 1).into_bytes(),
+            // Nothing to fill: an outline is a visible compromise, a blank square is not.
+            _ => source.to_vec(),
+        }
+    }
+
+    /// The plain document behind a synthesised filled path, or `None` when the
+    /// path is not one.
+    pub fn plain_path_for_filled(path: &str) -> Option<String> {
+        let stem = path.strip_suffix(Self::FILLED_SUFFIX)?;
+        Some(format!("{stem}{}", Self::PLAIN_SUFFIX))
+    }
 
     pub fn size(theme: &AppTheme, size: IconSize) -> Pixels {
         match size {
@@ -34,12 +56,8 @@ impl IconUi {
     }
 
     /// The Lucide name for an SF Symbol, or `None` when the table has never
-    /// heard of it.
-    ///
-    /// A miss is a porting mistake — the table covers every symbol the reference
-    /// uses — so it is worth distinguishing from an icon that legitimately has no
-    /// counterpart. The build fails on a name with no file, so a hit here always
-    /// has bytes behind it.
+    /// heard of it. The build fails on a name with no file, so a hit always has
+    /// bytes behind it.
     pub fn lucide_name(sf_symbol: &str) -> Option<&'static str> {
         SF_TO_LUCIDE
             .binary_search_by(|(name, _)| (*name).cmp(sf_symbol))
@@ -52,21 +70,60 @@ impl IconUi {
             .map(|lucide| SharedString::from(format!("{}{lucide}.svg", Self::ASSET_PREFIX)))
     }
 
+    pub fn filled_asset_path(sf_symbol: &str) -> Option<SharedString> {
+        Self::lucide_name(sf_symbol).map(|lucide| {
+            SharedString::from(format!(
+                "{}{lucide}{}",
+                Self::ASSET_PREFIX,
+                Self::FILLED_SUFFIX
+            ))
+        })
+    }
+
     /// Whether this symbol's Lucide match is a compromise rather than an
-    /// equivalent. Exposed so a storybook can mark them for a designer instead
-    /// of leaving the list in a JSON file nobody opens.
+    /// equivalent.
     pub fn is_approximate(sf_symbol: &str) -> bool {
         APPROXIMATE_SYMBOLS.binary_search(&sf_symbol).is_ok()
     }
 
     /// Renders `sf_symbol`, or nothing at all when it is not in the table.
-    ///
-    /// Nothing, rather than a placeholder glyph: a missing icon that draws a
-    /// question mark looks like a product decision in a screenshot, while a gap
-    /// looks like the bug it is.
     pub fn render(theme: &AppTheme, sf_symbol: &str, size: IconSize, color: Hsla) -> Option<Svg> {
         let path = Self::asset_path(sf_symbol)?;
         let side = Self::size(theme, size);
+
+        Some(svg().path(path).size(side).text_color(color))
+    }
+
+    /// The same glyph, filled or not, decided by a state rather than by a name:
+    /// `is_liked ? "heart.fill" : "heart"` ports as one symbol and a bool.
+    pub fn toggled(
+        theme: &AppTheme,
+        sf_symbol: &str,
+        size: IconSize,
+        color: Hsla,
+        is_filled: bool,
+    ) -> Option<Svg> {
+        let path = if is_filled {
+            Self::filled_asset_path(sf_symbol)?
+        } else {
+            Self::asset_path(sf_symbol)?
+        };
+
+        Some(
+            svg()
+                .path(path)
+                .size(Self::size(theme, size))
+                .text_color(color),
+        )
+    }
+
+    /// An icon at an explicit side length, which must already be density-scaled.
+    pub fn sized(sf_symbol: &str, side: Pixels, color: Hsla, is_filled: bool) -> Option<Svg> {
+        let path = if is_filled {
+            Self::filled_asset_path(sf_symbol)?
+        } else {
+            Self::asset_path(sf_symbol)?
+        };
 
         Some(svg().path(path).size(side).text_color(color))
     }
@@ -146,17 +203,7 @@ mod tests {
         }
     }
 
-    /// 228 is what `riseonly-ios` names across BOTH `systemName:` and
-    /// `systemImage:`. Counting only `systemName:` gives 171, and this table was
-    /// undercounted to exactly that once already. The extra key is `folder`,
-    /// which the desktop rail needs and the phone, having no rail, does not.
-    ///
-    /// Exclude `riseonly-ios/build/` when re-deriving the list. It is derived
-    /// data, so what it holds depends on when it was last built: a checkout with
-    /// third-party SwiftPM sources in it contributes symbols from someone else's
-    /// settings screens. It happens to hold none today, which is why there is no
-    /// second number here to compare against — the exclusion is a rule, not a
-    /// figure.
+    /// 228 = `systemName:` AND `systemImage:` (the first alone gives 171), excluding `riseonly-ios/build/`.
     #[test]
     fn the_table_covers_the_whole_reference_and_not_a_subset_of_it() {
         let used =
@@ -167,6 +214,79 @@ mod tests {
             "228 reference symbols plus folder; the table has {}",
             SF_TO_LUCIDE.len()
         );
+    }
+
+    #[test]
+    fn a_filled_icon_is_the_same_document_with_its_interior_painted() {
+        let source = std::fs::read(assets().join("icons/lucide/heart.svg")).unwrap();
+        let filled = IconUi::fill_document(&source);
+        let text = String::from_utf8(filled).unwrap();
+
+        assert!(text.contains("fill=\"currentColor\""));
+        assert!(
+            !text.contains("fill=\"none\""),
+            "an unfilled root leaves every path unpainted, so the icon would not change"
+        );
+        assert!(
+            text.contains("stroke=\"currentColor\""),
+            "the outline stays: a filled SF Symbol keeps its silhouette"
+        );
+    }
+
+    #[test]
+    fn a_document_with_nothing_to_fill_is_handed_back_rather_than_mangled() {
+        let untouched = b"<svg><path d=\"M0 0\"/></svg>";
+        assert_eq!(IconUi::fill_document(untouched), untouched.to_vec());
+        assert_eq!(IconUi::fill_document(&[0xFF, 0xFE]), vec![0xFF, 0xFE]);
+    }
+
+    #[test]
+    fn a_filled_path_names_the_plain_document_it_is_synthesised_from() {
+        let filled = IconUi::filled_asset_path("heart.fill").unwrap();
+        assert_eq!(filled.as_ref(), "icons/lucide/heart.filled.svg");
+        assert_eq!(
+            IconUi::plain_path_for_filled(filled.as_ref()),
+            Some("icons/lucide/heart.svg".to_owned())
+        );
+        assert!(assets().join("icons/lucide/heart.svg").is_file());
+    }
+
+    #[test]
+    fn a_plain_path_is_not_mistaken_for_a_synthesised_one() {
+        assert_eq!(
+            IconUi::plain_path_for_filled("icons/lucide/heart.svg"),
+            None
+        );
+        assert_eq!(IconUi::plain_path_for_filled("fonts/Inter-Bold.ttf"), None);
+    }
+
+    #[test]
+    fn the_states_a_post_and_a_comment_toggle_between_all_have_a_glyph() {
+        for symbol in [
+            "heart",
+            "heart.fill",
+            "bookmark",
+            "bookmark.fill",
+            "bubble.right",
+            "arrow.2.squarepath",
+            "hand.thumbsdown",
+            "hand.thumbsdown.fill",
+            "arrowshape.turn.up.left",
+            "checkmark.seal.fill",
+            "ellipsis",
+            "eye.slash",
+        ] {
+            let plain = IconUi::asset_path(symbol)
+                .unwrap_or_else(|| panic!("{symbol} has no Lucide mapping"));
+            assert!(
+                assets().join(plain.as_ref()).is_file(),
+                "{symbol} maps to {plain}, which has no file"
+            );
+
+            let filled = IconUi::filled_asset_path(symbol).unwrap();
+            let plain_again = IconUi::plain_path_for_filled(filled.as_ref()).unwrap();
+            assert_eq!(plain_again, plain.as_ref());
+        }
     }
 
     #[test]

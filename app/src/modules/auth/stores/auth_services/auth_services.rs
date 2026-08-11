@@ -13,12 +13,6 @@ pub struct AuthServicesStore {
 }
 
 impl AuthServicesStore {
-    /// Mirrors the domain's snapshot onto the GPUI thread.
-    ///
-    /// GPUI does not track dependencies, so the notify is explicit — and the
-    /// presentation refuses to republish an unchanged snapshot, which is what
-    /// stops a socket heartbeat from invalidating the shell every twenty-five
-    /// seconds.
     pub fn new(domain: Arc<RiseAuthDomain>, cx: &mut Context<Self>) -> Self {
         let mut updates = domain.subscribe();
 
@@ -75,15 +69,53 @@ impl AuthServicesStore {
         self.snapshot.flow.error_key
     }
 
+    #[cfg(test)]
+    pub fn force_error(&mut self, key: Option<&'static str>, cx: &mut Context<Self>) {
+        self.patch_flow(|flow| flow.error_key = key, cx);
+    }
+
+    #[cfg(test)]
+    pub fn force_telegram_redirect(&mut self, bot: &str, cx: &mut Context<Self>) {
+        let bot = bot.to_owned();
+        self.patch_flow(
+            move |flow| {
+                flow.telegram_redirect_active = true;
+                flow.bot_username = Some(bot);
+                flow.phone_payload = Some("77075803272".to_owned());
+            },
+            cx,
+        );
+    }
+
+    #[cfg(test)]
+    fn patch_flow(&mut self, edit: impl FnOnce(&mut AuthFlowState), cx: &mut Context<Self>) {
+        let mut snapshot = (*self.snapshot).clone();
+        edit(&mut snapshot.flow);
+        self.snapshot = Arc::new(snapshot);
+        cx.notify();
+    }
+
     pub fn tag_availability(&self) -> TagAvailability {
         self.snapshot.flow.tag_availability
     }
 
-    /// The `https://t.me/<bot>?start=<phone>` the Telegram step opens.
-    ///
-    /// Composed here rather than in the view: the payload is digits only and the
-    /// bot name comes from the server, so a view that assembled it would be one
-    /// place the link could be built wrongly.
+    #[cfg(test)]
+    pub fn force_tag_availability(
+        &mut self,
+        availability: TagAvailability,
+        cx: &mut Context<Self>,
+    ) {
+        self.patch_flow(|flow| flow.tag_availability = availability, cx);
+    }
+
+    pub fn tag_problem_key(&self) -> Option<&'static str> {
+        self.snapshot.flow.tag_problem_key
+    }
+
+    pub fn tag_is_confirmed_free(&self) -> bool {
+        self.tag_availability() == TagAvailability::Available
+    }
+
     pub fn telegram_link(&self) -> Option<String> {
         let flow = &self.snapshot.flow;
         if !flow.telegram_redirect_active {
@@ -102,8 +134,6 @@ impl AuthServicesStore {
     }
 }
 
-/// The process-wide handle. Auth is not account-scoped: it is what decides which
-/// account there is, so it outlives every `AccountScope`.
 pub struct AuthStores {
     pub services: Entity<AuthServicesStore>,
     pub actions: super::super::auth_actions::AuthActionsStore,

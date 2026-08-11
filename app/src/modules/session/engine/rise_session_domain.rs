@@ -7,12 +7,6 @@ use super::rise_session_repository::{
     LiveSessionTransport, SessionCommand, SessionRepository, SessionSnapshot, SessionTransport,
 };
 
-/// The composition root for session-service.
-///
-/// Account-scoped in principle — the list belongs to one account — but built on
-/// the process-wide socket, exactly as every other domain will be: the socket
-/// outlives an account and the DATA does not, which is why the domain is dropped
-/// on a switch and the transport is not.
 pub struct RiseSessionDomain {
     repository: SessionRepository,
 }

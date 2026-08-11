@@ -43,12 +43,8 @@ impl UploadProgress {
 
 /// Coalesces byte-level progress into updates a UI can afford to observe.
 ///
-/// A 40 MB upload in 64 KB slabs produces roughly 640 callbacks. Publishing all
-/// of them would invalidate a view tree hundreds of times for a bar that moves a
-/// fraction of a pixel, which is exactly the "hundreds of microscopic state
-/// changes" the performance contract forbids. An update is published only when
-/// the fraction moves past a threshold, or when the state itself changes —
-/// state transitions are never coalesced away.
+/// An update is published only once the fraction moves past `epsilon`; a state
+/// change or a terminal state is never coalesced away.
 pub struct UploadProgressHub {
     epsilon: f32,
     published: Mutex<HashMap<u64, UploadProgress>>,
@@ -205,8 +201,7 @@ mod tests {
             }
         }
 
-        // One slab is 1/640 of the file, so the 1% threshold is crossed every
-        // seventh slab: about 92 updates rather than 640.
+        // One slab is 1/640 of the file: ~92 updates instead of 640.
         let slabs = total.div_ceil(slab);
         assert!(slabs > 600, "the test should exercise many slabs");
         assert!(

@@ -2,26 +2,14 @@ use std::path::{Path, PathBuf};
 
 use rise_navigation::RootRoute;
 
-/// How many files one drop may carry.
-///
-/// A drag from a file manager can hold a whole folder's worth. The cap is what
-/// stops a slip of the wrist from queueing four hundred uploads, and it is
-/// enforced by refusing the drop rather than by silently taking the first ten:
-/// a user who dropped forty files and got ten would not know which ten.
 pub const MAX_FILES: usize = 20;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum DropRejection {
-    /// The OS handed over a drag with nothing in it.
     Empty,
-    /// Nothing on screen here takes files.
     NoAcceptor,
-    /// A directory, a bundle, or anything else that is not a single file.
     NotAFile(PathBuf),
-    TooMany {
-        offered: usize,
-        limit: usize,
-    },
+    TooMany { offered: usize, limit: usize },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -36,11 +24,6 @@ pub enum DropOutcome {
     Rejected(DropRejection),
 }
 
-/// Decides what a drop onto the window means, given what is on screen.
-///
-/// `is_file` is passed in rather than read from the filesystem, because a policy
-/// that stats a path is a policy that cannot be tested and that touches the disk
-/// on the frame path. The shell hands it `Path::is_file`.
 pub fn evaluate(
     paths: &[PathBuf],
     target: Option<&RootRoute>,

@@ -16,12 +16,9 @@ pub const APPLICATION: &str = "Riseonly";
 
 /// Every directory the app writes to, resolved once.
 ///
-/// The one rule that is not obvious: the data directory must sit outside any
-/// folder the user's cloud service syncs. Two machines syncing one SQLite file
-/// corrupt it, and the reference achieves the same thing on iOS by marking the
-/// directory excluded from backup. `data_local_dir` is the per-OS answer —
-/// Application Support on macOS, LOCALAPPDATA on Windows (not the roaming
-/// profile), XDG_DATA_HOME on Linux.
+/// The data directory must sit outside any folder the user's cloud service syncs —
+/// two machines syncing one SQLite file corrupt it. Hence `data_local_dir`
+/// (LOCALAPPDATA on Windows, not the roaming profile).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AppPaths {
     data: PathBuf,
@@ -60,8 +57,7 @@ impl AppPaths {
         &self.logs
     }
 
-    /// Per-account storage lives under a hashed directory so an account id never
-    /// becomes a path component.
+    /// Takes a hash, not an id: an account id must never become a path component.
     pub fn account_dir(&self, account_hash: &str) -> PathBuf {
         self.data.join("accounts").join(account_hash)
     }
@@ -73,9 +69,7 @@ impl AppPaths {
         Ok(())
     }
 
-    /// Names of directories a cloud service is known to sync. A data directory
-    /// inside one of these will eventually corrupt the database on a second
-    /// machine, so it is worth refusing loudly rather than debugging later.
+    /// Whether any path component names a directory a cloud service is known to sync.
     pub fn is_cloud_synced(path: &Path) -> bool {
         const SYNCED: [&str; 6] = [
             "Dropbox",

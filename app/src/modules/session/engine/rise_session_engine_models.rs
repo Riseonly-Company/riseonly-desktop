@@ -1,6 +1,5 @@
 use super::core::rise_session_rpc::UserSessionDto;
 
-/// One row of the active-sessions list.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SessionEntry {
     pub id: String,
@@ -8,8 +7,6 @@ pub struct SessionEntry {
     pub location: String,
     pub ip: String,
     pub is_current: bool,
-    /// Epoch milliseconds. Parsed once, here, so no row formats a date string on
-    /// the frame path.
     pub last_active_ms: i64,
     pub first_active_ms: Option<i64>,
 }
@@ -23,9 +20,6 @@ impl SessionEntry {
 
         Self {
             id: dto.id.clone(),
-            // A session with no device string is a real row that still has to be
-            // endable, so it gets the reference's placeholder rather than being
-            // dropped from the list.
             device: if device.is_empty() {
                 "Unknown device".to_owned()
             } else {
@@ -50,13 +44,6 @@ fn trimmed(value: Option<&str>) -> String {
     value.unwrap_or_default().trim().to_owned()
 }
 
-/// ISO-8601 to epoch milliseconds, without a date library.
-///
-/// The backend writes `2024-03-01T12:34:56.789Z` and sometimes drops the
-/// fraction or the zone. Only the ordering matters to this list — rows are
-/// sorted by it and the UI renders a relative string — so a hand-rolled parse of
-/// the fixed prefix is enough, and it fails to `None` rather than to a wrong
-/// instant.
 pub fn parse_timestamp(raw: Option<&str>) -> Option<i64> {
     let text = raw?.trim();
     if text.len() < 19 {
@@ -91,8 +78,6 @@ pub fn parse_timestamp(raw: Option<&str>) -> Option<i64> {
     )
 }
 
-/// Howard Hinnant's civil-from-days, which is the standard branch-free form and
-/// is correct for every proleptic Gregorian date rather than only for a window.
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -102,11 +87,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// Current session first, then the rest most-recently-active first.
-///
-/// The tie breaks on the id so the list cannot reorder itself between two
-/// renders, which is the same rule the account switcher uses and for the same
-/// reason.
 pub fn normalize(mut rows: Vec<SessionEntry>) -> Vec<SessionEntry> {
     rows.sort_by(|left, right| {
         right
@@ -149,8 +129,6 @@ mod tests {
 
     #[test]
     fn a_leap_day_and_a_century_boundary_are_not_off_by_one() {
-        // 2000 is a leap year, 1900 is not — the two cases a naive
-        // days-since-epoch loop gets wrong.
         assert_eq!(
             parse_timestamp(Some("2000-02-29T00:00:00Z")),
             Some(951_782_400_000)

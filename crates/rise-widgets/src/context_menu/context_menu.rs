@@ -12,11 +12,9 @@ use crate::context_menu::context_menu_item::{
 use crate::glass_panel::GlassPanel;
 use crate::overlay::OverlayAnchor;
 
-/// The key context the bindings below are scoped to, so an open menu never eats
-/// a shortcut the shell owns and a closed one never sees one at all.
+/// Scoped so an open menu never eats a shortcut the shell owns.
 pub const KEY_CONTEXT: &str = "ContextMenu";
 
-/// The reference marks a checked row with `Image(systemName: "checkmark")`.
 const CHECKMARK: &str = "checkmark";
 
 actions!(
@@ -35,8 +33,7 @@ struct KeyBindingsInstalled;
 
 impl Global for KeyBindingsInstalled {}
 
-/// Idempotent, and safe to call from anywhere. [`ContextMenuState::new`] calls
-/// it, so a menu works in an app that never heard of it.
+/// Idempotent, and already called by [`ContextMenuState::new`].
 pub fn install_key_bindings(cx: &mut App) {
     if cx.has_global::<KeyBindingsInstalled>() {
         return;
@@ -54,12 +51,7 @@ pub fn install_key_bindings(cx: &mut App) {
     ]);
 }
 
-/// What leaves a menu.
-///
-/// An id rather than a callback stored in the item: a menu that carries closures
-/// is a value that cannot be compared, cannot be asserted on and cannot be sent
-/// anywhere. The id is the reference's `key`, so the handler on the other side
-/// is the same match the phone runs.
+/// What leaves a menu: the item's stable id, never a callback the item carried.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ContextMenuEvent {
     Activated(SharedString),
@@ -111,8 +103,7 @@ impl ContextMenuState {
         cx.notify();
     }
 
-    /// The item the reference draws a checkmark beside — `ContextMenuUi`'s
-    /// `selected`, matched against the item's stable id.
+    /// The item that draws a checkmark, matched against the item's stable id.
     pub fn set_selected(&mut self, selected: Option<SharedString>, cx: &mut Context<Self>) {
         if self.selected == selected {
             return;
@@ -153,13 +144,9 @@ impl ContextMenuState {
         window.focus(&self.focus_handle, cx);
     }
 
-    /// The size this menu ASKS for, to hand to [`crate::overlay::place`].
-    ///
-    /// An ask, not a measurement. The real width is whatever the label runs need
-    /// between `menu_min_width` and `menu_max_width`, and nothing can report it
-    /// before layout — so placement works from the widest the menu could be, and
-    /// `place` clamping to the viewport is what keeps the answer honest in a
-    /// window narrower than the ask.
+    /// The size this menu asks for, to hand to [`crate::overlay::place`]. An ask,
+    /// not a measurement: it is the widest the menu could be, since nothing can
+    /// report the real width before layout.
     pub fn asked_size(&self, theme: &AppTheme) -> Size<Pixels> {
         let padding = theme.spacing._200 * 2.0;
         let gaps = theme.spacing._100 * self.entries.len().saturating_sub(1) as f32;
@@ -217,8 +204,7 @@ impl ContextMenuState {
         Some(id)
     }
 
-    /// Dismissal is an event too: the menu never decides whether it is on
-    /// screen, so the thing that opened it is the thing that takes it away.
+    /// Dismissal is an event too: whatever opened the menu is what removes it.
     pub fn close(&mut self, cx: &mut Context<Self>) {
         cx.emit(ContextMenuEvent::Dismissed);
     }
@@ -292,8 +278,8 @@ impl ContextMenuState {
         let label = theme.typography.body_strong();
 
         let mut row = div()
-            // The item's stable id, never the loop index: a menu that reorders
-            // would otherwise hand one row's element state to another.
+            // The item's stable id, never the loop index: a reorder would swap
+            // two rows' element state.
             .id(ElementId::Name(item.id.clone()))
             .flex()
             .items_center()
@@ -701,8 +687,7 @@ mod tests {
         );
     }
 
-    /// `menu_max_width` is what a menu ASKS for. A 400pt window is narrower than
-    /// the ask at every density, and the menu still has to land inside it.
+    /// A 400pt window is narrower than `menu_max_width` at every density.
     #[test]
     fn a_menu_at_the_width_it_asks_for_still_fits_a_narrow_window() {
         for density in [Density::COMPACT, Density::NORMAL, Density::COMFORTABLE] {

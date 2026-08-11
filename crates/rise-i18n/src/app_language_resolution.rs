@@ -1,14 +1,8 @@
-//! Language tag handling, mirroring `backend/common/src/i18n/mod.rs`.
-//!
-//! The client and the server must agree on what a tag means: the server decides
-//! which language a push is written in, the client decides which language the
-//! screen behind it is in, and a disagreement shows up as a notification in one
-//! language opening a screen in another.
+//! Language tag handling; must stay in agreement with `backend/common/src/i18n/mod.rs`.
 
 use crate::app_language_catalog::{ALL, AppLanguage, BASE_LANGUAGE, alias_target, language};
 
-/// The languages most accounts actually pick, in the order a picker should
-/// offer them. Everything else follows, sorted by its own native name.
+/// The languages a picker offers first; everything else follows, sorted by native name.
 pub static POPULAR_CODES: &[&str] = &[
     "en", "ru", "es", "pt-BR", "de", "fr", "it", "tr", "ar", "hi", "zh-Hans", "ja", "ko", "id",
     "uk", "kk",
@@ -16,12 +10,7 @@ pub static POPULAR_CODES: &[&str] = &[
 
 impl AppLanguage {
     /// Region subtag of the language's own formatting locale (`pt_BR` -> `BR`,
-    /// `zh_Hant_TW` -> `TW`), derived rather than kept in a second table.
-    ///
-    /// The reference turns this into an emoji flag with regional-indicator
-    /// arithmetic. That is deliberately not ported: those code points do not
-    /// render on Linux or Windows, so the flag stays an asset the UI layer
-    /// picks by region code.
+    /// `zh_Hant_TW` -> `TW`).
     pub fn region_code(&self) -> Option<&'static str> {
         let candidate = self.locale_identifier.rsplit('_').next()?;
         let is_region =
@@ -30,14 +19,7 @@ impl AppLanguage {
     }
 }
 
-/// Popular first, then the rest by native name.
-///
-/// The reference sorts the tail with a locale-aware comparison; there is no
-/// collator in this crate and pulling ICU in for a settings list is not worth
-/// it, so the tail is ordered by a case-insensitive Unicode comparison. Order
-/// inside the tail may differ from iOS for languages whose scripts collate
-/// differently; the popular head, which is what the picker shows first, does
-/// not.
+/// [`POPULAR_CODES`] first, then the rest by a case-insensitive native-name comparison.
 pub fn ordered_for_display() -> Vec<&'static AppLanguage> {
     let rank = |code: &str| POPULAR_CODES.iter().position(|popular| *popular == code);
 
@@ -54,8 +36,7 @@ pub fn ordered_for_display() -> Vec<&'static AppLanguage> {
     out
 }
 
-/// Rewrite a BCP-47-ish tag into catalogue casing: language lowercase, script
-/// title case, region uppercase. `zh_hans_cn` becomes `zh-Hans-CN`.
+/// Catalogue casing: language lowercase, script title case, region uppercase.
 fn canonical_case(tag: &str) -> String {
     tag.split('-')
         .enumerate()
@@ -76,10 +57,9 @@ fn canonical_case(tag: &str) -> String {
 
 /// Map any system-supplied language tag onto a shipped catalogue code.
 ///
-/// Handles POSIX underscores (`ru_RU`), deprecated ISO codes (`iw`, `in`),
-/// script and region variants (`zh-TW` -> `zh-Hant`, `pt-PT` -> `pt`) and
-/// progressive truncation (`de-AT-1996` -> `de`). Returns `None` when nothing
-/// in the tag maps to a language the app actually ships.
+/// POSIX underscores (`ru_RU`), deprecated ISO codes (`iw`, `in`), script and
+/// region variants (`zh-TW` -> `zh-Hant`) and progressive truncation
+/// (`de-AT-1996` -> `de`). `None` when nothing in the tag maps to a shipped language.
 pub fn normalize(raw: &str) -> Option<&'static str> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.chars().count() > 35 {
@@ -121,11 +101,8 @@ pub fn lookup_chain(code: &str) -> Vec<&'static str> {
     chain
 }
 
-/// The host's preferred languages, narrowed to what the app ships, in the order
-/// the OS reports them.
-///
-/// The raw list is supplied by the caller: reading it is an OS call and belongs
-/// to `rise-platform`, not here.
+/// The caller-supplied preferred languages, narrowed to what the app ships and
+/// deduplicated, in the order the OS reported them.
 pub fn device_preferences<S: AsRef<str>>(raw: &[S]) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
     for preferred in raw {
@@ -139,9 +116,8 @@ pub fn device_preferences<S: AsRef<str>>(raw: &[S]) -> Vec<&'static str> {
     out
 }
 
-/// Full resolution chain, mirroring the server's: explicit choice, then the
-/// device's own order, then the region's primary language, then the app base
-/// language.
+/// Explicit choice, then the device's own order, then the region's primary
+/// language, then [`BASE_LANGUAGE`].
 pub fn resolve<D: AsRef<str>, R: AsRef<str>>(
     explicit: Option<&str>,
     device_preferences: &[D],

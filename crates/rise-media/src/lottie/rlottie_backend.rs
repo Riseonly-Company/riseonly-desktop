@@ -1,27 +1,12 @@
-//! The only file that knows rlottie exists.
+//! The only file that knows rlottie exists, behind the `rlottie` feature.
 //!
-//! Behind the `rlottie` feature, so the whole sticker system — policy, cache,
-//! tick, atlas, pool — builds and is tested on a machine with no vendored C++
-//! at all. That is the same shape as `ffmpeg_backend.rs`, for the same reason:
-//! a decision that is always compiled is a decision that is always tested.
-//!
-//! WHAT IS DELIBERATELY NOT PASSED
-//!
-//! `resource_path` is empty. rlottie resolves an animation's external asset
-//! references against it, so an empty path means a sticker cannot name a file
-//! on this machine. Embedded base64 assets still work — they go through the stb
-//! image module compiled into the library — and those are the only ones the
-//! product serves. A sticker is a thing strangers send you; giving it a
-//! filesystem root would be a decision, and this is the decision.
+//! `resource_path` is passed empty, so an animation can never reference a file
+//! on this machine; only embedded base64 assets resolve.
 
 use std::ffi::{CString, c_char, c_void};
 
 use super::sequence::LottieRasterizer;
 
-// The C API from inc/rlottie_capi.h. Only what is used: the render-tree,
-// property-override and async-render entry points are not bound, because
-// nothing here needs them and every bound symbol is one more thing to keep
-// correct across a version bump.
 unsafe extern "C" {
     fn lottie_animation_from_data(
         data: *const c_char,
@@ -49,12 +34,9 @@ unsafe extern "C" {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RlottieError {
-    /// The payload contains a NUL byte, so it cannot be handed to a C API that
-    /// takes a `const char *` — the C side would see a truncated document and
-    /// parse whatever prefix it got.
+    /// The payload has an interior NUL and cannot be passed to a `const char *`.
     NotNulTerminatable,
-    /// rlottie returned no animation. Malformed JSON, or a document it will not
-    /// accept.
+    /// rlottie returned no animation: malformed, or a document it will not accept.
     Rejected,
     /// Parsed, but the animation has no drawable size.
     ZeroSized,
@@ -62,31 +44,26 @@ pub enum RlottieError {
 
 /// One rlottie animation handle.
 ///
-/// Not `Sync`: rlottie keeps per-render state on the handle. `FrameSequence`
-/// owns exactly one of these behind a lock, which is where the exclusion lives.
+/// Not `Sync`: rlottie keeps per-render state on the handle, so a caller must
+/// hold it exclusively.
 pub struct RlottieRasterizer {
     animation: *mut c_void,
     frame_count: usize,
     frame_rate: f64,
 }
 
-// SAFETY: the handle is owned exclusively by this value and every call through
-// it takes &mut self, so it is never used from two threads at once. It is moved
-// between threads (created on a loader thread, used on raster workers), which
-// is what Send is.
+// SAFETY: the handle is owned exclusively by this value and every call through it takes &mut self, so it is never used from two threads at once.
 unsafe impl Send for RlottieRasterizer {}
 
 impl RlottieRasterizer {
-    /// `json` must already have been through `container::to_animation_json`.
-    /// Nothing else may call this: that function is the validation boundary,
-    /// and this is a C++ parser on the other side of it.
+    /// `json` must already have been through `container::to_animation_json`:
+    /// that function is the validation boundary in front of this C++ parser.
     pub fn open(json: &[u8], cache_key: &str) -> Result<Self, RlottieError> {
         let json = CString::new(json).map_err(|_| RlottieError::NotNulTerminatable)?;
         let key = CString::new(cache_key).map_err(|_| RlottieError::NotNulTerminatable)?;
         let resource_path = CString::new("").expect("an empty string has no interior NUL");
 
-        // SAFETY: all three pointers are valid, NUL-terminated, and outlive the
-        // call. rlottie copies what it needs.
+        // SAFETY: all three pointers are valid, NUL-terminated, and outlive the call.
         let animation = unsafe {
             lottie_animation_from_data(json.as_ptr(), key.as_ptr(), resource_path.as_ptr())
         };
@@ -124,8 +101,7 @@ impl RlottieRasterizer {
 
 impl Drop for RlottieRasterizer {
     fn drop(&mut self) {
-        // SAFETY: constructed non-null, destroyed exactly once, and no render
-        // can be in flight because rendering takes &mut self.
+        // SAFETY: constructed non-null, destroyed exactly once, and no render can be in flight because rendering takes &mut self.
         unsafe { lottie_animation_destroy(self.animation) };
     }
 }
@@ -143,10 +119,7 @@ impl LottieRasterizer for RlottieRasterizer {
         let dimension = dimension as usize;
         debug_assert_eq!(out.len(), dimension * dimension);
 
-        // SAFETY: `out` is exactly dimension × dimension u32s, which is what
-        // the width, height and stride below describe, and it is four-byte
-        // aligned because it is a [u32]. Passing a byte buffer here is the
-        // alignment bug this signature exists to make impossible.
+        // SAFETY: `out` is exactly dimension × dimension u32s, matching the width, height and stride below, and a [u32] is four-byte aligned.
         unsafe {
             lottie_animation_render(
                 self.animation,
@@ -165,9 +138,6 @@ mod tests {
     use super::super::container;
     use super::*;
 
-    /// A square that is opaque red for the whole animation. Small enough to
-    /// read, real enough that rlottie has to parse shapes, transforms and a
-    /// timeline to produce anything at all.
     const RED_SQUARE: &str = r#"{
         "v":"5.5.7","fr":60,"ip":0,"op":60,"w":100,"h":100,"nm":"square","ddd":0,
         "assets":[],

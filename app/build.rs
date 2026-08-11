@@ -1,6 +1,4 @@
 fn main() {
-    // RISE_ENV is read through option_env! at compile time, so cargo must be
-    // told to rebuild when it changes. Without this, switching environments
-    // silently reuses the previous build.
+    // RISE_ENV is read via option_env! at compile time, so a change must force a rebuild.
     println!("cargo:rerun-if-env-changed=RISE_ENV");
 }

@@ -1,18 +1,8 @@
 //! What a downloaded file actually is, and whether we can play it.
 //!
 //! Identified from the bytes, never from the filename or the server's
-//! Content-Type. That is the reference's rule — `MusicPlayerState` sniffs the
-//! first sixteen bytes and overrides the MIME type before handing the file to
-//! AVFoundation — and it exists because the extension on a user upload is
-//! whatever the uploader typed.
-//!
-//! THE ONE GAP, STATED RATHER THAN HIDDEN
-//!
-//! `file-service/src/upload_policy.rs` accepts Opus and AMR. Neither has a
-//! pure-Rust decoder, and the whole point of the pure-Rust audio stack is that
-//! the music player carries no FFmpeg licensing burden. So they are recognised
-//! and refused BY NAME. A player that silently produces sixty seconds of
-//! silence is worse than one that says it cannot open the file.
+//! Content-Type. Opus and AMR are recognised and refused by name: neither has
+//! a pure-Rust decoder.
 
 /// The wrapper the bytes are in. Not the codec: an MP4 holds AAC or ALAC, an
 /// Ogg holds Vorbis or Opus, and only the demuxer knows which.
@@ -20,8 +10,7 @@
 pub enum Container {
     /// Bare MPEG audio, with or without an ID3 header.
     Mp3,
-    /// `.m4a`, `.mp4`, `.aac` in an ISO base media container. What
-    /// `file-service`'s audio extraction job produces (`-c:a aac`).
+    /// `.m4a`, `.mp4`, `.aac` in an ISO base media container.
     IsoMp4,
     Flac,
     Ogg,
@@ -31,7 +20,7 @@ pub enum Container {
 }
 
 impl Container {
-    /// The MIME the reference overrides the response header with.
+    /// The MIME type the response header is overridden with.
     pub const fn mime(self) -> &'static str {
         match self {
             Self::Mp3 => "audio/mpeg",
@@ -44,8 +33,7 @@ impl Container {
         }
     }
 
-    /// The extension the cached file is stored under. Never the one the
-    /// uploader supplied.
+    /// The extension the cached file is stored under, never the uploader's.
     pub const fn extension(self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
@@ -58,8 +46,7 @@ impl Container {
         }
     }
 
-    /// Whether end-padding has to be trimmed by us rather than by the decoder.
-    /// See `gapless.rs`.
+    /// Whether end-padding must be trimmed by us, not the decoder (`gapless.rs`).
     pub const fn needs_our_gapless_trim(self) -> bool {
         matches!(self, Self::IsoMp4)
     }
@@ -82,10 +69,7 @@ pub enum AudioCodec {
 /// Why a recognised codec will not play.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Unsupported {
-    /// symphonia has no decoder for it, and adding one means either a C
-    /// library (libopus) or routing audio through the LGPL FFmpeg — which
-    /// would put an FFmpeg dependency on the critical path of the music
-    /// player, the one place this project explicitly did not want it.
+    /// symphonia has no decoder, and adding one means a C library or LGPL FFmpeg.
     NoPureRustDecoder,
 }
 
@@ -121,14 +105,10 @@ impl AudioCodec {
     }
 }
 
-/// Bytes needed to identify anything here. The reference reads sixteen.
+/// Bytes needed to identify anything here.
 pub const SNIFF_BYTES: usize = 16;
 
 /// Identify a container from its first bytes.
-///
-/// Ported from `MusicPlayerState.audioFormatLabel(from:)`, with CAF and AMR
-/// added because `upload_policy.rs` accepts them and a file that arrives is a
-/// file that has to be identified, whether or not it can then be played.
 pub fn sniff(head: &[u8]) -> Option<Container> {
     if head.starts_with(b"ID3") {
         return Some(Container::Mp3);
@@ -158,11 +138,8 @@ pub fn sniff(head: &[u8]) -> Option<Container> {
     None
 }
 
-/// Whether a file is plausibly audio at all.
-///
-/// The reference has this check because a failed download can leave an HTML
-/// error page in the cache under a `.mp3` name, and handing that to the player
-/// produces an error nobody can read.
+/// Whether a file is plausibly audio at all — a failed download can leave an
+/// HTML error page in the cache under a `.mp3` name.
 pub fn is_probably_audio(head: &[u8]) -> bool {
     sniff(head).is_some()
 }
@@ -228,8 +205,7 @@ mod tests {
 
     #[test]
     fn everything_the_music_catalogue_serves_is_decodable() {
-        // music-service stores originals as mp3 and the extraction job writes
-        // AAC in MP4; both have to play or the product has no music.
+        // The catalogue is mp3 originals plus AAC-in-MP4 from the extraction job.
         assert!(AudioCodec::Mp3.is_decodable());
         assert!(AudioCodec::AacLc.is_decodable());
     }

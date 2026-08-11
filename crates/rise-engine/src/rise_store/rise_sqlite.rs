@@ -20,9 +20,7 @@ pub enum StoreOpenError {
     Cipher(#[from] CipherError),
 }
 
-// Greenfield: the reference migrated v1 through v4, we create v4 directly.
-// The table shapes are copied from the reference so a database stays readable
-// by either implementation.
+// Table shapes match the iOS store, so a database stays readable by either build.
 const SCHEMA: &str = r#"
 CREATE TABLE metadata (
     key TEXT PRIMARY KEY NOT NULL,
@@ -199,10 +197,8 @@ pub fn user_version(connection: &Connection) -> Result<i64, StoreOpenError> {
     Ok(connection.query_row("PRAGMA user_version", [], |row| row.get(0))?)
 }
 
-/// Creates the schema on a fresh database, or verifies an existing one.
-///
-/// The key verifier is what turns "wrong key" into a clean error at open time
-/// instead of a confusing decryption failure on the first read of real data.
+/// Creates the schema on a fresh database, or verifies an existing one. A key
+/// verifier row makes a wrong key [`StoreOpenError::WrongKey`] here, not later.
 pub fn prepare(
     connection: &Connection,
     account_id: &str,

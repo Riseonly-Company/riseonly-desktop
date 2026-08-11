@@ -1,0 +1,78 @@
+================================================================================
+rise-widgets/country_menu — the phone field's country picker
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt                  workspace rules, boundaries, commands
+  ../../CONTEXT.txt                        what rise-widgets owns
+  ../overlay/CONTEXT.txt                   why nothing may leave the window
+  ../../../rise-ui/src/phone_input/        the catalogue and the number itself
+
+WHAT THIS DIRECTORY OWNS
+
+  country_menu_filter.rs  `matches()` and `step_highlight()`. Pure functions
+                          over a slice of PhoneCountry: no theme, no window, no
+                          App. Everything that decides WHICH countries and WHICH
+                          row lives here, so it can be asserted without a
+                          rendered frame.
+
+  country_menu.rs         `CountryMenu`, the entity. Query field, windowed list,
+                          key bindings, and two events out.
+
+WHY IT IS NOT A ContextMenu
+
+  ContextMenuState takes `ContextMenuItem { label_key: &'static str }` — i18n
+  keys, resolved at render. Country names are runtime strings off a data file,
+  and there are 236 of them with a query field above. Those are different
+  components that happen to look alike, not one component with a flag.
+
+IT IS A DIALOG, AND IT IS OPAQUE. BOTH DELIBERATELY.
+
+  A dropdown anchored under the control has to fit in the room left below it,
+  and in the auth window that is a few hundred pixels. It either got clipped or,
+  snapping to stay on screen, slid UP over the title and the artwork — the
+  version the user described as covering everything. Centred over a scrim it
+  covers the page on purpose, is legible at any window size, and dismisses the
+  way every dialog does. iOS gives the country its own screen for the same
+  reason; a desktop dialog is that screen at desktop scale.
+
+  It does NOT use `GlassPanel`. A native material is an AppKit view BELOW the
+  Metal layer, so everything gpui has already drawn stays on top of it. That is
+  fine for a rail or a sidebar, which have nothing drawn behind them, and it is
+  fatal for anything that floats OVER page content: the page shows straight
+  through the list and both become unreadable. This panel paints its own opaque
+  background, and that is not a workaround — it is the only correct choice for
+  this class of surface.
+
+THE THREE THINGS THAT DECIDE CORRECTNESS
+
+  It is WINDOWED. `uniform_list`, not 236 divs. The list is rebuilt on every
+  keystroke in the query field, so building the whole world each time would put
+  that work in the typing path — PERFORMANCE_GUIDE.md section 6.3.
+
+  It OCCLUDES. gpui reports every hitbox under the pointer unless one blocks it.
+  Without `.occlude()` a click on a row ALSO lands on the dismiss scrim behind
+  the picker, and the picker closes before the row's own click is delivered.
+
+  Row ids are the REGION, never the row number. The list reorders on every
+  keystroke; an index id hands one country's element state to another.
+
+WHAT IT MUST NEVER DO
+
+  Decide whether it is on screen. It emits `Chose` and `Dismissed`; the field
+  that opened it owns the lifetime. Same contract as ContextMenuState.
+
+  Hold a reference into a static catalogue. `visible` is indices into the vector
+  it was GIVEN, so a caller that swapped the catalogue underneath would reindex
+  the list silently. It owns its copy.
+
+  Wrap the highlight. Down at the last row stays at the last row: in a list this
+  long, jumping from Kazakhstan to Afghanistan reads as the list having gone
+  somewhere random, and the scroll follows it there.
+
+WHERE THE FLAGS COME FROM
+
+  `FlagUi::render`, which on macOS draws the regional-indicator pair out of
+  Apple Color Emoji. It is NOT the shipped SVG on this platform: gpui paints an
+  `svg()` as a one-colour mask, so the artwork tier is a silhouette. See
+  rise-ui/src/flag_ui and rise-platform/src/text_capabilities.rs.

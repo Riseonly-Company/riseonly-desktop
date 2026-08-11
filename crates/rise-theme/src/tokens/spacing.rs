@@ -2,17 +2,8 @@ use gpui::Pixels;
 
 use crate::tokens::density::Density;
 
-/// Padding and gap values.
-///
-/// The reference has no spacing scale — it writes `.padding(16)` and
-/// `spacing: 12` inline, thousands of times. Counting those call sites gives a
-/// real distribution rather than an invented one, and these nine values are the
-/// ones it actually reaches for, in order of how often: 16, 12, 14, 10, 8, 6, 4,
-/// 24, 2.
-///
-/// The alternative was to let components keep using gpui's `.gap_4()` and
-/// `.px_5()`, which look like tokens and are not: they bake Tailwind's 4-pixel
-/// scale, which is neither the reference's numbers nor scalable by density.
+/// Padding and gap values. Use these rather than gpui's `.gap_4()`/`.px_5()`,
+/// which bake Tailwind's scale and do not follow density.
 #[derive(Clone, Copy, PartialEq, Debug)]
 #[allow(non_snake_case)]
 pub struct SpacingValues {

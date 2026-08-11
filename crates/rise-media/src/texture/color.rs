@@ -1,9 +1,6 @@
-//! The matrix and offset the conversion shader is fed.
-//!
-//! Getting these wrong does not crash and does not drop a frame; it produces
-//! video that is subtly wrong — grey blacks, or oversaturated skin tones — which
-//! survives review because it still looks like video. That is why the values
-//! are derived here, in one place, with the arithmetic tested.
+//! The matrix and offset the conversion shader is fed. Wrong values do not
+//! crash or drop a frame; they produce subtly wrong video — grey blacks, or
+//! oversaturated skin tones.
 
 use super::frame::FrameFormat;
 
@@ -56,8 +53,7 @@ pub struct ConversionParams {
 
 impl ConversionParams {
     pub fn new(format: FrameFormat, space: ColorSpace, range: ColorRange) -> Self {
-        // Kr and Kb, the luma weights each standard assigns to red and blue.
-        // Kg follows from them summing to one.
+        // Kr and Kb are the standard's luma weights; Kg follows from them summing to one.
         let (kr, kb) = match space {
             ColorSpace::Bt601 => (0.299_f32, 0.114_f32),
             ColorSpace::Bt709 => (0.2126_f32, 0.0722_f32),
@@ -65,8 +61,7 @@ impl ConversionParams {
         };
         let kg = 1.0 - kr - kb;
 
-        // Limited range packs 0..1 of signal into 219/255 of luma and 224/255
-        // of chroma, so the matrix is scaled up to undo that compression.
+        // Limited range packs the signal into 219/255 luma and 224/255 chroma; the scale undoes it.
         let (luma_scale, chroma_scale, offset) = match range {
             ColorRange::Limited => (255.0 / 219.0, 255.0 / 224.0, [16.0 / 255.0, 0.5, 0.5]),
             ColorRange::Full => (1.0, 1.0, [0.0, 0.5, 0.5]),
@@ -88,9 +83,6 @@ impl ConversionParams {
         }
     }
 
-    /// Apply the conversion on the CPU. The shader is the production path;
-    /// this exists so the matrix arithmetic can be asserted against known
-    /// colours instead of eyeballed on screen.
     #[cfg(test)]
     fn apply(&self, yuv: [f32; 3]) -> [f32; 3] {
         let centred = [
@@ -116,12 +108,8 @@ pub struct ColorDescription {
 }
 
 impl ColorDescription {
-    /// A stream that carries no colour metadata at all.
-    ///
-    /// Guessing BT.709 limited is the standard behaviour and matches what
-    /// VideoToolbox, libavcodec and every browser assume; guessing anything
-    /// else makes untagged content look wrong in exactly the way users blame
-    /// on the app rather than the file.
+    /// Fill in whatever a stream did not declare. Untagged content resolves to
+    /// BT.709 limited, matching VideoToolbox, libavcodec and browsers.
     pub fn resolve(space: Option<ColorSpace>, range: Option<ColorRange>, height: u32) -> Self {
         Self {
             space: space.unwrap_or(if height <= 576 {

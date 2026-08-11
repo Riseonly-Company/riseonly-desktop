@@ -11,13 +11,8 @@ pub struct BundledFace {
 }
 
 /// The faces the product ships, and the only weights `rise_theme::Typography`
-/// will ever hand to gpui.
-///
-/// Six because the reference draws with six: light, regular, medium, semibold,
-/// bold and heavy. A face missing here does not fail loudly at the call site —
-/// the text stack quietly substitutes another family, and the substitute differs
-/// per OS, which is the exact failure shipping our own font is meant to remove.
-/// That is why [`load_bundled_fonts`] returns what is missing instead of `()`.
+/// will ever hand to gpui. A missing face fails silently — the text stack
+/// substitutes a different family per OS — so check [`load_bundled_fonts`].
 pub const BUNDLED_FACES: [BundledFace; 6] = [
     BundledFace {
         asset_path: "fonts/Inter-Light.ttf",
@@ -51,19 +46,11 @@ pub struct FontLoad {
     pub loaded: Vec<&'static str>,
     pub missing: Vec<&'static str>,
     /// Set when the text system refused the bytes it was given — a truncated
-    /// download or a file the bundler replaced with an HTML error page reaches
-    /// here rather than being discovered as blank text three screens later.
+    /// download, or a file the bundler replaced with an HTML error page.
     pub rejected: Option<String>,
-    /// Weights that came back as another weight's face.
-    ///
-    /// The one failure in this file that a unit test cannot see. Inter's Light,
-    /// Medium, SemiBold and Black each carry their own legacy family name (see
-    /// `crates/rise-ui/tests/font_faces.rs`), so a text stack that reads the
-    /// legacy record rather than the typographic one answers Regular for weight
-    /// 500 and 600 — without an error, and with no way to notice except by
-    /// looking at the pixels. This is measured against the real text system at
-    /// startup, because `TestAppContext` installs a no-op one that answers
-    /// `FontId(1)` to every query including a family that does not exist.
+    /// Weights that came back as another weight's face. Only measurable against
+    /// a real text system: `TestAppContext` installs a no-op one that resolves
+    /// every query, including families that do not exist.
     pub misresolved: Vec<(FontWeight, FontWeight)>,
 }
 
@@ -74,10 +61,8 @@ impl FontLoad {
 }
 
 /// Reads every bundled face through the app's asset source and hands them to the
-/// text system.
-///
-/// Runs once at startup, before the first window: adding a font later does not
-/// re-shape text that has already been laid out.
+/// text system. Call once at startup, before the first window: adding a font
+/// later does not re-shape text already laid out.
 pub fn load_bundled_fonts(cx: &App) -> FontLoad {
     let source = cx.asset_source().clone();
     let mut report = FontLoad::default();
@@ -106,12 +91,8 @@ pub fn load_bundled_fonts(cx: &App) -> FontLoad {
     report
 }
 
-/// Which shipped weights the text system answered with somebody else's face.
-///
-/// Compared by `FontId` rather than by reading the weight back: an id is minted
-/// per distinct resolved face, so two weights sharing one id is exactly the
-/// collapse this looks for, and it does not depend on the order the weights are
-/// asked for.
+/// Compared by `FontId`: one id is minted per distinct resolved face, so two
+/// weights sharing an id is exactly the collapse this looks for.
 fn collapsed_weights(cx: &App) -> Vec<(FontWeight, FontWeight)> {
     let resolved: Vec<_> = SHIPPED_WEIGHTS
         .iter()
@@ -191,9 +172,7 @@ mod tests {
                 bytes.len()
             );
 
-            // The sfnt tag. A TrueType outline file starts 0x00010000, an
-            // Apple-flavoured one "true", a CFF/OpenType one "OTTO". Anything
-            // else is not something the text system will accept.
+            // The sfnt tag the text system will accept.
             let tag = &bytes[..4];
             assert!(
                 tag == [0x00, 0x01, 0x00, 0x00] || tag == b"true" || tag == b"OTTO",

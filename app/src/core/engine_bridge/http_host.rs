@@ -1,11 +1,6 @@
 use futures::future::BoxFuture;
 use rise_engine::{HttpCall, HttpReply, HttpSender, HttpVerb, WireError};
 
-/// The reqwest half of the engine's HTTP seam.
-///
-/// It knows the base URL and nothing else: no descriptor, no retry, no auth
-/// policy. Those belong to the module's engine/, and keeping them out of here is
-/// what makes this replaceable and the callers testable.
 pub struct ReqwestHttpSender {
     client: reqwest::Client,
     base_url: String,

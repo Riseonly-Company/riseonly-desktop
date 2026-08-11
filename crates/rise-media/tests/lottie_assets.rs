@@ -1,15 +1,7 @@
-//! The animations this product actually ships, through the rasteriser that
-//! actually ships.
+//! The animations this product ships, through the rasteriser that ships.
 //!
-//! A unit test can prove the timing arithmetic; only this can prove that
-//! `hello.json` is a document rlottie will draw. The two failure modes it
-//! exists for are both silent: rlottie returns an EMPTY frame rather than an
-//! error when an animation uses a feature it does not implement, and a file
-//! that never made it into `assets/` renders as a hole with no message.
-//!
-//! Skipped rather than failed when the feature is off or the assets are absent,
-//! for the same reason the rest of the suite is: a checkout without the vendored
-//! rlottie is still a checkout whose logic should be testable.
+//! Both failure modes are silent: rlottie returns an empty frame rather than an
+//! error for a feature it does not implement, and a missing file draws a hole.
 
 #![cfg(feature = "rlottie")]
 
@@ -32,7 +24,7 @@ const SHIPPED: &[&str] = &[
     "cool_emoji",
     "shield",
     "party",
-    // The sign-in / sign-up wizard, one per step plus the three tag states.
+    // The sign-in / sign-up wizard, one per step plus the tag states.
     "red_panda/hello",
     "red_panda/quite",
     "red_panda/greetings",
@@ -88,8 +80,7 @@ fn a_whole_animation_fits_the_budget_the_screen_gives_it() {
         return;
     }
 
-    // What one on-screen animation may hold. Only one plays at a time on the
-    // onboarding and the wizard, so this is the ceiling for the feature.
+    // Only one animation plays at a time, so this is the feature's ceiling.
     const BUDGET: u64 = 64 * 1024 * 1024;
 
     for name in SHIPPED {
@@ -115,9 +106,7 @@ fn the_presentation_stride_actually_drops_frames_on_a_high_rate_source() {
         return;
     }
 
-    // Not an assertion about a particular file — it is a check that the policy
-    // is reachable at all. A stride stuck at 1 means every animation pays full
-    // source rate, which is the regression this catches.
+    // A stride stuck at 1 means every animation pays full source rate.
     let strided = SHIPPED
         .iter()
         .filter_map(|name| open(name))

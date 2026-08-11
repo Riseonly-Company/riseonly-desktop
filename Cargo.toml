@@ -16,6 +16,7 @@ rise-engine = { path = "crates/rise-engine" }
 rise-platform = { path = "crates/rise-platform" }
 rise-theme = { path = "crates/rise-theme" }
 rise-ui = { path = "crates/rise-ui" }
+rise-validate = { path = "crates/rise-validate" }
 rise-widgets = { path = "crates/rise-widgets" }
 rise-media = { path = "crates/rise-media" }
 rise-navigation = { path = "crates/rise-navigation" }
@@ -49,6 +50,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 smallvec = "1"
 fs4 = "0.13"
 base64 = "0.22"
+
+# Only to read the NSView out of a `gpui::Window`. Must stay semver-compatible
+# with what gpui resolves, or `HasWindowHandle` is a different trait and the
+# call does not exist.
+raw-window-handle = "0.6"
 
 # Native seams for Phase 3. Versions match what this gpui rev already resolves,
 # so the tray does not drag a second copy of the objc2 or windows families in.

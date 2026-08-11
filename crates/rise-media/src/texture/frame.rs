@@ -1,17 +1,10 @@
 //! Frame geometry: the pixel formats a hardware decoder actually hands back,
-//! and the plane arithmetic needed to describe them to a GPU.
-//!
-//! This module is pure. It knows no OS and no graphics API, which is what lets
-//! the Linux and Windows import paths be exercised on a Mac: the stride and
-//! plane maths is the part that is easy to get wrong, and it is entirely here.
+//! and the plane arithmetic needed to describe them to a GPU. Pure — no OS and
+//! no graphics API.
 
 use rise_platform::HostOs;
 
-/// The pixel layout of a decoded frame.
-///
-/// This is deliberately the *decoder's* vocabulary, not the display's. A
-/// hardware decoder returns biplanar YUV; converting it to RGBA on the CPU
-/// before it reaches the GPU is exactly the path this crate exists to avoid.
+/// The pixel layout of a decoded frame, in the *decoder's* vocabulary.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FrameFormat {
     /// 8-bit biplanar YUV 4:2:0. What VideoToolbox, D3D11VA and VAAPI all
@@ -51,9 +44,6 @@ impl FrameFormat {
     }
 
     /// Whether a shader is required to make this displayable.
-    ///
-    /// The answer being "yes" for every video format is the whole reason
-    /// `nv12_to_rgb.wgsl` exists.
     pub const fn needs_color_conversion(self) -> bool {
         self.is_yuv()
     }
@@ -74,9 +64,7 @@ pub struct PlaneLayout {
     pub width: u32,
     pub height: u32,
     /// Bytes per row, including any padding the decoder added. Never assume
-    /// this equals `width * bytes_per_sample`: hardware decoders align rows to
-    /// 16, 64 or 256 bytes depending on the device, and reading the frame as
-    /// if it were tightly packed produces the classic diagonal-shear image.
+    /// this equals `width * bytes_per_sample`.
     pub stride: u32,
     pub bytes_per_sample: u32,
     pub offset: u64,
@@ -114,11 +102,8 @@ pub enum GeometryError {
     },
 }
 
-/// The largest frame accepted from a decoder.
-///
-/// 8K is above anything the product serves, and the cap exists so a corrupt or
-/// hostile container cannot ask for a multi-gigabyte allocation before a single
-/// byte of pixel data has been validated.
+/// The largest frame accepted from a decoder, so a corrupt or hostile container
+/// cannot ask for a multi-gigabyte allocation.
 pub const MAX_DIMENSION: u32 = 8192;
 
 /// A validated description of one decoded frame.
@@ -215,8 +200,7 @@ impl FrameGeometry {
         let luma = format.bytes_per_luma_sample();
 
         Ok(match format {
-            // Chroma is one interleaved sample pair per 2x2 luma block, so it
-            // is half the height but the SAME byte width as luma.
+            // Interleaved UV is half the height but the SAME byte width as luma.
             FrameFormat::Nv12 | FrameFormat::P010 => {
                 vec![(width, height, luma), (width / 2, height / 2, luma * 2)]
             }
@@ -245,35 +229,23 @@ impl FrameGeometry {
         &self.planes
     }
 
-    /// Total bytes one frame of this geometry occupies.
-    ///
-    /// This is the number the memory ceiling is asserted against, so it counts
-    /// padding: a decoder aligning 1080 rows to 256 bytes costs real memory
-    /// that a width-times-height estimate does not see.
+    /// Total bytes one frame of this geometry occupies, stride padding included.
     pub fn byte_len(&self) -> u64 {
         self.planes.iter().map(PlaneLayout::byte_len).sum()
     }
 
-    /// Whether this geometry can back a persistent texture that later frames
-    /// are written into, or whether the stream must reallocate.
-    ///
-    /// A resolution switch mid-stream (adaptive bitrate does this) invalidates
-    /// the texture; a stride change alone does not, as long as it still fits.
+    /// Whether this geometry can keep the stream's existing texture. A
+    /// resolution switch invalidates it; a stride change alone does not.
     pub fn can_reuse_texture_of(&self, other: &Self) -> bool {
         self.format == other.format && self.width == other.width && self.height == other.height
     }
 }
 
 /// The row alignment a host's graphics API demands when a CPU-side buffer is
-/// copied into a texture.
-///
-/// Only relevant on the fallback path. It is here rather than in the import
-/// code because it is a per-OS *decision*, and decisions belong where all three
-/// arms can be tested on one machine.
+/// copied into a texture. Only relevant on the fallback path.
 pub const fn copy_row_alignment(host: HostOs) -> u32 {
     match host {
-        // wgpu's COPY_BYTES_PER_ROW_ALIGNMENT, which both the Vulkan and DX12
-        // backends inherit.
+        // wgpu's COPY_BYTES_PER_ROW_ALIGNMENT.
         HostOs::Linux | HostOs::Windows => 256,
         // Metal's buffer-to-texture copies want 64 on Apple silicon.
         HostOs::MacOs => 64,

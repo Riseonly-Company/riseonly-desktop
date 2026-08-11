@@ -60,9 +60,8 @@ impl ViewId {
 
 /// Byte-sortable ordering key for a row inside a materialized view.
 ///
-/// Opaque on purpose: the server decides ordering, and comparing raw bytes lets
-/// a page merge without the client re-deriving a sort. Never build one from a
-/// float or a formatted timestamp.
+/// Opaque: the server decides ordering and pages merge by raw byte comparison.
+/// Never build one from a float or a formatted timestamp.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct PositionKey(Vec<u8>);
 
@@ -72,8 +71,7 @@ impl PositionKey {
         (!bytes.is_empty()).then_some(Self(bytes))
     }
 
-    // Biased into unsigned space so negative ordinals still sort before positive
-    // ones under a plain byte comparison.
+    // Biased into unsigned space so negative ordinals still sort first bytewise.
     pub fn from_ordinal(ordinal: i64) -> Self {
         let biased = (ordinal as i128 - i64::MIN as i128) as u64;
         Self(biased.to_be_bytes().to_vec())
@@ -114,8 +112,7 @@ impl LoadState {
     }
 }
 
-/// Where a value came from, recorded so the debugger can prove a cache hit did
-/// not touch the network.
+/// Where a value came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CacheSource {
     Memory,

@@ -1,26 +1,15 @@
 //! "Show in Finder", "Show in Explorer", "Show in File Manager", and handing a
 //! path to whatever program the system opens it with.
 //!
-//! gpui implements `reveal_path` and `open_with_system` on all three backends,
-//! so the binding at the bottom of this file is two calls. Everything above it
-//! is the policy that keeps those two calls from misbehaving, and none of it is
-//! hypothetical:
+//! The binding is two gpui calls; everything above it is the policy that keeps
+//! them from misbehaving:
 //!
-//! - A path that is not there must never reach `reveal_path`. gpui's Linux
-//!   fallback opens `path.parent()`, which for a relative path is the empty
-//!   string and drops the user in their home directory; the Windows fallback
-//!   opens the parent folder with nothing selected when
-//!   `SHOpenFolderAndSelectItems` answers `ERROR_FILE_NOT_FOUND`. Either one
-//!   reads as a bug in this app rather than as a file that has been deleted.
+//! - A path that is not there must never reach `reveal_path`: gpui's fallbacks
+//!   silently open the home or parent directory instead.
 //! - Revealing a directory is not revealing a file. `reveal_path` selects its
-//!   argument *inside its parent*, which for a directory opens the window one
-//!   level above the one the user asked for.
-//! - `open_with_system` is `open` / `ShellExecute` / `xdg-open`. Pointed at a
-//!   downloaded binary it starts that binary, so a caller has to say out loud
-//!   that it means to.
-//!
-//! Only the macOS binding has ever run. The decisions for all three hosts are
-//! pure functions of `HostOs` and are exercised by the tests below.
+//!   argument *inside its parent*.
+//! - `open_with_system` pointed at a downloaded binary starts that binary, so a
+//!   caller has to say out loud that it means to.
 
 use std::path::{Path, PathBuf};
 
@@ -41,8 +30,8 @@ pub enum RevealError {
     WouldExecute(PathBuf),
 }
 
-/// What the filesystem says about a path, as a value, so the policy below can be
-/// tested for all three hosts without touching a disk.
+/// What the filesystem says about a path, as a value, so the policy below can
+/// be tested for all three hosts without touching a disk.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PathKind {
     Missing,
@@ -76,11 +65,8 @@ pub enum OpenRisk {
     Executes,
 }
 
-/// A caller cannot open something that runs without passing `Granted`.
-///
-/// This does not make the operation safe — it makes it deliberate. No call site
-/// can launch a downloaded binary while believing it opened a document, because
-/// the type will not let it stay silent on the question.
+/// A caller cannot open something that runs without passing `Granted`. That
+/// does not make the operation safe — it makes it deliberate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ExecutableConsent {
     #[default]
@@ -90,11 +76,8 @@ pub enum ExecutableConsent {
 }
 
 /// A user-visible string this crate owns: the catalogue key, plus the English
-/// the app falls back to until `rise-i18n` carries that key.
-///
-/// The key travels with its default so no UI layer is ever handed bare English
-/// to hardcode. `desktop_` namespaces the desktop-only additions away from the
-/// keys inherited from the iOS catalogue.
+/// the app falls back to until `rise-i18n` carries that key. `desktop_`
+/// namespaces these away from the keys inherited from the iOS catalogue.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct UiText {
     pub key: &'static str,
@@ -102,9 +85,8 @@ pub struct UiText {
 }
 
 /// Each host gets its own key rather than one key with a substituted name: the
-/// three strings name three different products, and a translator handed a single
-/// "Show in {file manager}" has no way to decline the substitution in languages
-/// that inflect around it.
+/// three strings name three different products, and languages that inflect
+/// around the name cannot decline the substitution.
 pub const fn reveal_label(host: HostOs) -> UiText {
     match host {
         HostOs::MacOs => UiText {
@@ -128,13 +110,9 @@ pub const EXECUTABLE_WARNING: UiText = UiText {
     english: "This file runs a program when opened. Open it anyway?",
 };
 
-/// Whether the path is anchored to a root *on `host`*.
-///
-/// `Path::is_absolute` answers for the platform this binary was compiled for,
-/// not for `host`: on a Mac it calls `C:\Users\u\a.txt` relative, and on Windows
-/// it calls `/home/u` relative. A seam that asked `Path` directly would make a
-/// different decision depending on where it ran, which is the thing this crate
-/// exists to prevent.
+/// Whether the path is anchored to a root *on `host`*. `Path::is_absolute`
+/// answers for the platform this binary was compiled for, so on a Mac it calls
+/// `C:\Users\u\a.txt` relative.
 pub fn is_rooted(host: HostOs, path: &Path) -> bool {
     let text = path.to_string_lossy();
 
@@ -154,10 +132,8 @@ pub fn is_rooted(host: HostOs, path: &Path) -> bool {
 }
 
 /// Whether the path's extension is one the host starts rather than displays.
-///
-/// Extensions only, deliberately: this is the half of the question answerable
-/// from a name alone, which is what a menu needs when it decides whether to warn
-/// before anything has been stat'd.
+/// Extensions only: this is the half of the question answerable from a name
+/// alone, which is what a menu needs before anything has been stat'd.
 pub fn extension_executes(host: HostOs, path: &Path) -> bool {
     let text = path.to_string_lossy();
     let Some(extension) = extension_of(host, &text) else {
@@ -169,13 +145,9 @@ pub fn extension_executes(host: HostOs, path: &Path) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(extension))
 }
 
-/// The whole question, once the path has been stat'd.
-///
-/// An extensionless file carrying the execute bit is a program: `open` hands it
-/// to a shell and `xdg-open` sniffs it as `application/x-executable`, which is
-/// how a downloaded binary with no extension runs. The bit is ignored when there
-/// *is* an extension, because then the OS picks a handler by type and `+x` on a
-/// `.txt` still only opens an editor. Windows has no such bit.
+/// The whole question, once the path has been stat'd. An extensionless file
+/// carrying the execute bit is a program; the bit is ignored when there *is* an
+/// extension, because the OS then picks a handler by type. Windows has no bit.
 pub fn opening_risk(host: HostOs, path: &Path, kind: PathKind) -> OpenRisk {
     if extension_executes(host, path) {
         return OpenRisk::Executes;
@@ -192,10 +164,9 @@ pub fn opening_risk(host: HostOs, path: &Path, kind: PathKind) -> OpenRisk {
     }
 }
 
-/// A macOS application bundle is a directory, and `open_with_system` on one
-/// launches the application. "Show me this folder" must never become "run this",
-/// so a directory whose extension executes is selected in its parent like a file
-/// instead of being opened.
+/// Which of the two calls a reveal turns into. A macOS application bundle is a
+/// directory that `open_with_system` would launch, so a directory whose
+/// extension executes is selected in its parent like a file instead.
 pub fn plan_reveal(host: HostOs, path: &Path, kind: PathKind) -> Result<RevealAction, RevealError> {
     if !is_rooted(host, path) {
         return Err(RevealError::NotAbsolute(path.to_path_buf()));
@@ -208,9 +179,8 @@ pub fn plan_reveal(host: HostOs, path: &Path, kind: PathKind) -> Result<RevealAc
     }
 }
 
-/// Returns the risk the caller accepted, so a launch can be logged as a decision
-/// that was taken rather than reconstructed afterwards from the fact that
-/// something started.
+/// Returns the risk the caller accepted, so a launch can be logged as a
+/// decision that was taken rather than inferred from something having started.
 pub fn plan_open(
     host: HostOs,
     path: &Path,
@@ -233,15 +203,10 @@ pub fn plan_open(
     }
 }
 
-/// gpui routes `reveal_path` through the Linux display client, and the headless
-/// client implements it as an empty body — the call returns having done nothing
-/// at all. `compositor_name()` is the only thing that distinguishes that
-/// session: it is `"headless"` there, `"Wayland"` or `"X11"` on a real one, and
-/// `""` on macOS and Windows, which is why the check is scoped to Linux.
-///
-/// Only `"headless"` disqualifies. An unrecognised compositor is taken to be a
-/// real session, because refusing a reveal that would have worked is worse than
-/// the case this guard exists for.
+/// gpui routes `reveal_path` through the Linux display client, whose headless
+/// implementation is an empty body. `compositor_name()` is the only thing that
+/// distinguishes that session — `""` on macOS and Windows, hence the Linux
+/// scope — and only `"headless"` disqualifies; anything else is a real session.
 pub fn reveal_support(host: HostOs, action: RevealAction, compositor: &str) -> PlatformSupport {
     match action {
         RevealAction::OpenDirectory => open_support(host),
@@ -269,10 +234,8 @@ pub fn inspect(path: &Path) -> Result<PathKind, RevealError> {
             executable_bit: executable_bit(&metadata),
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // `metadata` follows symlinks, so a broken one lands here. It is
-            // still a real entry in its parent directory, the file manager can
-            // still select it, and it is very likely the thing the user came to
-            // look at.
+            // `metadata` follows symlinks, so a broken one lands here; it is
+            // still a real entry its parent directory can select.
             match std::fs::symlink_metadata(path) {
                 Ok(_) => Ok(PathKind::File {
                     executable_bit: false,
@@ -288,13 +251,8 @@ pub fn inspect(path: &Path) -> Result<PathKind, RevealError> {
 }
 
 /// Shows the path in the system file manager. Nothing here ever runs the path,
-/// which is why it takes no consent argument.
-///
-/// Keeping that true takes work: `RevealAction::OpenDirectory` goes to
-/// `open_with_system`, and on macOS an application bundle *is* a directory, so
-/// the bundle test has to see what the path resolves to rather than how it was
-/// spelled. A symlink named without an extension pointing at a bundle stats as
-/// an ordinary directory, and opening it would launch the application.
+/// which is why it takes no consent argument — the bundle test looks at what
+/// the path resolves to, since a symlink to a bundle stats as a plain directory.
 pub fn reveal(app: &gpui::App, path: &Path) -> Result<PlatformSupport, RevealError> {
     let host = HostOs::current();
     let kind = inspect(path)?;
@@ -317,14 +275,9 @@ pub fn reveal(app: &gpui::App, path: &Path) -> Result<PlatformSupport, RevealErr
     Ok(PlatformSupport::Performed)
 }
 
-/// Opens the path with whatever the system associates with it.
-///
-/// The risk is judged on the path the filesystem resolves to, not on the one the
-/// caller spelled. `metadata` follows symlinks, so a link to `Foo.app` reports a
-/// directory while the caller's spelling carries no extension at all — judging
-/// that spelling would launch an application through the consent gate as an
-/// ordinary folder. When the path cannot be resolved the caller's own path is
-/// used, which is the stricter of the two readings, never the looser.
+/// Opens the path with whatever the system associates with it. The risk is
+/// judged on the resolved path as well as the caller's spelling — a link to
+/// `Foo.app` carries no extension — and the stricter reading always wins.
 pub fn open_with_system(
     app: &gpui::App,
     path: &Path,
@@ -355,19 +308,15 @@ fn executing_extensions(host: HostOs) -> &'static [&'static str] {
     }
 }
 
-/// Split by hand rather than through `Path`, for the same reason `is_rooted`
-/// does it: `Path` would apply this binary's separators instead of `host`'s, and
-/// a backslash is an ordinary character in a macOS file name.
+/// Split by hand: `Path` would apply this binary's separators instead of
+/// `host`'s, and a backslash is an ordinary character in a macOS file name.
 fn file_name_of(host: HostOs, path: &str) -> &str {
     let separator = |character: char| {
         character == '/' || (matches!(host, HostOs::Windows) && character == '\\')
     };
 
-    // Trailing separators first. `basename("/Applications/Foo.app/")` is
-    // `Foo.app`, not the empty string — and without this the extension is lost,
-    // an application bundle reads as an ordinary folder, and `plan_open` clears
-    // it as inert. A trailing slash on a directory is not unusual: shell
-    // completion adds one.
+    // Trailing separators first, or `/Applications/Foo.app/` loses its
+    // extension and an application bundle reads as an ordinary folder.
     let path = path.trim_end_matches(separator);
 
     match path.rfind(separator) {
@@ -413,10 +362,8 @@ mod tests {
         executable_bit: true,
     };
 
-    /// A directory's only executability signal is its extension, so losing the
-    /// extension to a trailing separator turns an application bundle into an
-    /// ordinary folder and walks it straight through the consent gate. Shell
-    /// completion appends that separator by itself.
+    /// A directory's only executability signal is its extension, so losing it
+    /// to a trailing separator walks a bundle through the consent gate.
     #[test]
     fn a_trailing_separator_does_not_disarm_the_bundle_check() {
         for path in [

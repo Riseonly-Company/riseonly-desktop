@@ -5,33 +5,39 @@ use rise_ui::theme;
 use crate::glass_panel::glass_host::{GlassHost, region_rect};
 
 /// A surface that asks the theme for a material and lets the platform decide
-/// what that material is.
+/// what that material is. The only component allowed to know native materials
+/// exist.
 ///
-/// This is the only component allowed to know that native materials exist, and
-/// even here it never names glass. `docs/PLATFORM_GLASS.md`: if a component
-/// could ask for glass directly, every such call site would become a hole on
-/// Linux and nobody would notice until a screenshot arrived.
-///
-/// The two branches are genuinely different drawings, not one drawing with a
-/// flag:
-///
-/// - **Native.** An AppKit view sits *below* the Metal layer, so this element
-///   must draw nothing at all in its own rectangle — a fill here would land on
-///   top of the material and hide it. It only reports where it is.
-/// - **Painted.** An ordinary element with a translucent fill, a hairline border
-///   and no platform bookkeeping whatsoever.
+/// The two backings are different drawings. Native reports its rectangle and
+/// draws nothing at all: the AppKit view sits below the Metal layer, so any fill
+/// here would cover it. Painted is an ordinary translucent element.
 pub struct GlassPanel;
 
 impl GlassPanel {
-    /// `key` names the surface — "rail", "sidebar", "composer" — and must be the
-    /// same string for the lifetime of that surface, because the platform side
-    /// moves the view it already has for an id it has seen before.
+    /// `key` names the surface — "rail", "sidebar", "composer" — and must stay
+    /// the same string for that surface's whole lifetime.
     pub fn surface(key: &'static str, material: Material, cx: &mut App) -> Div {
-        let backing = GlassHost::backing(material, cx);
+        let radius = Self::corner_radius(theme(cx), material);
+        Self::surface_rounded(key, material, radius, cx)
+    }
 
-        match backing {
-            MaterialBacking::Painted => Self::painted(material, cx),
-            _ => Self::native(key, material, cx),
+    /// The same surface at a radius the CALLER chooses.
+    ///
+    /// A native region is an AppKit view UNDER the Metal layer, so gpui cannot
+    /// clip it: a `.rounded()` on the element around it changes nothing and the
+    /// glass stays a rectangle. The radius has to travel with the region, which
+    /// is what `with_corner_radius` is for — and the material's own radius is
+    /// zero for Chrome and Panel, so a caller that wants a rounded block must
+    /// say so.
+    pub fn surface_rounded(
+        key: &'static str,
+        material: Material,
+        radius: f32,
+        cx: &mut App,
+    ) -> Div {
+        match GlassHost::backing(material, cx) {
+            MaterialBacking::Painted => Self::painted(material, cx).rounded(gpui::px(radius)),
+            _ => Self::native(key, material, radius, cx),
         }
     }
 
@@ -45,27 +51,20 @@ impl GlassPanel {
             .rounded(painted.corner_radius)
     }
 
-    /// The radius a native region carries, in logical pixels.
-    ///
-    /// It is the painted form's radius on purpose. A native backing cannot be
-    /// clipped by GPUI drawing a rounded mask over it — the view is below the
-    /// Metal layer, so the mask would land on top — so the radius has to travel
-    /// with the region, and if the two tiers disagreed they would read as two
-    /// different designs on two different machines.
+    /// The radius a native region carries, in logical pixels — the painted
+    /// form's own, since gpui cannot clip a view that sits below the Metal layer.
     pub fn corner_radius(theme: &rise_theme::AppTheme, material: Material) -> f32 {
         f32::from(theme.painted_material(material).corner_radius)
     }
 
-    fn native(key: &'static str, material: Material, cx: &mut App) -> Div {
+    fn native(key: &'static str, material: Material, corner_radius: f32, cx: &mut App) -> Div {
         let id = GlassHost::region_id(key, cx);
-        let corner_radius = Self::corner_radius(theme(cx), material);
 
         div().relative().child(
             canvas(
                 move |bounds, _, cx: &mut App| {
-                    // Prepaint, not paint: this is the layout pass, and a
-                    // rectangle that moved during a render pass desynchronises
-                    // from the content drawn around it.
+                    // Prepaint, not paint: a rectangle that moved mid-frame
+                    // desynchronises from the content drawn around it.
                     let rect = region_rect(bounds);
                     if rect.has_area() {
                         GlassHost::record(
@@ -114,8 +113,7 @@ mod tests {
 
     #[test]
     fn the_surfaces_that_run_into_a_window_edge_are_square() {
-        // Rounding a surface that meets the window corner leaves a wedge of
-        // desktop showing through it.
+        // Rounding a surface at the window corner shows a wedge of desktop.
         let theme = AppTheme::dark();
         assert_eq!(GlassPanel::corner_radius(&theme, Material::Chrome), 0.0);
         assert_eq!(GlassPanel::corner_radius(&theme, Material::Panel), 0.0);

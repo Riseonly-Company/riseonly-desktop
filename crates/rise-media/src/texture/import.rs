@@ -1,13 +1,7 @@
-//! The binding to each OS's external-memory API.
-//!
-//! This is the only file in the texture path that contains `#[cfg(target_os)]`,
-//! and it contains no decisions: by the time anything here is called,
-//! `ImportPlan` has already chosen the mechanism. What is left is the call
-//! itself, which is the one part that genuinely cannot be exercised on a Mac.
-//!
-//! Every arm reports whether it did the thing, in the style of
-//! `rise_platform::gpui_shim::PlatformSupport`, so a caller can fall back to a
-//! CPU upload instead of showing a black rectangle.
+//! The binding to each OS's external-memory API — the only file in the texture
+//! path with `#[cfg(target_os)]`, and the only one that cannot be exercised on
+//! a Mac. Every arm reports whether it did the thing, so a caller can fall back
+//! to a CPU upload instead of showing a black rectangle.
 
 use rise_platform::HostOs;
 
@@ -17,8 +11,8 @@ use super::frame::FrameGeometry;
 /// Why an import could not be performed.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ImportError {
-    /// The mechanism does not exist on the OS this build is running on. A
-    /// programming error: the plan and the binding disagreed.
+    /// The mechanism does not exist on this OS: the plan and the binding
+    /// disagreed, which is a bug rather than a runtime condition.
     WrongHost {
         expected: TextureImport,
         host: HostOs,
@@ -35,9 +29,7 @@ pub enum ImportError {
 }
 
 /// An imported texture, identified by whatever the backend uses to name it.
-///
-/// Deliberately opaque: `app/` must never learn which OS it is on, and a raw
-/// `wgpu::Texture` or `CVPixelBuffer` in this signature would leak that.
+/// Deliberately opaque: a caller must not learn which OS it is on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ImportedTexture {
     mechanism: TextureImport,
@@ -86,10 +78,7 @@ fn import_io_surface(
     #[cfg(target_os = "macos")]
     {
         let _ = geometry;
-        // VideoToolbox already decoded into this IOSurface, and gpui's
-        // `surface()` takes the CVPixelBuffer that wraps it directly. There is
-        // no import step to perform and nothing to copy: the "import" is
-        // keeping the buffer alive until the frame has been presented.
+        // No import step exists: the "import" is keeping the buffer alive until the frame is presented.
         Ok(ImportedTexture {
             mechanism: TextureImport::IoSurface,
             raw: raw_handle,
@@ -113,15 +102,7 @@ fn import_dma_buf(
     #[cfg(target_os = "linux")]
     {
         let _ = (raw_handle, geometry);
-        // VAAPI exports the decoded surface with vaExportSurfaceHandle, giving
-        // one fd per plane plus a DRM format modifier. Importing it means a
-        // wgpu-hal vulkan device with VK_EXT_external_memory_dma_buf and
-        // VK_EXT_image_drm_format_modifier, binding the fd's memory to an image
-        // created with the exported modifier — NOT with OPTIMAL tiling, which
-        // is the mistake that produces a correctly sized, garbled picture.
-        //
-        // Unverified. Nobody has run this, and reporting success from an
-        // unexecuted unsafe path is worse than falling back to a CPU upload.
+        // Unimplemented: the image must be created with vaExportSurfaceHandle's DRM modifier, not OPTIMAL tiling.
         Err(ImportError::NotExercised {
             host,
             mechanism: TextureImport::DmaBuf,
@@ -145,13 +126,7 @@ fn import_dxgi(
     #[cfg(target_os = "windows")]
     {
         let _ = (raw_handle, geometry);
-        // D3D11VA decodes into an ID3D11Texture2D. Sharing it needs the texture
-        // created with D3D11_RESOURCE_MISC_SHARED_NTHANDLE, then
-        // ID3D12Device::OpenSharedHandle on the wgpu-hal dx12 device. The
-        // legacy non-NT shared handle cannot be opened by D3D12 at all, which
-        // is the trap here.
-        //
-        // Unverified, same reasoning as the Linux arm.
+        // Unimplemented: needs D3D11_RESOURCE_MISC_SHARED_NTHANDLE — D3D12 cannot open the legacy shared handle.
         Err(ImportError::NotExercised {
             host,
             mechanism: TextureImport::DxgiSharedHandle,
@@ -167,10 +142,8 @@ fn import_dxgi(
     }
 }
 
-/// Whether a failed import can be retried as a CPU upload.
-///
-/// A refusal and an unexercised arm both degrade; a host mismatch is a bug in
-/// the plan and must not be papered over.
+/// Whether a failed import can be retried as a CPU upload. A refusal and an
+/// unexercised arm degrade; a host mismatch is a bug and does not.
 pub const fn is_recoverable(error: &ImportError) -> bool {
     matches!(
         error,

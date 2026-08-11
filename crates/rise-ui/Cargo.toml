@@ -11,11 +11,19 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# `Shared<Task<_>>`: two elements asking for the same image on one frame must
+# await ONE decode, not start two. gpui's own image cache does the same thing
+# with the same combinator.
+futures.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
 gpui.workspace = true
 rise-core.workspace = true
+# FlagUi is the one component whose drawing depends on what the host's text
+# stack can render. It still never names an OS: rise-platform answers whether a
+# regional-indicator pair becomes a flag on this machine.
+rise-platform.workspace = true
 rise-theme.workspace = true
 rise-i18n.workspace = true
 

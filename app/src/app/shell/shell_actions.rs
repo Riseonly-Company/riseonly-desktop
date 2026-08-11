@@ -1,14 +1,8 @@
 use gpui::{App, Global, KeyBinding, actions};
 use rise_navigation::RootTab;
 
-/// The key context the shell's own bindings are scoped to.
-///
-/// Scoped, so a field or a menu never has a shortcut taken from it by the frame
-/// around it — and so the frame's bindings stay inert while a text input owns
-/// the keystroke.
 pub const KEY_CONTEXT: &str = "Shell";
 
-/// The key context the command palette adds on top of the shell's.
 pub const PALETTE_KEY_CONTEXT: &str = "CommandPalette";
 
 actions!(
@@ -35,12 +29,6 @@ actions!(
     ]
 );
 
-/// What `Cmd/Ctrl+<n>` addresses.
-///
-/// The rail presents the five sections and then the folders, so the shortcuts
-/// follow the same order the eye does. Nothing here knows how many folders exist
-/// until it is asked, which is why the mapping is a function of the folder count
-/// rather than a table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShortcutTarget {
     Section(RootTab),
@@ -68,12 +56,6 @@ struct KeyBindingsInstalled;
 
 impl Global for KeyBindingsInstalled {}
 
-/// Idempotent, so a second window does not double-bind the shell.
-///
-/// `secondary-` is gpui's own portable modifier — cmd on macOS, ctrl elsewhere —
-/// so none of this needs to know which OS it is on. Back and forward bind both
-/// the macOS bracket chords and the alt-arrow pair the rest of the desktop world
-/// uses; on either platform the other spelling is free.
 pub fn install_key_bindings(cx: &mut App) {
     if cx.has_global::<KeyBindingsInstalled>() {
         return;
@@ -115,9 +97,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_first_five_slots_are_the_sections_in_rail_order() {
+    fn the_first_slots_are_the_sections_in_rail_order() {
         for (index, tab) in RootTab::ALL.iter().enumerate() {
-            let slot = u8::try_from(index + 1).expect("five sections fit in a byte");
+            let slot = u8::try_from(index + 1).expect("the sections fit in a byte");
             assert_eq!(
                 shortcut_target(slot, 0),
                 Some(ShortcutTarget::Section(*tab)),
@@ -128,14 +110,30 @@ mod tests {
 
     #[test]
     fn the_remaining_slots_address_folders_in_the_order_they_are_stacked() {
-        assert_eq!(shortcut_target(6, 4), Some(ShortcutTarget::Folder(0)));
-        assert_eq!(shortcut_target(9, 4), Some(ShortcutTarget::Folder(3)));
+        let first_folder = u8::try_from(RootTab::ALL.len() + 1).unwrap();
+        let folders = usize::from(SHORTCUT_SLOTS) - RootTab::ALL.len();
+
+        assert_eq!(
+            shortcut_target(first_folder, folders),
+            Some(ShortcutTarget::Folder(0))
+        );
+        assert_eq!(
+            shortcut_target(SHORTCUT_SLOTS, folders),
+            Some(ShortcutTarget::Folder(folders - 1))
+        );
     }
 
     #[test]
     fn a_slot_past_the_last_folder_does_nothing_rather_than_guessing() {
-        assert_eq!(shortcut_target(6, 0), None);
-        assert_eq!(shortcut_target(9, 3), None);
+        let first_folder = u8::try_from(RootTab::ALL.len() + 1).unwrap();
+
+        assert_eq!(shortcut_target(first_folder, 0), None);
+        assert_eq!(shortcut_target(SHORTCUT_SLOTS, 0), None);
+    }
+
+    #[test]
+    fn the_rail_now_leaves_room_for_two_folder_shortcuts() {
+        assert_eq!(usize::from(SHORTCUT_SLOTS) - RootTab::ALL.len(), 2);
     }
 
     #[test]

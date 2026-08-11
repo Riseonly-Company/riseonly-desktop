@@ -6,13 +6,6 @@ use serde_json::Value;
 
 use crate::core::engine_bridge::SocketCredential;
 
-/// Everything the auth repository is allowed to do to the outside world.
-///
-/// A trait rather than the concrete wire, for one reason: the repository owns
-/// the rules that matter — which failure rotates a token, which one signs the
-/// user out, what happens when two refreshes race — and none of them can be
-/// tested against a real gateway. With this seam the whole repository runs in a
-/// unit test with a scripted server.
 pub trait AuthTransport: Send + Sync {
     fn call(
         &self,
@@ -27,11 +20,7 @@ pub trait AuthTransport: Send + Sync {
         authorization: Option<String>,
     ) -> BoxFuture<'static, Result<Value, WireError>>;
 
-    /// Re-handshakes the socket under a new identity.
-    ///
-    /// The gateway resolves the connection's user once, at upgrade, so this is
-    /// the only way a rotated token takes effect — there is no in-band way to
-    /// re-authenticate an open socket.
+    // Gateway binds the socket's user at upgrade only; a rotated token needs a re-handshake.
     fn authenticate(&self, credential: SocketCredential);
 }
 
@@ -80,7 +69,6 @@ impl AuthTransport for LiveAuthTransport {
     }
 }
 
-/// The envelope's timestamp. Wall clock, because the server reads it as one.
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -30,6 +30,52 @@ WHAT THIS CRATE OWNS
                    mouse-down handler tears the overlay out of the tree before
                    the mouse-up that would have completed a click on it. Anything
                    drawn over a dismissing scrim needs the same.
+    grouped_btns/  GroupedBtns and GroupedBtn, ported field for field from
+                   Core/UI/GroupedBtns.swift — the rows every settings screen in
+                   the product is built out of.
+
+                   TWO SURFACES, ONE COMPONENT. The default draws the phone's
+                   card: 20pt corner, hairlines between rows, inset from the
+                   edge. `.without_wrapper()` takes the card away and leaves the
+                   rows running edge to edge, which is Telegram's settings list
+                   and the shape that belongs in a desktop panel — a card inside
+                   a panel is a box inside a box.
+
+                   Selection is INDEPENDENT of the surface, deliberately. The
+                   phone has no selected row at all: it pushes a screen and comes
+                   back. The desktop shows the destination beside the list, so a
+                   row has to say it is the current one — and a card group needs
+                   that as much as a bare one does. `.selected(bool)` works in
+                   both, and grouped_chrome.rs is where the two rules meet:
+                   the fill is the same accent, the RADIUS is what differs,
+                   because a card clips its rows and a bare row must round itself.
+
+                   Activation is by stable id through one handler, the rule
+                   context_menu/ already follows. The reference stores a closure
+                   per row; here that would make the item generic over the
+                   owning view and unassertable in a test.
+
+                   GOTCHA, and it cost a visibly square card before it was
+                   found: gpui CANNOT clip a child to a rounded parent. A
+                   ContentMask is a Bounds and carries no corner radius, so
+                   `.rounded(r).overflow_hidden()` masks a RECTANGLE — unlike
+                   SwiftUI's clipShape, which the reference relies on. Porting
+                   the reference literally, which paints the surface on every
+                   row and clips the stack, therefore paints square corners
+                   straight over the card's rounded ones, with no warning and
+                   nothing in a log.
+
+                   So: the CARD paints the surface once, itself, rows are
+                   transparent, and a row that touches either end of the card
+                   rounds THAT end itself (grouped_chrome::row_corners +
+                   RowPosition). Anything else in this crate that stacks filled
+                   children inside a rounded container has the same problem and
+                   needs the same answer.
+
+                   Every colour and length branch lives in grouped_chrome.rs as
+                   a pure function, so the whole design can be asserted without
+                   a window — which matters because only macOS can render one.
+
     context_menu/  right-click. ContextMenuItem mirrors the reference's
                    `ContextMenuUi.ContextMenuItem` field for field: a stable
                    action id (its `key`), a string KEY for the label, an optional
@@ -38,6 +84,14 @@ WHAT THIS CRATE OWNS
 
   Still empty modules: sheets, notifier, navigation chrome, wrappers, media
   viewer, buttons, inputs.
+
+  KNOWN GAP, not this crate's to close: several SF Symbols the reference's
+  settings screens name — globe, bell.fill, folder.fill, crown.fill,
+  paintpalette.fill, externaldrive.fill, target, shield.lefthalf.filled,
+  clock.arrow.circlepath, creditcard.fill, waveform.and.mic — are missing from
+  assets/icons/sf-to-lucide.json. IconUi returns None for them, so those rows
+  draw a gap where the chip's glyph belongs. Adding them is an assets + table
+  change in rise-ui, and the build already fails on a mapped name with no file.
 
 WHAT IT MUST NEVER DO
   Use a surface that must escape the window rectangle. gpui has no native

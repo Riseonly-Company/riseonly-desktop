@@ -4,11 +4,6 @@ use super::super::auth_actions::AuthActionsStore;
 use super::super::auth_actions::auth_types::{self, AuthStep, AuthStepForm, StepValidation};
 use super::super::auth_services::AuthServicesStore;
 
-/// The only thing a view may call.
-///
-/// Validation, guards and the choice of command live here; nothing else does.
-/// It holds no server state — every read goes through the services store, and
-/// every write is a command the repository serialises.
 #[derive(Clone)]
 pub struct AuthInteractionsStore {
     actions: AuthActionsStore,
@@ -28,15 +23,12 @@ impl AuthInteractionsStore {
         self.actions.restore_session_action();
     }
 
-    /// Runs the step the user is on, if it is complete.
-    ///
-    /// Returns the next step, or `None` when the step handed the flow to the
-    /// server and the answer decides what happens next.
     pub fn submit_step(
         &self,
         step: AuthStep,
         form: &AuthStepForm,
         registering: bool,
+        reusable_code: bool,
         cx: &App,
     ) -> StepOutcome {
         if self.services.read(cx).is_busy() {
@@ -61,11 +53,19 @@ impl AuthInteractionsStore {
                 StepOutcome::Submitted
             }
             AuthStep::RegistrationName => StepOutcome::Advance(AuthStep::RegistrationTag),
-            AuthStep::RegistrationTag => StepOutcome::Advance(AuthStep::RegistrationPassword),
+            AuthStep::RegistrationTag => {
+                if !self.services.read(cx).tag_is_confirmed_free() {
+                    return StepOutcome::Invalid("auth_tag_not_verified");
+                }
+                StepOutcome::Advance(AuthStep::RegistrationPassword)
+            }
             AuthStep::RegistrationPassword => {
                 StepOutcome::Advance(AuthStep::RegistrationPasswordConfirmation)
             }
             AuthStep::RegistrationPasswordConfirmation => {
+                if reusable_code {
+                    return StepOutcome::Advance(AuthStep::VerificationCode);
+                }
                 self.actions.send_code_action(form.composed_phone());
                 StepOutcome::Submitted
             }
@@ -82,13 +82,12 @@ impl AuthInteractionsStore {
         }
     }
 
-    /// Asks whether a tag is free, but only for a tag that could be.
-    ///
-    /// A locally invalid tag is answered without a request: `/api/auth/check-tag`
-    /// is rate limited per client, and spending that budget on a tag the rules
-    /// already reject means the real check gets refused later.
     pub fn check_tag(&self, tag: &str) {
         self.actions.check_tag_action(tag.to_owned());
+    }
+
+    pub fn mark_tag_taken(&self) {
+        self.actions.mark_tag_taken_action();
     }
 
     pub fn complete_telegram_redirect(&self) {
@@ -124,7 +123,5 @@ pub enum StepOutcome {
     Advance(AuthStep),
     Submitted,
     Invalid(&'static str),
-    /// A request is already in flight. Pressing the button twice must not send
-    /// a second registration.
     Ignored,
 }

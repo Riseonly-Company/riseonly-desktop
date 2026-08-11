@@ -55,6 +55,10 @@ impl AuthActionsStore {
         self.domain.dispatch(AuthCommand::CancelCodeEntry);
     }
 
+    pub fn mark_tag_taken_action(&self) {
+        self.domain.dispatch(AuthCommand::MarkTagTaken);
+    }
+
     pub fn clear_error_action(&self) {
         self.domain.dispatch(AuthCommand::ClearError);
     }

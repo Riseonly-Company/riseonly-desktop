@@ -17,10 +17,7 @@ pub enum CipherError {
 }
 
 /// Binds a sealed value to the account, the domain and the value's identity.
-///
-/// Every component is length-prefixed, so ("ab", "c") and ("a", "bc") produce
-/// different additional data. Without that, a value could be lifted from one row
-/// into another whose identity happens to concatenate the same way.
+/// Components are length-prefixed, so `("ab", "c")` and `("a", "bc")` differ.
 pub fn cipher_context(account_id: &str, domain: &str, components: &[&str]) -> Vec<u8> {
     let mut out = Vec::with_capacity(AAD_PREFIX.len() + 64);
     out.extend_from_slice(AAD_PREFIX);
@@ -80,8 +77,7 @@ impl AesGcmCipher {
     }
 }
 
-// Layout is nonce ‖ ciphertext ‖ tag, matching CryptoKit's combined
-// representation so a database stays readable across implementations.
+// Layout is nonce ‖ ciphertext ‖ tag, matching CryptoKit's combined representation.
 impl ValueCipher for AesGcmCipher {
     fn seal(&self, plaintext: &[u8], context: &[u8]) -> Result<Vec<u8>, CipherError> {
         let mut nonce_bytes = [0u8; NONCE_LEN];

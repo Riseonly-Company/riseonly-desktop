@@ -4,7 +4,6 @@ use tokio::sync::watch;
 
 use super::rise_auth_engine_models::{AccountSummary, AuthUser};
 
-/// What the sign-up flow knows about the tag the user is typing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum TagAvailability {
     #[default]
@@ -13,16 +12,9 @@ pub enum TagAvailability {
     Available,
     Taken,
     Invalid,
-    /// The check itself failed. Distinct from `Taken` on purpose: a network
-    /// error must not tell somebody their tag belongs to another person.
     Unknown,
 }
 
-/// Where the multi-step sign-up has got to.
-///
-/// The Telegram hop is not incidental: the code is delivered by a bot, so
-/// send-code succeeds by handing back a bot username and a phone payload, and
-/// the next thing the user does is leave the app. The flow has to survive that.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct AuthFlowState {
     pub is_busy: bool,
@@ -33,13 +25,9 @@ pub struct AuthFlowState {
     pub code_entry_active: bool,
     pub tag_availability: TagAvailability,
     pub checked_tag: Option<String>,
+    pub tag_problem_key: Option<&'static str>,
 }
 
-/// The immutable snapshot every auth selector reads.
-///
-/// Bounded and prepared off the UI thread, published in one commit. The revision
-/// is what lets a reader skip work when nothing changed — without it the socket
-/// reconnecting would redraw the whole shell.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct AuthSnapshot {
     pub revision: u64,
@@ -52,11 +40,6 @@ pub struct AuthSnapshot {
 }
 
 impl AuthSnapshot {
-    /// The id every wire request is stamped with.
-    ///
-    /// The reference prefers the token's own claim over the profile: a profile
-    /// can be stale after a switch, and the token is what the gateway will
-    /// actually authenticate the call as.
     pub fn account_limit_reached(&self, is_premium: bool) -> bool {
         !super::rise_auth_engine_models::AccountLimitPolicy::can_add(
             self.accounts.len(),
@@ -65,11 +48,6 @@ impl AuthSnapshot {
     }
 }
 
-/// Publishes snapshots, and refuses to publish one that changed nothing.
-///
-/// GPUI has no automatic dependency tracking, so a store reading this will
-/// `cx.notify()` on every change it sees. Republishing an identical snapshot
-/// would invalidate the shell on every socket heartbeat.
 pub struct RiseAuthPresentation {
     sender: watch::Sender<Arc<AuthSnapshot>>,
     revision: u64,
@@ -100,9 +78,7 @@ impl RiseAuthPresentation {
 
         self.revision = self.revision.wrapping_add(1);
         snapshot.revision = self.revision;
-        // `send_replace`, not `send`: `send` refuses and leaves the value
-        // UNCHANGED when every receiver has been dropped, which would make the
-        // published snapshot silently stale the moment the last view closed.
+        // `send` leaves the value unchanged once every receiver is dropped; `send_replace` cannot.
         self.sender.send_replace(Arc::new(snapshot));
         true
     }

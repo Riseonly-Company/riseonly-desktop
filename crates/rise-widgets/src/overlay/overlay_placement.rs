@@ -38,20 +38,14 @@ impl OverlaySide {
 pub struct OverlayPlacement {
     pub origin: Point<Pixels>,
     pub side: OverlaySide,
-    /// The ideal origin did not fit and the result was pushed to keep it inside
-    /// the viewport. A caller drawing a tail or an arrow cannot align it with the
-    /// anchor while this is set.
+    /// The ideal origin did not fit and was pushed inside the viewport; a tail or
+    /// arrow cannot be aligned with the anchor while this is set.
     pub clamped: bool,
 }
 
-/// Where an overlay of `size` goes so that it never leaves `viewport`.
-///
-/// `rise_platform::gpui_shim::supports_native_popups` reports Unsupported on
-/// every host, so nothing this positions is allowed to escape the window
-/// rectangle. That makes this arithmetic the whole of the contract, and it is
-/// total: any geometry at all — larger than the viewport, negative, infinite,
-/// NaN — produces an origin inside the viewport inset by `margin`, never
-/// negative, and never a panic.
+/// Where an overlay of `size` goes so that it never leaves `viewport`. Total:
+/// any geometry — oversized, negative, infinite, NaN — yields an origin inside
+/// the viewport inset by `margin`, never negative and never a panic.
 pub fn place(
     anchor: OverlayAnchor,
     size: Size<Pixels>,
@@ -129,9 +123,6 @@ impl Frame {
         (self.beside(side, edges), side)
     }
 
-    /// A pointer anchor puts the overlay's top-left on the pointer and flips to
-    /// the other side of it on either axis that would overflow. `preferred` only
-    /// chooses which axis the reported side describes.
     fn against_point(
         &self,
         at: Point<Pixels>,
@@ -197,12 +188,8 @@ fn clamp_axis(ideal: f32, extent: f32, viewport: f32, margin: f32) -> (f32, bool
     (clamped, clamped != ideal)
 }
 
-/// The margin the caller asked for, reduced until it can actually be honoured on
-/// both edges of the axis.
-///
-/// A requested margin wider than the room left over would push the overlay out
-/// through the far edge while satisfying the near one, which is how an inset
-/// meant to keep the overlay inside ends up putting it outside.
+/// A margin wider than the room left over satisfies the near edge by pushing the
+/// overlay out through the far one, so it is reduced until both fit.
 fn effective_margin(requested: f32, extent: f32, viewport: f32) -> f32 {
     let room = viewport - extent;
     if room < 0.0 {
@@ -215,8 +202,7 @@ fn positive(value: Pixels) -> f32 {
     finite(f32::from(value)).max(0.0)
 }
 
-/// `f32::clamp` panics on a NaN bound, so nothing derived from caller geometry
-/// reaches it without passing through here first.
+/// `f32::clamp` panics on a NaN bound, so caller geometry passes through here.
 fn finite(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
 }

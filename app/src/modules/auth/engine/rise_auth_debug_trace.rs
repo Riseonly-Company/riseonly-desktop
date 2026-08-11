@@ -4,13 +4,6 @@ use parking_lot::Mutex;
 
 use super::rise_auth_engine_models::ResetReason;
 
-/// What happened, never what it happened to.
-///
-/// Auth is the one domain where a trace is most useful and most dangerous: the
-/// interesting values are a phone number, a tag and two tokens. So the events
-/// carry no payload at all — the shape of the sequence is what a bug report
-/// needs ("refreshed, refreshed, cleared" is a rotation race; "cleared" alone is
-/// a revoked session), and nothing here can leak a credential into a log file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TraceEvent {
     Activated,
@@ -52,10 +45,6 @@ impl TraceEvent {
 
 const CAPACITY: usize = 64;
 
-/// A bounded ring of recent events.
-///
-/// Bounded because an unbounded trace on a client that reconnects all day is a
-/// slow leak, and the tail is what a bug report needs anyway.
 #[derive(Clone, Default)]
 pub struct AuthTrace {
     events: Arc<Mutex<Vec<TraceEvent>>>,

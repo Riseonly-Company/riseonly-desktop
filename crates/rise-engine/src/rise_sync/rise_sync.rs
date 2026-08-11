@@ -1,11 +1,8 @@
 use rise_core::RequestId;
 use thiserror::Error;
 
-/// Caps on one push transaction, copied from the reference.
-///
-/// A realtime burst is reduced into a single store transaction so the UI sees
-/// one revision change rather than N. The caps stop a flood from turning that
-/// into an unbounded write.
+/// Caps on one push transaction: a realtime burst commits as a single write, and
+/// these stop a flood from making that write unbounded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PushBatchLimits {
     pub max_events: usize,
@@ -81,11 +78,8 @@ impl PushBatch {
     }
 }
 
-/// Exponential backoff with jitter derived from the request id.
-///
-/// The jitter is deterministic rather than random on purpose: two clients
-/// retrying the same operation still spread out, but a replay is reproducible
-/// in a test and in a bug report.
+/// Exponential backoff with jitter derived from the request id, so the delay
+/// spreads clients apart yet stays reproducible for a given id and attempt.
 pub fn retry_delay_ms(request_id: RequestId, attempt_count: u32) -> i64 {
     let exponent = attempt_count.saturating_sub(1).min(6);
     let base = 1_000i64 << exponent;
@@ -125,10 +119,8 @@ pub enum ClaimError {
 
 /// One row of the durable outbox.
 ///
-/// A claim token is what makes completion safe across a reconnect: a drain that
-/// was interrupted may come back and try to finish an operation that has since
-/// been reclaimed by a newer drain, and its completion must be rejected rather
-/// than overwrite the newer attempt.
+/// The claim token makes completion safe across a reconnect: an interrupted drain
+/// that returns after the operation was reclaimed is rejected, not applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DurableOperation {
     pub request_id: RequestId,
@@ -277,9 +269,7 @@ mod tests {
 
     #[test]
     fn backoff_doubles_and_then_saturates() {
-        // 16000 is the largest jitter range (max base 64000 / 4), and every
-        // smaller range divides it, so this id contributes zero jitter at every
-        // attempt count and leaves the bare base visible.
+        // 16000 divides every jitter range, so this id contributes zero jitter.
         let request = id(16_000);
         let base = |attempt| retry_delay_ms(request, attempt) / 1_000;
         assert_eq!(base(1), 1);

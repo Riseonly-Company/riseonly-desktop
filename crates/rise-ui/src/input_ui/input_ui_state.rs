@@ -14,10 +14,6 @@ use crate::input_ui::shaped_input::ShapedInput;
 use crate::input_ui::text_boundaries;
 
 /// Whether the field is one line or many.
-///
-/// This is not only a layout choice. It decides what Enter does, whether the
-/// arrow keys are consumed or left to the list behind the field, and what
-/// happens to the newlines in a paste.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum InputMode {
     /// A field. Enter emits [`InputUiEvent::Submitted`], pasted line breaks
@@ -34,11 +30,7 @@ impl InputMode {
     }
 }
 
-/// An anchor and a head, never a sorted pair.
-///
-/// `start`/`end` are derived on demand. Storing them instead would lose which
-/// end the keyboard is moving, and shift+left followed by shift+right would grow
-/// the selection from the wrong side.
+/// An anchor and a head, never a sorted pair — `start`/`end` are derived.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Selection {
     pub anchor: usize,
@@ -80,8 +72,7 @@ impl Selection {
         self.anchor == self.head
     }
 
-    /// Whether the moving end is before the fixed one, i.e. the selection was
-    /// grown leftwards. Needed by the IME, which is told which way it points.
+    /// Whether the moving end is before the fixed one.
     pub fn is_reversed(&self) -> bool {
         self.head < self.anchor
     }
@@ -89,14 +80,11 @@ impl Selection {
 
 /// What the field reports to whoever is listening.
 ///
-/// Subscribe with `cx.subscribe(&field, ..)`. The field never calls back into a
-/// parent directly — a search box that filtered its own list would only work for
-/// the first screen that used it.
+/// Subscribe with `cx.subscribe(&field, ..)`; the field never calls back into a
+/// parent directly.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InputUiEvent {
-    /// The document changed: typing, paste, undo, a programmatic
-    /// [`InputUiState::set_text`]. Fires per edit, so debounce anything
-    /// expensive hanging off it.
+    /// The document changed. Fires per edit, so debounce anything expensive.
     Changed,
     /// Enter in a single-line field. A composer emits a line break instead.
     Submitted,
@@ -106,9 +94,7 @@ pub enum InputUiEvent {
 
 /// What one selection gesture extends by.
 ///
-/// Fixed at mouse-down from the click count and held for the whole drag: a drag
-/// that began as a double click keeps taking whole words, which is what makes
-/// dragging back over the first word feel right.
+/// Fixed at mouse-down from the click count and held for the whole drag.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SelectGranularity {
     /// Single click.
@@ -125,12 +111,8 @@ struct Drag {
     anchor: Range<usize>,
 }
 
-/// The document as it was when the input method started composing.
-///
-/// The IME sends one `replace_and_mark_text_in_range` per keystroke of a
-/// composition; none of those is an undo step. This is what lets the commit be
-/// recorded as a single edit spanning the whole composition, and what lets a
-/// cancelled composition leave no trace at all.
+/// The IME sends one `replace_and_mark_text_in_range` per keystroke; none of
+/// those is an undo step, so the whole composition commits as a single edit.
 #[derive(Clone, Debug)]
 struct Composition {
     at: usize,
@@ -140,23 +122,10 @@ struct Composition {
 
 /// Everything a text field is, apart from how it is drawn.
 ///
-/// The document, the selection, the undo history, the IME composition, the caret
-/// blink and the scroll offset live here; [`InputUi`](crate::InputUi) is the
-/// element that paints them. Hold it as a `gpui::Entity<InputUiState>` and it
-/// outlives the frame — a field rebuilt on every render would lose its selection
-/// and its history on the first keystroke.
-///
-/// It implements `gpui::EntityInputHandler`, so the platform IME talks to it
-/// directly. That is what makes dead keys, Cyrillic, CJK composition and the
-/// character palette work without this crate parsing key events itself.
-///
-/// Offsets in the public API are byte offsets into the UTF-8 document and are
-/// always on a char boundary; the UTF-16 offsets the IME speaks are converted at
-/// the boundary. Motion is by grapheme, so one press of the left arrow crosses a
-/// whole emoji rather than one of its code points.
-///
-/// It never reads the theme and never touches the clipboard except through the
-/// action methods, so it can be driven headlessly in tests.
+/// Hold it as a `gpui::Entity<InputUiState>`: a field rebuilt on every render
+/// loses its selection and its history. Offsets in the public API are byte
+/// offsets into the UTF-8 document, always on a char boundary; motion is by
+/// grapheme.
 pub struct InputUiState {
     mode: InputMode,
     text: String,
@@ -192,10 +161,7 @@ impl Focusable for InputUiState {
 }
 
 impl InputUiState {
-    /// An empty field.
-    ///
-    /// Installs this crate's key bindings on first use, so a field works in an
-    /// app that has never configured a keymap.
+    /// An empty field. Installs this crate's key bindings on first use.
     pub fn new(mode: InputMode, cx: &mut Context<Self>) -> Self {
         install_key_bindings(cx);
 
@@ -253,8 +219,8 @@ impl InputUiState {
 
     /// The range the IME is still composing in, if any.
     ///
-    /// Its presence means the text inside is provisional: Escape takes it back
-    /// out, and it is not yet an undo step of its own.
+    /// The text inside is provisional: Escape takes it back out, and it is not
+    /// yet an undo step of its own.
     pub fn marked_range(&self) -> Option<Range<usize>> {
         self.marked.clone()
     }
@@ -268,9 +234,6 @@ impl InputUiState {
     }
 
     /// A height this field alone uses, or `None` for the theme's.
-    ///
-    /// Exists so a screen can make its field and the button under it one size —
-    /// the button takes the same token, so the two cannot drift apart.
     pub fn height(&self) -> Option<Pixels> {
         self.height
     }
@@ -313,9 +276,8 @@ impl InputUiState {
         self.invalidate_display(cx);
     }
 
-    /// Turns the field into a password field: bullets on screen, one per
-    /// grapheme, and the contents stop leaving through copy, cut, the IME's
-    /// `text_for_range` and the character palette.
+    /// Turns the field into a password field: one bullet per grapheme, and the
+    /// contents stop leaving through copy, cut, the IME and the palette.
     pub fn set_secure(&mut self, secure: bool, cx: &mut Context<Self>) {
         self.secure = secure;
         self.invalidate_display(cx);
@@ -328,11 +290,8 @@ impl InputUiState {
         cx.notify();
     }
 
-    /// A limit in characters, not bytes — a limit of 5 holds five Cyrillic
-    /// letters, not two and a half.
-    ///
-    /// Enforced on every insertion, so a paste is truncated rather than
-    /// rejected, and replacing a full selection with the same length still fits.
+    /// A limit in characters, not bytes, enforced on every insertion — a paste
+    /// is truncated rather than rejected.
     pub fn set_max_length(&mut self, max_length: Option<usize>, cx: &mut Context<Self>) {
         self.max_length = max_length;
         cx.notify();
@@ -420,18 +379,13 @@ impl InputUiState {
         self.shaped.as_ref()
     }
 
-    /// Bumped on every change to the document or to what is displayed.
-    ///
-    /// Shaping is keyed on it, so an edit invalidates the shaped rows while a
-    /// caret move or a repaint reuses them.
+    /// Bumped on every change to the document or to what is displayed; shaping
+    /// is keyed on it.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    // ---- element plumbing -------------------------------------------------
-
-    /// Hands back the rows shaped during prepaint. Called by
-    /// [`InputUi`](crate::InputUi); a call site has no reason to.
+    /// Hands back the rows shaped during prepaint, for [`InputUi`](crate::InputUi).
     pub fn set_shaped(&mut self, shaped: ShapedInput) {
         self.shaped = Some(shaped);
     }
@@ -448,8 +402,8 @@ impl InputUiState {
         self.scroll = scroll;
     }
 
-    /// Called from prepaint, which is why it returns early on no change: a
-    /// `notify` on every frame would keep the window permanently dirty.
+    /// Called from prepaint, so it returns early on no change — a `notify` per
+    /// frame would keep the window permanently dirty.
     pub fn sync_focus(&mut self, focused: bool, cx: &mut Context<Self>) {
         if self.focused == focused {
             return;
@@ -476,11 +430,8 @@ impl InputUiState {
 
     /// The document offset under a window-space point.
     ///
-    /// Clamped to the shaped window: a pointer dragged above or below the field
-    /// resolves to the nearest shaped row, the selection extends there, and the
-    /// next frame scrolls one row further. That is a row per pointer event
-    /// rather than continuous autoscroll, and it is deliberate — no timer runs
-    /// while the pointer sits still outside the field.
+    /// Clamped to the shaped window, so a pointer outside the field resolves to
+    /// the nearest shaped row rather than autoscrolling on a timer.
     pub fn offset_at(&self, position: Point<Pixels>) -> usize {
         let (Some(bounds), Some(shaped)) = (self.bounds, self.shaped.as_ref()) else {
             return self.selection.head;
@@ -507,14 +458,11 @@ impl InputUiState {
             .source_offset_within_line(line_index, offset_in_line)
     }
 
-    // ---- mouse ------------------------------------------------------------
-
     /// Places the caret, or selects the word or line under the pointer, and
     /// starts a drag at that granularity.
     ///
-    /// `click_count` comes from gpui's `MouseDownEvent`; anything above three
-    /// keeps selecting by line. `extend` is the shift-click case: the anchor
-    /// stays put and only the head moves.
+    /// `click_count` above three keeps selecting by line; `extend` is the
+    /// shift-click case, where only the head moves.
     pub fn on_mouse_down(
         &mut self,
         position: Point<Pixels>,
@@ -566,10 +514,6 @@ impl InputUiState {
 
     /// Extends the live selection to the pointer, in whole words or lines when
     /// the drag started as a double or triple click.
-    ///
-    /// A no-op when no drag is in flight, and silent when the selection has not
-    /// actually changed — a repaint per mouse-move event would be a repaint too
-    /// many.
     pub fn on_mouse_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(drag) = self.drag.clone() else {
             return;
@@ -600,18 +544,10 @@ impl InputUiState {
         }
     }
 
-    /// Whether a selection drag is in flight — the element captures the mouse
-    /// while it is.
+    /// Whether a selection drag is in flight.
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
     }
-
-    // ---- actions ----------------------------------------------------------
-    //
-    // Every method below is a gpui action handler: it takes the action, the
-    // window and the context, and is wired up with `.on_action(..)`. They are
-    // public so a toolbar button or a menu item can invoke the same behaviour
-    // the keystroke does — `state.undo(&Undo, window, cx)`.
 
     /// Caret one grapheme left, collapsing a selection to its start.
     pub fn move_left(
@@ -782,10 +718,7 @@ impl InputUiState {
     }
 
     /// Caret one display line up, keeping its horizontal goal column across a
-    /// run of presses.
-    ///
-    /// In a single-line field this propagates instead, leaving the arrow to the
-    /// list or picker the field sits in front of.
+    /// run of presses. In a single-line field the key propagates instead.
     pub fn move_up(&mut self, _: &input_actions::MoveUp, _: &mut Window, cx: &mut Context<Self>) {
         self.vertical(-1, false, cx);
     }
@@ -884,8 +817,7 @@ impl InputUiState {
     /// Pastes text over the selection, as one undo step.
     ///
     /// Line breaks are normalised — collapsed to spaces in a field, CRLF
-    /// flattened in a composer — and the char limit truncates rather than
-    /// rejects.
+    /// flattened in a composer.
     pub fn paste(&mut self, _: &input_actions::Paste, _: &mut Window, cx: &mut Context<Self>) {
         if self.disabled {
             return;
@@ -898,8 +830,7 @@ impl InputUiState {
 
     /// Undoes one step and restores the selection that preceded it.
     ///
-    /// A run of typing is one step, and so is a whole IME composition; moving
-    /// the caret ends the run.
+    /// A run of typing is one step, and so is a whole IME composition.
     pub fn undo(&mut self, _: &input_actions::Undo, _: &mut Window, cx: &mut Context<Self>) {
         if self.disabled {
             return;
@@ -938,9 +869,8 @@ impl InputUiState {
         }
     }
 
-    /// Escape. Takes back a composition in progress if there is one; only
-    /// otherwise does it emit [`InputUiEvent::Cancelled`], so the first Escape
-    /// during CJK input does not also close the sheet the field is in.
+    /// Escape. Takes back a composition in progress if there is one, and only
+    /// otherwise emits [`InputUiEvent::Cancelled`].
     pub fn cancel(&mut self, _: &input_actions::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         if self.marked.is_some() {
             self.cancel_composition(cx);
@@ -962,8 +892,6 @@ impl InputUiState {
         }
     }
 
-    // ---- internals --------------------------------------------------------
-
     fn horizontal(&mut self, forward: bool, extend: bool, cx: &mut Context<Self>) {
         let target = if !extend && !self.selection.is_empty() {
             if forward {
@@ -980,11 +908,7 @@ impl InputUiState {
     }
 
     fn vertical(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
-        // A single-line field has no line to move to, and an action listener
-        // stops propagation by default — so consuming the keystroke here would
-        // silently take the arrow keys away from every list this field sits in
-        // front of. The command palette and every picker after it depend on
-        // getting them.
+        // An action listener stops propagation by default, so a single-line field must hand the arrows back.
         if !self.mode.is_multiline() {
             cx.propagate();
             return;
@@ -1020,9 +944,8 @@ impl InputUiState {
         self.goal_x = goal_x;
     }
 
-    /// The fallback when the target row has not been shaped: the same number of
-    /// graphemes in from the start of the line. Correct for a monospaced run,
-    /// approximate for a proportional one.
+    /// Fallback when the target row has not been shaped: same grapheme column,
+    /// which is only approximate in a proportional font.
     fn column_preserving_offset(&self, from_line: usize, to_line: usize) -> usize {
         let Some(from) = self.display.lines.get(from_line) else {
             return self.selection.head;
@@ -1077,9 +1000,8 @@ impl InputUiState {
         self.replace(head..end, "", EditKind::Deleting, cx);
     }
 
-    /// `false` when nothing was put on the clipboard, which is also the answer
-    /// for a secure field: a password must not leave through Cmd-C, and cut
-    /// therefore must not delete either.
+    /// `false` when nothing reached the clipboard, including a secure field —
+    /// which is what stops cut from deleting.
     fn copy_selection(&mut self, cx: &mut Context<Self>) -> bool {
         if self.secure || self.selection.is_empty() {
             return false;
@@ -1132,8 +1054,7 @@ impl InputUiState {
         start..end.max(start)
     }
 
-    /// The text as this field will actually store it: newlines collapsed in a
-    /// single-line field, and truncated to whatever the char limit still allows.
+    /// The char limit counts what survives the replacement, not the whole text.
     fn fit(&self, new_text: &str, replacing: &Range<usize>) -> String {
         let sanitised = if self.mode.is_multiline() {
             rewrite_line_breaks(new_text, '\n')
@@ -1249,10 +1170,8 @@ fn schedule_tick_after(delay: Duration, epoch: u64, cx: &mut Context<InputUiStat
     .detach();
 }
 
-/// Every line break becomes `replacement`, and a CRLF becomes one of it.
-///
-/// A carriage return never survives either branch: a lone `\r` inside the
-/// document would split no line and render as a control glyph.
+/// Every line break becomes `replacement` and a CRLF becomes one of it; no
+/// carriage return survives either branch.
 fn rewrite_line_breaks(text: &str, replacement: char) -> String {
     let mut out = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
@@ -1357,8 +1276,7 @@ impl EntityInputHandler for InputUiState {
             return;
         };
 
-        // The composition commits as one step: `at` is where it began, `removed`
-        // is what it displaced, and everything between is the result.
+        // The composition commits as one step, spanning from where it began.
         let insertion = self.fit(new_text, &range);
         let at = composition.at.min(range.start);
         self.text.replace_range(range.clone(), &insertion);
@@ -1406,9 +1324,7 @@ impl EntityInputHandler for InputUiState {
         self.text.replace_range(range.clone(), &insertion);
         let marked = range.start..range.start + insertion.len();
 
-        // `new_selected_range_utf16` is relative to the marked text, not to the
-        // document. Treating it as a document range is the classic IME bug: the
-        // caret lands somewhere near the start of the line during composition.
+        // `new_selected_range_utf16` is relative to the marked text, not to the document.
         self.selection = match new_selected_range_utf16 {
             Some(selected) => {
                 let start = marked.start

@@ -1,23 +1,8 @@
-//! What the bundled faces actually declare about themselves.
-//!
-//! `assets/fonts/CONTEXT.txt` names the hazard: Inter follows the RIBBI
-//! convention, so only Regular, Italic, Bold and BoldItalic may share a legacy
-//! family name. Light, Medium, SemiBold and Black each carry their OWN legacy
-//! family ("Inter Medium", "Inter SemiBold", …) and put the real family in the
-//! typographic name record, ID 16. A text stack that reads only ID 1 will not
-//! find weight 500 or 600 under family "Inter", and it does not fail — it
-//! silently answers Regular, so every semibold label in the product draws at
-//! regular with nothing in a log.
-//!
-//! These tests read the `name` table out of the shipped bytes. They pin the
-//! hazard; they cannot tell you what a text stack does with it.
-//!
-//! WHY THERE IS NO TEST HERE THAT RESOLVES A FONT. `TestAppContext` installs
-//! `gpui::NoopTextSystem`, which returns `FontId(1)` for every query including
-//! `"NotAFamilyAtAll"`. A resolution test written against it passes or fails for
-//! reasons that have nothing to do with fonts. The real check runs at startup
-//! against the real text system, in `rise_ui::fonts::load_bundled_fonts`, and
-//! reports through `FontLoad::misresolved`.
+//! Inter follows the RIBBI convention: only Regular/Italic/Bold/BoldItalic share
+//! the legacy family name (ID 1), the other weights put the real family in the
+//! typographic record (ID 16), and a stack reading only ID 1 silently answers
+//! Regular for weights 500 and 600. Nothing here resolves a font —
+//! `TestAppContext` installs `NoopTextSystem`, which answers every query.
 
 use std::path::PathBuf;
 
@@ -61,10 +46,7 @@ fn table(bytes: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     None
 }
 
-/// The value of one `name` record, decoded from whichever encoding it uses.
-///
-/// Windows records are UTF-16BE; Macintosh Roman records are single-byte and
-/// ASCII for anything Inter puts in them.
+/// Windows records are UTF-16BE; Macintosh Roman records are single-byte.
 fn name_record(bytes: &[u8], name_id: u16) -> Option<String> {
     let (offset, _) = table(bytes, b"name")?;
     let count = be16(bytes, offset + 2)? as usize;
@@ -118,10 +100,8 @@ fn every_face_belongs_to_one_typographic_family() {
     }
 }
 
-/// This is the trap, asserted rather than described. When it stops being true —
-/// because the release changed, or because someone swapped the typeface — the
-/// startup check in `load_bundled_fonts` and the family-per-weight table it
-/// guards can be simplified. Until then they are load-bearing.
+/// When this stops holding, the workaround in `rise_theme::Typography` and the
+/// startup check in `load_bundled_fonts` can go.
 #[test]
 fn the_non_ribbi_weights_still_carry_their_own_legacy_family() {
     let ribbi = [FontWeight::NORMAL, FontWeight::BOLD];

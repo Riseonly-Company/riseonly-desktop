@@ -30,16 +30,8 @@ enum Command {
 
 /// A handle onto the one thread that owns the database connection.
 ///
-/// Every read and write is a message. That is deliberate: the canon's
-/// guarantees — a realtime batch landing atomically, a mutation observing its
-/// own predecessor, a revision never moving backwards — are ordering
-/// guarantees, and a mutex provides mutual exclusion without ordering. A single
-/// consumer of a channel provides both.
-///
-/// Reads are serialized with writes here. WAL would allow a separate reader
-/// connection, and that is the obvious optimization when a profile shows reads
-/// queueing behind a long batch; it is not free correctness, so it is not the
-/// default.
+/// Every read and write is a message, so work lands in send order. Reads are
+/// serialized with writes: a long batch delays reads queued behind it.
 #[derive(Clone)]
 pub struct StoreHandle {
     commands: Sender<Command>,
@@ -106,9 +98,6 @@ impl StoreHandle {
     }
 
     /// Runs arbitrary work against the connection on the store thread.
-    ///
-    /// The closure receives the connection and cannot outlive the call, so no
-    /// caller can smuggle a `Connection` onto another thread.
     pub async fn with_connection<T, F>(&self, work: F) -> Result<T, StoreError>
     where
         T: Send + 'static,
@@ -139,11 +128,8 @@ impl StoreHandle {
         .map_err(StoreError::from)
     }
 
-    /// Drains outstanding work and joins the thread.
-    ///
-    /// Explicit rather than left to Drop: closing a store means flushing a
-    /// transaction, and Drop cannot await. An account switch must know the old
-    /// store is finished before the new one opens the same file.
+    /// Drains outstanding work and joins the thread. Must be awaited before
+    /// another store opens the same file; Drop does not do this.
     pub async fn close(&self) -> Result<(), StoreError> {
         let (respond, response) = oneshot::channel();
         if self.commands.send(Command::Close(respond)).is_err() {

@@ -1,0 +1,83 @@
+================================================================================
+rise-ui/list_ui — long lists and their edges
+================================================================================
+
+  list_ui.rs     the wrapper over gpui's `list`, plus a velocity estimate.
+  pagination.rs  the trigger policy. Pure, and the interesting part.
+
+WHAT IS NOT PORTED, AND WHY
+
+  PHASES.txt Phase 1 settled it: gpui's `list` is a SumTree with variable row
+  heights, ListAlignment::Bottom and splice-based prepend anchoring, so most of
+  the reference's RiseManualListView does not need porting. Wrap it; do not
+  reimplement it.
+
+THE ONE THING THAT COULD NOT BE INHERITED
+
+  The reference triggers pagination on a ROW INDEX: `index >= itemCount - 6`.
+  Six rows is about a viewport on a phone and a third of one on a desktop window
+  the user has dragged tall, so the same rule fires far too late on the machine
+  this runs on. The desktop rule is DISTANCE, and the CLAUDE.md says so.
+
+  threshold = clamp(one viewport + |velocity| x 0.6s, 400pt, 2400pt)
+
+  The viewport term covers a list at rest or scrolled slowly. The velocity term
+  covers a fling, where a screen of lead time is a fraction of a second. Both are
+  clamped so a very tall window does not prefetch the whole timeline and a very
+  fast fling does not either.
+
+  Direction matters: an edge is armed when the list is MOVING TOWARDS it, or when
+  it is already within the floor distance. Without the direction test a fast
+  scroll upwards fetches the bottom too, purely because the bottom happens to be
+  within a fling's reach.
+
+WHERE THE VELOCITY COMES FROM
+
+  Two samples and a clock. gpui's scroll event carries a visible RANGE and no
+  velocity, and the phone's `predictedEndLocation` has no counterpart here at
+  all. Smoothed, floored at one frame's interval — two callbacks in the same
+  millisecond would otherwise report tens of thousands of points a second and pin
+  the threshold at its ceiling — and reset to zero after a quarter second of
+  quiet.
+
+AN UNSIZED LIST IS AN INVISIBLE LIST
+
+  gpui's `list` defaults to ListSizingBehavior::Auto, which asks taffy for
+  `height: auto`, and it keeps its rows OUT of the layout tree — it paints them
+  itself in prepaint, inside whatever bounds it was given. So a list with no
+  height of its own measures to zero and paints nothing, however many rows it
+  holds, and nothing anywhere reports an error: the screen just looks empty.
+  Wrapping it in a `div().size_full()` does not help, because that div is the
+  PARENT and the list still asks for `auto`.
+
+  `element()` therefore returns the list already `.size_full()`, which is what
+  Zed's own call sites do. A caller only has to give it a container with a
+  definite height — `ScreenShellUi` does, via `flex_1().min_h_0()`.
+
+  tests/list_ui_fills_its_screen.rs stands the real screen geometry up in a real
+  window and asserts the viewport was measured, because nothing short of a drawn
+  window can tell the difference.
+
+ROW IDENTITY IS THE CALLER'S JOB
+
+  gpui keys rows by index inside the tree, so a splice at the wrong place reuses
+  the wrong row's state. That shows up as a like landing on the post above.
+
+NOTHING MAY ASK THE LIST WHERE IT IS FROM INSIDE ITS OWN CALLBACKS
+
+  gpui holds `ListState`'s `RefCell` mutably for the WHOLE of the scroll handler
+  (`fn scroll` -> `handler(..)`) and for the whole of the row-render closure
+  (`prepaint` -> `layout_items`). Calling `scroll_px_offset_for_scrollbar`,
+  `viewport_bounds`, `max_offset_for_scrollbar`, `item_count` or `splice` from
+  either one is "RefCell already mutably borrowed" — and because the callback is
+  reached through an Objective-C frame, that panic cannot unwind and the process
+  ABORTS instead of showing a backtrace. It took the app down on the first
+  two-finger scroll of a feed that finally had rows in it.
+
+  `on_edge` therefore reads NOTHING in the handler: it takes `cx.defer` and does
+  the whole distance policy there. `defer` and not `on_next_frame` — gpui runs
+  next-frame callbacks inside an update of the ROOT view, which is a second
+  borrow of whatever screen owns the list.
+
+  `ListScrollEvent` carries `visible_range` and `count` and is safe to read; it
+  just has no pixels in it, which is why the policy waits a beat instead.

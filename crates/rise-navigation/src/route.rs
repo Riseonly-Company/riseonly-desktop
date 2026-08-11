@@ -6,21 +6,32 @@ pub enum RootTab {
     Search,
     Shorts,
     Chats,
+    Vacancies,
+    Music,
     Profile,
 }
 
 impl RootTab {
-    /// Presentation order, and it is the reference's own: `MainTabs.swift`
-    /// declares posts, search, chats, shorts, more. The left rail is a
-    /// presentation of this array, so getting the order wrong here moves the
-    /// sections under the user's Cmd+1..5 as well.
-    pub const ALL: [RootTab; 5] = [
+    /// Presentation order. The left rail renders this array, so it is also the
+    /// order of Cmd+1..n.
+    pub const ALL: [RootTab; 7] = [
         RootTab::Feed,
         RootTab::Search,
         RootTab::Chats,
         RootTab::Shorts,
+        RootTab::Vacancies,
+        RootTab::Music,
         RootTab::Profile,
     ];
+
+    /// The sections the rail stacks at the TOP, in order: everything but
+    /// [`RootTab::FOOTER`].
+    pub fn primary() -> &'static [RootTab] {
+        &Self::ALL[..Self::ALL.len() - 1]
+    }
+
+    /// The one section the rail pins to the bottom.
+    pub const FOOTER: RootTab = RootTab::Profile;
 
     pub fn screen_id(self) -> &'static str {
         match self {
@@ -28,11 +39,19 @@ impl RootTab {
             Self::Search => "Search",
             Self::Shorts => "Shorts",
             Self::Chats => "Chats",
+            Self::Vacancies => "Vacancies",
+            Self::Music => "Music",
             Self::Profile => "Profile",
         }
     }
 
-    /// Position in `ALL`, which is what the per-tab stacks and Cmd+1..5 index by.
+    /// Whether this section opens with a LIST beside its content. True only for
+    /// sections you browse then open; a feed or player IS the content.
+    pub fn has_sidebar_list(self) -> bool {
+        matches!(self, Self::Chats | Self::Search)
+    }
+
+    /// Position in `ALL`, which is what the per-tab stacks and Cmd+1..n index by.
     pub fn index(self) -> usize {
         Self::ALL
             .iter()
@@ -43,10 +62,8 @@ impl RootTab {
 
 /// Every screen the shell can show.
 ///
-/// Routes carry ids and parameters only, never module types, so this enum has
-/// no dependency on any feature crate. The composition root is the one place
-/// that turns a route into a screen, and its match is exhaustive by design:
-/// adding a variant here fails the build until it is rendered somewhere.
+/// Variants carry ids and parameters only, never module types, so this enum
+/// stays free of any feature crate.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RootRoute {
     Onboarding,
@@ -75,13 +92,8 @@ impl RootRoute {
         }
     }
 
-    /// The key the screen's data is cached and revalidated under.
-    ///
-    /// Two panes showing the same conversation are one resource, not two, and
-    /// the same conversation reached from a folder and from search is still one.
-    /// Revalidation, cache eviction and push suppression all key off this rather
-    /// than off which column the screen happens to sit in, which is what stops a
-    /// window rearrangement from re-fetching everything it re-lays-out.
+    /// The key the screen's data is cached and revalidated under. Independent of
+    /// which pane shows it, so two panes on one conversation are one resource.
     pub fn resource_key(&self) -> String {
         match self {
             Self::Onboarding | Self::SignIn | Self::SignUp | Self::Settings => {
@@ -109,10 +121,6 @@ impl RootRoute {
     }
 
     /// Whether dropping files onto this screen means anything.
-    ///
-    /// A phone has no pointer and no file manager, so the reference has no
-    /// counterpart for this. The answer is the same one the reference gives for
-    /// attachments: a composer takes files, a feed does not.
     pub fn accepts_files(&self) -> bool {
         matches!(self, Self::Chat { .. } | Self::ChatTopic { .. })
     }

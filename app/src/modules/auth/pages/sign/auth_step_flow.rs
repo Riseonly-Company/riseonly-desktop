@@ -8,58 +8,56 @@ use rise_i18n::tr;
 use rise_media::lottie::lottie_view::LottieView;
 use rise_theme::AppTheme;
 use rise_ui::input_ui::{InputMode, InputUiEvent, InputUiState};
-use rise_ui::{BoxUi, ButtonTone, ButtonUi, IconSize, IconUi, MainText, TextTone};
+use rise_ui::phone_input::{PhoneCountry, countries};
+use rise_ui::{BoxUi, ButtonTone, ButtonUi, CodeFieldUi, IconSize, IconUi, MainText, TextTone};
+use rise_widgets::{CountryMenu, CountryMenuEvent, ModalAction, ModalUi, ModalWidth};
 
 use crate::core::animations;
 use crate::modules::auth::engine::rise_auth_presentation::TagAvailability;
+use crate::modules::auth::shared::auth_validation;
 use crate::modules::auth::stores::auth_actions::auth_types::{
     AuthStep, AuthStepForm, TagMood, validate,
 };
 use crate::modules::auth::stores::auth_interactions::{AuthInteractionsStore, StepOutcome};
 use crate::modules::auth::stores::auth_services::AuthServicesStore;
 
-/// Which path the user started on.
-///
-/// One screen, two entry points, exactly as the reference. It is not fixed: the
-/// footer lets somebody with no account cross over from sign-in, and somebody
-/// who has one cross back, without leaving the screen or retyping their number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AuthMode {
     SignIn,
     SignUp,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AuthFlowEvent {
+    Dismissed,
+}
+
 pub struct AuthStepFlow {
     registering: bool,
+    can_dismiss: bool,
     step: AuthStep,
     form: AuthStepForm,
     field: Entity<InputUiState>,
     interactions: AuthInteractionsStore,
     services: Entity<AuthServicesStore>,
-    /// One player per pose, built once. The mascot changes on every step and on
-    /// every tag verdict; rebuilding would re-rasterise a whole timeline each
-    /// time, which on the tag step is once per keystroke.
     animations: HashMap<&'static str, Entity<LottieView>>,
     animation_side: gpui::Pixels,
     scale_factor: f32,
-    /// The last locally-detected problem. Server refusals live on the snapshot
-    /// instead, so a refusal survives a re-render and a keystroke clears only
-    /// what the keystroke is about.
     local_error: Option<&'static str>,
+    can_reuse_code: bool,
+    // `clear_error` round-trips through the actor: hides the stale key until the snapshot agrees.
+    suppressed_error: Option<&'static str>,
+    registration_started_from_login: bool,
+    country_menu: Option<Entity<CountryMenu>>,
+    country_subscription: Option<Subscription>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
-/// The default calling code.
-///
-/// `+7` is the reference's own default and covers the two largest markets the
-/// product ships in. A country picker is a component of its own and belongs to
-/// `user`, which owns the country catalogue.
-const DEFAULT_CALLING_CODE: &str = "7";
-
 impl AuthStepFlow {
     pub fn new(
         mode: AuthMode,
+        can_dismiss: bool,
         interactions: AuthInteractionsStore,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -73,19 +71,17 @@ impl AuthStepFlow {
                 InputUiEvent::Submitted => flow.submit(cx),
                 InputUiEvent::Cancelled => flow.back(cx),
             }),
-            // The flow watches the snapshot rather than polling it: the Telegram
-            // hop finishes outside the app, and only the repository knows when
-            // the code step may open.
             cx.observe(&services, |flow, _, cx| flow.snapshot_changed(cx)),
         ];
 
         let mut flow = Self {
             registering: matches!(mode, AuthMode::SignUp),
+            can_dismiss,
             step: AuthStep::Phone,
-            form: AuthStepForm {
-                calling_code: DEFAULT_CALLING_CODE.to_owned(),
-                ..AuthStepForm::default()
-            },
+            form: AuthStepForm::detected(
+                countries(),
+                rise_platform::device_locale::current().region.as_deref(),
+            ),
             field,
             interactions,
             services,
@@ -93,6 +89,11 @@ impl AuthStepFlow {
             animation_side: rise_ui::theme(cx as &App).auth.step_art_size,
             scale_factor: window.scale_factor(),
             local_error: None,
+            can_reuse_code: false,
+            suppressed_error: None,
+            registration_started_from_login: false,
+            country_menu: None,
+            country_subscription: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
@@ -116,7 +117,6 @@ impl AuthStepFlow {
         self.registering
     }
 
-    /// Loads a pose the first time it is asked for and keeps it.
     fn ensure_animation(&mut self, name: &'static str, cx: &mut Context<Self>) {
         if self.animations.contains_key(name) {
             return;
@@ -148,29 +148,65 @@ impl AuthStepFlow {
     }
 
     fn field_changed(&mut self, cx: &mut Context<Self>) {
-        let value = self.field.read(cx).text().to_owned();
-        self.form.set(self.step, value.clone());
+        let typed = self.field.read(cx).text().to_owned();
+
+        let filtered = match self.step {
+            AuthStep::RegistrationTag => auth_validation::tag_input(&typed),
+            AuthStep::VerificationCode => auth_validation::code_input(&typed),
+            _ => typed.clone(),
+        };
+
+        self.form.set(self.step, filtered.clone());
         self.local_error = None;
 
+        let shown = if self.step == AuthStep::Phone {
+            self.form.phone.national().to_owned()
+        } else {
+            filtered.clone()
+        };
+        if shown != typed {
+            self.field.update(cx, |field, cx| field.reset(shown, cx));
+        }
+
         if self.step == AuthStep::RegistrationTag {
-            self.interactions.check_tag(&value);
+            self.interactions.check_tag(&filtered);
+        }
+
+        if self.step == AuthStep::VerificationCode && CodeFieldUi::is_complete(&filtered) {
+            self.submit(cx);
+            return;
         }
 
         cx.notify();
     }
 
     fn submit(&mut self, cx: &mut Context<Self>) {
-        match self
-            .interactions
-            .submit_step(self.step, &self.form, self.registering, cx)
-        {
-            StepOutcome::Advance(next) => self.move_to(next, cx),
+        match self.interactions.submit_step(
+            self.step,
+            &self.form,
+            self.registering,
+            self.can_reuse_code,
+            cx,
+        ) {
+            StepOutcome::Advance(next) => {
+                if next == AuthStep::VerificationCode {
+                    self.can_reuse_code = false;
+                }
+                self.move_to(next, cx)
+            }
             StepOutcome::Invalid(key) => {
                 self.local_error = Some(key);
                 cx.notify();
             }
             StepOutcome::Submitted | StepOutcome::Ignored => cx.notify(),
         }
+    }
+
+    fn recover_from_tag_conflict(&mut self, cx: &mut Context<Self>) {
+        self.can_reuse_code = self.form.code.chars().count() == auth_validation::CODE_LENGTH;
+        self.dismiss_refusal(cx);
+        self.interactions.mark_tag_taken();
+        self.move_to(AuthStep::RegistrationTag, cx);
     }
 
     fn move_to(&mut self, step: AuthStep, cx: &mut Context<Self>) {
@@ -184,45 +220,69 @@ impl AuthStepFlow {
     }
 
     fn back(&mut self, cx: &mut Context<Self>) {
+        if self.services.read(cx as &App).telegram_link().is_some() {
+            self.finish_telegram_redirect(cx);
+            return;
+        }
+
+        if self.step == AuthStep::RegistrationName && self.registration_started_from_login {
+            self.registering = false;
+            self.registration_started_from_login = false;
+            self.dismiss_refusal(cx);
+            self.move_to(AuthStep::LoginPassword, cx);
+            return;
+        }
+
         let Some(previous) = self.step.previous() else {
+            if self.can_dismiss {
+                cx.emit(AuthFlowEvent::Dismissed);
+            }
             return;
         };
         self.interactions.cancel_verification_code_entry();
-        self.interactions.clear_error();
+        self.dismiss_refusal(cx);
         self.move_to(previous, cx);
     }
 
-    /// Crosses between signing in and registering without losing the number.
-    ///
-    /// This is the reference's `beginRegistrationFromLogin` / `useLoginFromPhone`
-    /// pair, and it is the answer to "there is no way to register when you have
-    /// no account": the footer offers it on exactly the two steps where the user
-    /// has just found out which one they are on.
-    fn switch_purpose(&mut self, registering: bool, cx: &mut Context<Self>) {
-        if self.registering == registering {
+    fn begin_registration_from_login(&mut self, cx: &mut Context<Self>) {
+        if self.registering {
             return;
         }
-        self.registering = registering;
-        self.interactions.clear_error();
+        self.registering = true;
+        self.registration_started_from_login = true;
+        self.dismiss_refusal(cx);
+        self.move_to(AuthStep::RegistrationName, cx);
+    }
 
-        let next = if registering {
-            AuthStep::RegistrationName
-        } else {
-            AuthStep::LoginPassword
-        };
-        self.move_to(next, cx);
+    fn use_login_from_phone(&mut self, cx: &mut Context<Self>) {
+        if !self.registering {
+            return;
+        }
+        self.registering = false;
+        self.registration_started_from_login = false;
+        self.local_error = None;
+        self.dismiss_refusal(cx);
     }
 
     fn snapshot_changed(&mut self, cx: &mut Context<Self>) {
         let flow = self.services.read(cx).flow().clone();
+
+        if flow.error_key != self.suppressed_error {
+            self.suppressed_error = None;
+        }
+
+        if self.step == AuthStep::VerificationCode
+            && self.server_refusal(cx as &App) == Some("tag_already_exists")
+        {
+            self.recover_from_tag_conflict(cx);
+            return;
+        }
 
         if flow.code_entry_active && self.step != AuthStep::VerificationCode {
             self.move_to(AuthStep::VerificationCode, cx);
             return;
         }
 
-        // The tag verdict changes the mascot, so its pose has to be loaded
-        // before the render that wants it.
         if self.step == AuthStep::RegistrationTag {
             let mood = self.tag_mood(cx as &App);
             let name = self.step.animation(mood);
@@ -238,21 +298,38 @@ impl AuthStepFlow {
         }
     }
 
-    fn message_key(&self, cx: &App) -> Option<&'static str> {
+    fn message_key(&self) -> Option<&'static str> {
         self.local_error
-            .or_else(|| self.services.read(cx).error_key())
+    }
+
+    fn server_refusal(&self, cx: &App) -> Option<&'static str> {
+        self.services
+            .read(cx)
+            .error_key()
+            .filter(|key| Some(*key) != self.suppressed_error)
+    }
+
+    fn dismiss_refusal(&mut self, cx: &mut Context<Self>) {
+        self.suppressed_error = self.services.read(cx as &App).error_key();
+        self.interactions.clear_error();
+        cx.notify();
     }
 
     fn can_continue(&self, cx: &App) -> bool {
-        !self.services.read(cx).is_busy() && validate(self.step, &self.form).is_valid()
+        let services = self.services.read(cx);
+        if services.is_busy() || !validate(self.step, &self.form).is_valid() {
+            return false;
+        }
+        if self.step == AuthStep::RegistrationTag {
+            return services.tag_is_confirmed_free();
+        }
+        true
     }
 
-    // ── pieces of the screen ────────────────────────────────────────────────
-
-    /// The bar across the top: a back button and one segment per step.
     fn header(&self, theme: &AppTheme, cx: &mut Context<Self>) -> AnyElement {
         let metrics = theme.auth;
         let (index, total) = self.step.progress(self.registering);
+        let busy = self.services.read(cx as &App).is_busy();
 
         let segments = div()
             .flex()
@@ -281,7 +358,7 @@ impl AuthStepFlow {
             .justify_center()
             .child(segments);
 
-        if self.step.previous().is_some() {
+        if self.step.previous().is_some() || self.can_dismiss {
             let mut button = div()
                 .id("auth.back")
                 .absolute()
@@ -292,8 +369,12 @@ impl AuthStepFlow {
                 .justify_center()
                 .rounded_full()
                 .bg(theme.bg._200)
-                .cursor_pointer()
-                .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| flow.back(cx)));
+                .when(!busy, |button| {
+                    button
+                        .cursor_pointer()
+                        .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| flow.back(cx)))
+                })
+                .when(busy, |button| button.opacity(0.5));
 
             if let Some(icon) =
                 IconUi::render(theme, "chevron.left", IconSize::Small, theme.text.primary)
@@ -307,18 +388,144 @@ impl AuthStepFlow {
         header.into_any_element()
     }
 
-    /// What sits under the step's subtitle: the field, or the Telegram hop.
-    fn body(&self, theme: &AppTheme, cx: &mut Context<Self>) -> AnyElement {
-        if self.services.read(cx as &App).telegram_link().is_some() {
-            return self.telegram_step(theme, cx);
+    fn country_button(&self, theme: &AppTheme, cx: &mut Context<Self>) -> AnyElement {
+        let country = self.form.phone.country().clone();
+        let metrics = theme.auth;
+
+        let open = self.country_menu.is_some();
+
+        let mut button =
+            div()
+                .id("auth.country")
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing._200)
+                .h(metrics.field_height)
+                .px(theme.input.padding_x)
+                .rounded(theme.input.radius_300)
+                .bg(theme.input.bg_200)
+                .border_1()
+                .border_color(if open {
+                    theme.primary._100
+                } else {
+                    theme.input.border_300
+                })
+                .cursor_pointer()
+                .on_click(cx.listener(|flow, _: &ClickEvent, window, cx| {
+                    flow.toggle_country_menu(window, cx)
+                }));
+
+        button = button.child(rise_ui::FlagUi::render(
+            theme,
+            &country.region,
+            metrics.flag_width,
+        ));
+
+        button =
+            button.child(MainText::body(theme, TextTone::Primary).child(country.display_code()));
+
+        let chevron = if self.country_menu.is_some() {
+            "chevron.up"
+        } else {
+            "chevron.down"
+        };
+        if let Some(icon) = IconUi::render(theme, chevron, IconSize::Small, theme.text.secondary) {
+            button = button.child(icon);
         }
 
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing._300)
-            .w_full()
-            .child(self.field.clone());
+        button.into_any_element()
+    }
+
+    fn toggle_country_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.country_menu.is_some() {
+            self.close_country_menu(window, cx);
+        } else {
+            self.open_country_menu(window, cx);
+        }
+    }
+
+    fn open_country_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.form.phone.country().region.clone();
+        let catalogue = countries().all().to_vec();
+
+        let menu = cx.new(|cx| CountryMenu::new(catalogue, &selected, cx));
+
+        self.country_subscription =
+            Some(
+                cx.subscribe_in(&menu, window, |flow, _, event, window, cx| match event {
+                    CountryMenuEvent::Chose(country) => {
+                        flow.choose_country(country.clone(), window, cx)
+                    }
+                    CountryMenuEvent::Dismissed => flow.close_country_menu(window, cx),
+                }),
+            );
+
+        let handle = menu.read(cx).query_focus_handle(cx as &App);
+        window.focus(&handle, cx);
+        menu.read(cx).reveal_selection();
+
+        self.country_menu = Some(menu);
+        cx.notify();
+    }
+
+    fn close_country_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.country_menu.take().is_none() {
+            return;
+        }
+        self.country_subscription = None;
+
+        let field = self.field.read(cx).focus_handle(cx);
+        window.focus(&field, cx);
+        cx.notify();
+    }
+
+    fn choose_country(
+        &mut self,
+        country: PhoneCountry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form.phone.set_country(country);
+        self.close_country_menu(window, cx);
+        self.sync_field(cx);
+        cx.notify();
+    }
+
+    fn body(&self, theme: &AppTheme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let mut body = div().flex().flex_col().gap(theme.spacing._300).w_full();
+
+        if self.step == AuthStep::Phone {
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.spacing._300)
+                    .w_full()
+                    .child(self.country_button(theme, cx))
+                    .child(div().flex_1().child(self.field.clone())),
+            );
+        } else if self.step == AuthStep::VerificationCode {
+            let focused = self
+                .field
+                .read(cx as &App)
+                .focus_handle(cx as &App)
+                .is_focused(window);
+            body = body.child(CodeFieldUi::render(
+                theme,
+                "auth.code",
+                &self.form.code,
+                self.field.clone(),
+                focused,
+                cx.listener(|flow, _: &ClickEvent, window, cx| {
+                    let handle = flow.field.read(cx as &App).focus_handle(cx as &App);
+                    window.focus(&handle, cx);
+                }),
+            ));
+        } else {
+            body = body.child(self.field.clone());
+        }
 
         match self.step {
             AuthStep::RegistrationTag => {
@@ -340,12 +547,19 @@ impl AuthStepFlow {
     }
 
     fn tag_status(&self, theme: &AppTheme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (key, color) = match self.services.read(cx as &App).tag_availability() {
+        let services = self.services.read(cx as &App);
+        let (key, color) = match services.tag_availability() {
             TagAvailability::Checking => ("auth_tag_checking", theme.text.secondary),
             TagAvailability::Available => ("auth_tag_available", theme.semantic.success_200),
             TagAvailability::Taken => ("tag_already_exists", theme.semantic.error_200),
             TagAvailability::Unknown => ("auth_tag_check_failed", theme.primary._100),
-            TagAvailability::Idle | TagAvailability::Invalid => return None,
+            TagAvailability::Invalid => (
+                services
+                    .tag_problem_key()
+                    .unwrap_or("tag_invalid_characters"),
+                theme.semantic.error_200,
+            ),
+            TagAvailability::Idle => return None,
         };
 
         Some(
@@ -357,67 +571,61 @@ impl AuthStepFlow {
         )
     }
 
-    /// The step the code actually comes from.
-    ///
-    /// The bot is not decoration: send-code succeeds by handing back a bot
-    /// username, the user leaves for Telegram, shares their number, and comes
-    /// back with a code. Without this the flow asks for a code nobody ever sent.
-    fn telegram_step(&self, theme: &AppTheme, cx: &mut Context<Self>) -> AnyElement {
-        let metrics = theme.auth;
-        let link = self
-            .services
-            .read(cx as &App)
-            .telegram_link()
-            .unwrap_or_default();
+    fn telegram_modal(
+        &self,
+        theme: &AppTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let link = self.services.read(cx as &App).telegram_link()?;
 
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(theme.spacing._400)
-            .w_full()
+        let flow = cx.entity();
+        let finish = move |_window: &mut Window, cx: &mut App| {
+            flow.update(cx, |flow, cx| flow.finish_telegram_redirect(cx));
+        };
+        let open = {
+            let flow = cx.entity();
+            move |_window: &mut Window, cx: &mut App| {
+                flow.update(cx, |flow, cx| flow.open_telegram(cx));
+            }
+        };
+
+        let modal = ModalUi::new("auth.telegram")
+            .title(tr("tg_redirect_title"))
+            .subtitle(tr("tg_redirect_subtitle"))
+            .width(ModalWidth::Medium)
+            .without_scroll()
+            .track_focus(&self.focus_handle)
+            .on_dismiss(finish.clone())
             .child(
-                MainText::body(theme, TextTone::Secondary)
+                div()
+                    .w_full()
                     .text_center()
-                    .child(tr("tg_redirect_subtitle")),
-            )
-            .child(
-                MainText::body(theme, TextTone::Secondary)
-                    .text_size(theme.typography.caption().size)
-                    .text_color(theme.primary._100)
-                    .child(link),
-            )
-            .child(
-                div()
-                    .id("auth.telegram.open")
-                    .w_full()
-                    .cursor_pointer()
-                    .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| flow.open_telegram(cx)))
                     .child(
-                        ButtonUi::sized(theme, ButtonTone::Primary, metrics.field_height)
-                            .w_full()
-                            .child(tr("tg_redirect_open_btn")),
-                    ),
+                        MainText::body(theme, TextTone::Secondary)
+                            .text_size(theme.typography.caption().size)
+                            .text_color(theme.primary._100)
+                            .child(link),
+                    )
+                    .into_any_element(),
             )
-            .child(
-                div()
-                    .id("auth.telegram.done")
-                    .w_full()
-                    .cursor_pointer()
-                    .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| {
-                        flow.interactions.complete_telegram_redirect();
-                        flow.move_to(AuthStep::VerificationCode, cx);
-                    }))
-                    .child(
-                        ButtonUi::sized(theme, ButtonTone::Neutral, metrics.field_height)
-                            .w_full()
-                            .child(tr("tg_redirect_got_code_btn")),
-                    ),
+            .action(
+                ModalAction::primary("auth.telegram.open", tr("tg_redirect_open_btn"))
+                    .on_click(open),
             )
-            .into_any_element()
+            .action(
+                ModalAction::neutral("auth.telegram.done", tr("tg_redirect_got_code_btn"))
+                    .on_click(finish),
+            );
+
+        Some(modal.render(theme, window, cx))
     }
 
-    /// The primary action, and the way across to the other purpose.
+    fn finish_telegram_redirect(&mut self, cx: &mut Context<Self>) {
+        self.interactions.complete_telegram_redirect();
+        self.move_to(AuthStep::VerificationCode, cx);
+    }
+
     fn footer(&self, theme: &AppTheme, cx: &mut Context<Self>) -> AnyElement {
         let metrics = theme.auth;
         let mut footer = div()
@@ -427,8 +635,8 @@ impl AuthStepFlow {
             .gap(theme.spacing._400)
             .w_full();
 
-        // "No account? Sign up" on the password step, "Have an account? Sign in"
-        // on the phone step of a registration — the reference's own two.
+        let busy = self.services.read(cx as &App).is_busy();
+
         let crossover = match (self.step, self.registering) {
             (AuthStep::LoginPassword, _) => Some(("noaccount", "signup", true)),
             (AuthStep::Phone, true) => Some(("haveaccount", "signin", false)),
@@ -446,10 +654,18 @@ impl AuthStepFlow {
                     .child(
                         div()
                             .id("auth.crossover")
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |flow, _: &ClickEvent, _, cx| {
-                                flow.switch_purpose(to_registration, cx)
-                            }))
+                            .when(!busy, |link| {
+                                link.cursor_pointer().on_click(cx.listener(
+                                    move |flow, _: &ClickEvent, _, cx| {
+                                        if to_registration {
+                                            flow.begin_registration_from_login(cx);
+                                        } else {
+                                            flow.use_login_from_phone(cx);
+                                        }
+                                    },
+                                ))
+                            })
+                            .when(busy, |link| link.opacity(0.5))
                             .child(
                                 MainText::body(theme, TextTone::Primary)
                                     .text_color(theme.primary._100)
@@ -467,12 +683,11 @@ impl AuthStepFlow {
                 div()
                     .id("auth.submit")
                     .w_full()
-                    .when(enabled, |row| row.cursor_pointer())
-                    .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| flow.submit(cx)))
+                    .when(enabled, |row| {
+                        row.cursor_pointer()
+                            .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| flow.submit(cx)))
+                    })
                     .child(
-                        // One token for the field and the button, so the primary
-                        // action is never a different size from the control it
-                        // submits.
                         ButtonUi::sized(theme, ButtonTone::Primary, metrics.field_height)
                             .w_full()
                             .opacity(if enabled { 1.0 } else { 0.5 })
@@ -482,6 +697,8 @@ impl AuthStepFlow {
             .into_any_element()
     }
 }
+
+impl gpui::EventEmitter<AuthFlowEvent> for AuthStepFlow {}
 
 impl Focusable for AuthStepFlow {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -495,18 +712,15 @@ impl Render for AuthStepFlow {
         let metrics = theme.auth;
         let on_telegram = self.services.read(cx).telegram_link().is_some();
         let mood = self.tag_mood(cx as &App);
-        let message = self.message_key(cx as &App);
+        let message = self.message_key();
 
-        // The caret belongs in the field the step is about, so typing works the
-        // moment the screen appears rather than after a click. Not while the
-        // Telegram step is up: there is no field to type into.
         if !on_telegram && window.focused(cx).is_none() {
             let handle = self.field.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
         }
 
         let header = self.header(&theme, cx);
-        let body = self.body(&theme, cx);
+        let body = self.body(&theme, window, cx);
         let footer = self.footer(&theme, cx);
 
         let mut page = div()
@@ -531,11 +745,9 @@ impl Render for AuthStepFlow {
                     .text_color(theme.text.primary)
                     .child(tr(self.step.title_key())),
             )
-            .child(
-                div().mt(theme.spacing._400).text_center().child(
-                    MainText::body(&theme, TextTone::Secondary).child(tr(self.step.subtitle_key())),
-                ),
-            )
+            .child(div().mt(theme.spacing._400).text_center().child(
+                MainText::body(&theme, TextTone::Secondary).child(tr(self.step.subtitle_key())),
+            ))
             .child(div().mt(metrics.step_field_gap).w_full().child(body));
 
         if let Some(key) = message {
@@ -549,13 +761,12 @@ impl Render for AuthStepFlow {
             );
         }
 
-        BoxUi::screen(&theme)
+        let mut screen = BoxUi::screen(&theme)
             .track_focus(&self.focus_handle)
+            .relative()
             .flex()
             .flex_col()
             .items_center()
-            // The window has no titlebar, so the header sits below the band the
-            // traffic lights occupy rather than under them.
             .pt(theme.shell.window_drag_height)
             .px(metrics.content_padding)
             .pb(metrics.content_padding)
@@ -569,7 +780,99 @@ impl Render for AuthStepFlow {
                     .justify_center()
                     .child(page),
             )
-            .child(div().w(metrics.content_width).max_w_full().child(footer))
+            .child(div().w(metrics.content_width).max_w_full().child(footer));
+
+        if let Some(key) = self.server_refusal(cx as &App) {
+            let title = if self.registering {
+                "register_error_title"
+            } else {
+                "auth_signin_error_title"
+            };
+            let heading = theme.typography.headline();
+
+            screen = screen.child(
+                div()
+                    .id("auth.refusal.scrim")
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme.material.scrim)
+                    .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| flow.dismiss_refusal(cx)))
+                    .child(
+                        div()
+                            .occlude()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(theme.spacing._400)
+                            .w(metrics.content_width)
+                            .max_w_full()
+                            .p(theme.spacing._600)
+                            .bg(theme.bg._100)
+                            .border_1()
+                            .border_color(theme.border._200)
+                            .rounded(theme.radius._400)
+                            .shadow_lg()
+                            .child(
+                                div()
+                                    .text_center()
+                                    .text_size(heading.size)
+                                    .line_height(heading.line_height)
+                                    .font(heading.font)
+                                    .text_color(theme.text.primary)
+                                    .child(tr(title)),
+                            )
+                            .child(
+                                div().text_center().child(
+                                    MainText::body(&theme, TextTone::Secondary).child(tr(key)),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .id("auth.refusal.ok")
+                                    .w_full()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|flow, _: &ClickEvent, _, cx| {
+                                        flow.dismiss_refusal(cx)
+                                    }))
+                                    .child(
+                                        ButtonUi::sized(
+                                            &theme,
+                                            ButtonTone::Primary,
+                                            metrics.field_height,
+                                        )
+                                        .w_full()
+                                        .child(tr("ok")),
+                                    ),
+                            ),
+                    ),
+            );
+        }
+
+        if let Some(modal) = self.telegram_modal(&theme, window, cx) {
+            screen = screen.child(modal);
+        }
+
+        if let Some(menu) = self.country_menu.clone() {
+            screen = screen.child(
+                div()
+                    .id("auth.country.scrim")
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme.material.scrim)
+                    .on_click(cx.listener(|flow, _: &ClickEvent, window, cx| {
+                        flow.close_country_menu(window, cx)
+                    }))
+                    .child(menu),
+            );
+        }
+
+        screen
     }
 }
 

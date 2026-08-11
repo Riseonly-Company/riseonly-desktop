@@ -1,11 +1,8 @@
 use gpui::{Div, Hsla, Pixels, div, prelude::*};
 use rise_theme::AppTheme;
 
-/// Which height step a button sits on.
-///
-/// The three steps are the reference's `height_100`/`_300`/`_500` tokens, not a
-/// free number: a button whose height is typed at the call site stops lining up
-/// with the field next to it the moment either one is restyled.
+/// Which height step a button sits on. The steps are theme tokens, not free
+/// numbers, so buttons keep lining up with the controls beside them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ButtonSize {
     /// The primary action of a screen — a sign-in, a send.
@@ -17,11 +14,8 @@ pub enum ButtonSize {
     Small,
 }
 
-/// How loudly a button asks to be pressed.
-///
-/// Tone picks background and label together, which is the whole point: the two
-/// are a contrast pair, and choosing them separately is how a label ends up
-/// invisible on its own button.
+/// How loudly a button asks to be pressed. Tone picks background and label
+/// together — they are a contrast pair and must not be chosen separately.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ButtonTone {
     /// The accent fill. One per screen — the action the screen exists for.
@@ -31,13 +25,8 @@ pub enum ButtonTone {
     Neutral,
 }
 
-/// A button's geometry and colours, resolved from the theme.
-///
-/// This is a set of associated functions rather than an element type. gpui's
-/// interactivity — `.on_click`, hover and active styles, disabled state — is
-/// already fluent on `Div`, so wrapping it would mean re-exporting all of it;
-/// [`ButtonUi::base`] hands back the styled `Div` and the call site keeps using
-/// gpui directly.
+/// A button's geometry and colours, resolved from the theme. [`ButtonUi::base`]
+/// hands back a styled `Div`, so the call site keeps gpui's own interactivity.
 pub struct ButtonUi;
 
 impl ButtonUi {
@@ -60,10 +49,8 @@ impl ButtonUi {
         }
     }
 
-    /// The label colour that reads against [`ButtonUi::background`].
-    ///
-    /// A primary button inverts — it draws the darkest background colour on the
-    /// accent fill — so this is not `text.primary` for every tone.
+    /// The label colour that reads against [`ButtonUi::background`]. A primary
+    /// button inverts, so this is not `text.primary` for every tone.
     pub fn label_color(theme: &AppTheme, tone: ButtonTone) -> Hsla {
         match tone {
             ButtonTone::Primary => theme.bg._000,
@@ -72,22 +59,13 @@ impl ButtonUi {
     }
 
     /// A centred, filled, rounded button box — everything except the label and
-    /// the click handler.
-    ///
-    /// Add both with gpui: `ButtonUi::base(theme, tone, size).child("Войти")
-    /// .on_click(..)`. The returned `Div` is not yet interactive, so a
-    /// disabled-looking button is made by leaving the handler off rather than by
-    /// a flag this helper would have to carry.
+    /// the click handler, which the caller adds with gpui's own `Div` methods.
     pub fn base(theme: &AppTheme, tone: ButtonTone, size: ButtonSize) -> Div {
         Self::sized(theme, tone, Self::height(theme, size))
     }
 
-    /// A button at a height the caller owns.
-    ///
-    /// The escape hatch that keeps the ramp honest: a screen whose button has to
-    /// match the field above it passes that FIELD's token rather than picking
-    /// the ramp step which happens to be closest today. `theme.auth.field_height`
-    /// is the only caller so far, and it is one token for both controls.
+    /// A button at a height the caller owns. Pass the token of the control it
+    /// must match, never a ramp step that happens to be closest.
     pub fn sized(theme: &AppTheme, tone: ButtonTone, height: Pixels) -> Div {
         div()
             .flex()
@@ -95,8 +73,6 @@ impl ButtonUi {
             .justify_center()
             .h(height)
             .px(theme.spacing._900)
-            // The pill the reference gives its primary action. A radius, not a
-            // height, so it does not move when the height does.
             .rounded(theme.button.radius_200)
             .bg(Self::background(theme, tone))
             .text_color(Self::label_color(theme, tone))
@@ -130,8 +106,6 @@ mod tests {
         let theme = AppTheme::dark();
         let height = theme.auth.field_height;
 
-        // The rule the user asked for: the primary action is the same size as
-        // the field above it, by construction rather than by coincidence.
         assert_eq!(height, theme.auth.field_height);
         assert!(height > px(0.0));
     }

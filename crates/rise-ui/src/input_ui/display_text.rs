@@ -4,8 +4,7 @@ use gpui::SharedString;
 
 use crate::input_ui::text_boundaries;
 
-/// One bullet per grapheme, never per char: an emoji with a skin-tone modifier
-/// is four chars and must not leak its length through four bullets.
+/// One bullet per grapheme, never per char, so a cluster cannot leak its length.
 pub const SECURE_BULLET: char = '\u{2022}';
 
 const BULLET_LEN: usize = SECURE_BULLET.len_utf8();
@@ -18,11 +17,8 @@ pub struct DisplayLine {
 
 /// What the element actually shapes, and how to get back to the document.
 ///
-/// Three things can make the shaped string differ from the field's text: an
-/// empty field shows its placeholder, a secure field shows bullets, and a
-/// multiline field is shaped one hard line at a time. Every offset the rest of
-/// the component holds is a source offset; this type is the only place that
-/// knows how to project one onto the string that was shaped.
+/// Every offset the rest of the component holds is a source offset; this type
+/// is the only place that projects one onto the string that was shaped.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DisplayText {
     pub text: SharedString,

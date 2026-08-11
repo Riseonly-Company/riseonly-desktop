@@ -1,12 +1,7 @@
-//! CLDR cardinal plural selection.
+//! CLDR cardinal plural selection; must agree with `backend/common/src/i18n/plural.rs`.
 //!
-//! A direct mirror of `backend/common/src/i18n/plural.rs`. The two must agree:
-//! a notification rendered server-side and the same phrase rendered in-app have
-//! to pick the same form, or the user sees the count agree in one place and
-//! disagree in the other.
-//!
-//! Only integer counts are pluralised in this product, so the rules are
-//! evaluated against `i` with `v = 0`; fractional operands are not modelled.
+//! Only integer counts are pluralised, so rules are evaluated against `i` with
+//! `v = 0`; fractional operands are not modelled.
 
 use crate::app_language_catalog::PluralRules;
 
@@ -140,10 +135,7 @@ impl PluralRules {
         }
     }
 
-    /// Candidate key suffixes in preference order. A catalogue that is missing
-    /// the exact category still renders through `other`, which every language
-    /// defines — a partially translated locale degrades instead of showing a
-    /// raw key.
+    /// Candidate key suffixes in preference order: the exact category, then `other`.
     pub fn key_suffixes(self, count: i64) -> [&'static str; 2] {
         [
             self.category(count).as_str(),
@@ -283,8 +275,6 @@ mod tests {
     }
 
     /// Every family, against the same counts the server's own suite asserts.
-    /// A divergence here is a user-visible bug: the push says "5 новых", the
-    /// screen behind it says "5 новые".
     #[test]
     fn every_family_agrees_with_the_server_table() {
         let counts: [i64; 16] = [0, 1, 2, 3, 4, 5, 10, 11, 12, 14, 19, 20, 21, 22, 25, 101];

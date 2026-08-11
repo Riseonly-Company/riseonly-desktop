@@ -1,21 +1,7 @@
 //! Choosing what to ask the sound device for.
 //!
-//! The three operating systems disagree about what a device is willing to do,
-//! and the disagreement is not cosmetic:
-//!
-//!   - CoreAudio will usually open at the file's own rate, so nothing is
-//!     converted and nothing is lost.
-//!   - WASAPI in shared mode is FIXED at whatever the user set in the sound
-//!     control panel. It does not negotiate. A 44.1 kHz track played on a
-//!     48 kHz device has to be resampled by us.
-//!   - ALSA and PulseAudio advertise ranges, and what they will actually open
-//!     depends on the plugin chain behind them.
-//!
-//! So the choice is a pure function of what the device advertises and what the
-//! file is, and all three shapes are tested on a Mac. The one thing this
-//! refuses to do is silently accept a rate that is not the file's without
-//! saying so: `DeviceConfig::resampling` is what tells the pump to insert the
-//! converter, and the alternative to knowing is playing the catalogue sharp.
+//! WASAPI shared mode does not negotiate — it is fixed at the rate set in the
+//! sound control panel, so a file at another rate must be resampled by us.
 
 use super::format::{SampleFormat, StreamFormat};
 
@@ -49,8 +35,8 @@ pub struct DeviceConfig {
     pub sample_rate: u32,
     pub channels: u16,
     pub sample_format: SampleFormat,
-    /// True when the device would not take the file's rate. The pump reads
-    /// this; nothing else may infer it by comparing numbers itself.
+    /// True when the device would not take the file's rate. The pump reads this
+    /// rather than comparing rates itself.
     pub resampling: bool,
 }
 
@@ -62,11 +48,6 @@ pub enum OutputError {
 }
 
 /// How much audio is buffered ahead of the device.
-///
-/// 300 ms. Large enough that a decode thread descheduled behind a disk read
-/// does not underrun, small enough that a pause or a track change is not
-/// visibly late. A desktop has no reason for the tighter budget a phone call
-/// path needs, and the reference's player has no low-latency mode at all.
 pub const BUFFER_MILLIS: u64 = 300;
 
 pub const fn ring_samples(config: DeviceConfig) -> usize {
@@ -75,8 +56,7 @@ pub const fn ring_samples(config: DeviceConfig) -> usize {
 
 /// Pick a configuration for this file on this device.
 ///
-/// Ordered by what it costs to be wrong: playing at the wrong rate is the worst
-/// (audible pitch shift), converting sample formats is the cheapest.
+/// Preference order: the file's own rate, then channel count, then sample format.
 pub fn choose(
     source: StreamFormat,
     supported: &[SupportedConfig],
@@ -114,8 +94,7 @@ pub fn choose(
         .into_iter()
         .min_by_key(|config| {
             (
-                // A device with fewer channels than the file downmixes, which
-                // loses a channel outright; more is free.
+                // Fewer channels than the file downmixes and loses one; more is free.
                 config.channels < source.channels,
                 config.channels.abs_diff(source.channels),
                 format_rank(config.sample_format),
@@ -131,8 +110,7 @@ pub fn choose(
     })
 }
 
-/// f32 is what the pipeline already holds, so it needs no conversion at all.
-/// i32 keeps every bit of a 24-bit master; i16 is the lossy one.
+/// f32 needs no conversion, i32 keeps a 24-bit master intact, i16 is lossy.
 const fn format_rank(format: SampleFormat) -> u8 {
     match format {
         SampleFormat::F32 => 0,
@@ -143,21 +121,14 @@ const fn format_rank(format: SampleFormat) -> u8 {
 
 /// A sound device that plays what the ring holds.
 ///
-/// The trait exists so the pump, the clock and every policy above are tested
-/// with no device at all — CI runners have no sound card, and a test suite that
-/// needs one is a test suite that does not run.
-///
-/// Deliberately not `Send`. `cpal::Stream` is not `Send` on every backend, so
-/// the sink stays on the thread that opened it and the ring is the only thing
-/// that crosses threads. That is the correct shape anyway: the thing that
-/// crosses is audio, not ownership of a device.
+/// Deliberately not `Send`: `cpal::Stream` is not `Send` on every backend, so
+/// the sink stays on the thread that opened it.
 pub trait AudioSink {
     fn config(&self) -> DeviceConfig;
     fn play(&mut self) -> Result<(), OutputError>;
     fn pause(&mut self) -> Result<(), OutputError>;
-    /// Frames the device has actually consumed. The playback position comes
-    /// from this and never from wall-clock time: they diverge as soon as the
-    /// device's clock drifts, which it does.
+    /// Frames the device has actually consumed. Playback position comes from
+    /// this, never from wall-clock time — the device clock drifts.
     fn frames_played(&self) -> u64;
 }
 
@@ -169,7 +140,6 @@ mod tests {
         StreamFormat::new(44_100, 2).unwrap()
     }
 
-    /// What a CoreAudio device typically advertises: a wide range, f32.
     fn coreaudio() -> Vec<SupportedConfig> {
         vec![SupportedConfig {
             channels: 2,
@@ -179,8 +149,6 @@ mod tests {
         }]
     }
 
-    /// What WASAPI shared mode advertises: exactly one rate, the one the user
-    /// picked in the control panel.
     fn wasapi_shared() -> Vec<SupportedConfig> {
         vec![SupportedConfig {
             channels: 2,
@@ -190,7 +158,6 @@ mod tests {
         }]
     }
 
-    /// A typical ALSA device: several formats, a couple of channel counts.
     fn alsa() -> Vec<SupportedConfig> {
         vec![
             SupportedConfig {

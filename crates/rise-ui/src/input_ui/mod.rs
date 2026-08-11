@@ -1,11 +1,4 @@
 //! The text field: [`InputUi`] paints, [`InputUiState`] remembers.
-//!
-//! The pieces below it are public because the field is assembled from them, not
-//! because a screen is expected to use them directly: [`DisplayText`] is what is
-//! shown rather than what was typed, [`ShapedInput`] maps between pixels and
-//! offsets, [`EditHistory`] coalesces a run of typing into one undo step,
-//! [`CaretBlink`] owns the blink, and `text_boundaries` holds the
-//! grapheme- and UTF-16-aware arithmetic the rest of it stands on.
 
 mod caret_blink;
 mod display_text;

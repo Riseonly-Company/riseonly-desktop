@@ -1,14 +1,8 @@
-//! Wrappers over the gpui platform calls that are not uniform across the three
-//! backends.
+//! Wrappers over the gpui platform calls that are not uniform across the three backends.
 //!
-//! gpui is tri-platform but not evenly so. On Windows `hide_other_apps` and
-//! `unhide_other_apps` are live `unimplemented!()` calls, and
-//! `start_external_drag` does not exist at all. Calling them directly compiles
-//! everywhere and panics on one OS, which is the worst possible failure shape:
-//! it survives review, survives CI on a Mac, and reaches a user.
-//!
-//! Every call here reports what it did, so a caller can offer an alternative
-//! instead of assuming success.
+//! On Windows `hide_other_apps`/`unhide_other_apps` are live `unimplemented!()` panics and
+//! `start_external_drag` does not exist; calling gpui directly compiles everywhere and panics
+//! on one OS. Every call here reports what it did instead, so a caller can offer an alternative.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlatformSupport {
@@ -24,12 +18,8 @@ impl PlatformSupport {
 
 /// Hands a URL to whatever the desktop opens it with.
 ///
-/// Uniform across the three gpui backends, unlike the calls above, and wrapped
-/// anyway for one reason: this is the app's only outbound link, so it is the one
-/// place a policy about what may be opened can ever live. A scheme allow-list
-/// keeps a value that arrived from the network — the Telegram bot username in
-/// the registration step is one — from being able to name `file:` or a custom
-/// scheme some other installed app registered.
+/// Only `http`/`https` are passed on, so a URL that arrived from the network cannot
+/// name `file:` or a custom scheme some other installed app registered.
 pub fn open_url(app: &mut gpui::App, url: &str) -> PlatformSupport {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return PlatformSupport::Unsupported;
@@ -68,9 +58,8 @@ pub fn unhide_other_apps(app: &mut gpui::App) -> PlatformSupport {
 
 /// Dragging content out of the window into another application.
 ///
-/// Implemented on macOS and Linux; absent on Windows (gpui issue #52110). A
-/// caller that needs the content to leave the app must offer a copy or a save
-/// dialog when this reports Unsupported.
+/// Absent on Windows (gpui issue #52110): a caller that needs the content to leave
+/// the app must offer a copy or a save dialog when this reports Unsupported.
 pub fn supports_external_drag() -> PlatformSupport {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
@@ -82,17 +71,13 @@ pub fn supports_external_drag() -> PlatformSupport {
     }
 }
 
-/// Native popups that escape the window rectangle exist only on Wayland.
-///
-/// Menus, dropdowns and tooltips are therefore in-window overlays everywhere,
-/// and the design must never rely on leaving the window bounds.
+/// Always Unsupported: menus, dropdowns and tooltips must be in-window overlays,
+/// never designs that rely on leaving the window bounds.
 pub fn supports_native_popups() -> PlatformSupport {
     PlatformSupport::Unsupported
 }
 
-/// Offscreen rendering, and with it screenshot regression tests, exists only on
-/// macOS: `render_to_image` is implemented nowhere else and
-/// `current_headless_renderer()` returns None.
+/// Offscreen rendering, and with it screenshot regression tests: macOS only.
 pub fn supports_offscreen_rendering() -> PlatformSupport {
     #[cfg(target_os = "macos")]
     {
@@ -135,8 +120,6 @@ mod tests {
 mod open_url_tests {
     #[test]
     fn only_http_and_https_are_handed_to_the_desktop() {
-        // The check runs before the App is touched, so the refusal path needs no
-        // gpui context at all — which is the point of putting it here.
         for refused in [
             "file:///etc/passwd",
             "riseonly-dev://open",

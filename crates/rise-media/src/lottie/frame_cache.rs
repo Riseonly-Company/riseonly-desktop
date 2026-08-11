@@ -1,17 +1,8 @@
 //! Which animations are resident, and what they are allowed to cost.
 //!
-//! Sharing by key is most of the value: the same emoji in recents, in its pack
-//! and inline in a message is one rasterised sequence, not three. The rest is
-//! the ceiling — a picker scrolled for a minute touches hundreds of animations,
-//! and without eviction the compressed sets simply accumulate.
-//!
-//! Ported from `RiseLottieFrameCache`, with one structural change. The
-//! reference is a `static let shared` singleton and its lifetime is the
-//! process; here the cache is owned, because on this client an account switch
-//! drops one root object and everything it holds. A sticker rasterised for the
-//! previous account staying resident is a small leak on a phone and a
-//! cross-account artefact on a desktop where two accounts can be open in two
-//! windows.
+//! Sequences are shared by key, so the same emoji in recents, in its pack and
+//! inline in a message is one rasterised sequence. The cache is owned rather
+//! than a singleton: dropping it drops everything it holds.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -81,24 +72,16 @@ impl FrameCache {
         self.state.lock().entries.len()
     }
 
-    /// A hit for an already-open animation.
-    ///
-    /// Synchronous on purpose. Scrolling a sticker out of the viewport and back
-    /// used to re-run the whole async install chain — payload, sequence lookup,
-    /// visibility probe, poster — one hop per step, which is what made
-    /// re-entry feel like a fresh load. When the sequence is resident the view
-    /// installs it in the same turn.
+    /// A hit for an already-open animation. Synchronous, so a view can install
+    /// a resident sequence in the same turn.
     pub fn cached(&self, key: &SequenceKey) -> Option<Arc<FrameSequence>> {
         let mut state = self.state.lock();
         state.touch(key);
         state.entries.get(key).map(|entry| entry.sequence.clone())
     }
 
-    /// Register an animation, or return the one already registered.
-    ///
-    /// The rasteriser is dropped without being used on the second call, which
-    /// is the point: two views asking for the same sticker at the same size
-    /// must not end up with two C++ animation handles.
+    /// Register an animation, or return the one already registered. On a hit
+    /// the passed rasteriser is dropped without ever being used.
     pub fn open(
         &self,
         key: SequenceKey,
@@ -156,11 +139,7 @@ impl FrameCache {
 
     /// Re-price every resident animation and evict until the ceiling holds.
     ///
-    /// Called after a raster job, because that is the only thing that makes a
-    /// sequence grow. Re-reading the sizes rather than being told a delta means
-    /// the ledger cannot drift away from what the sequences actually hold,
-    /// which is the failure the reference's incremental accounting can have if
-    /// a growth notification is ever dropped.
+    /// Call after a raster job — the only thing that makes a sequence grow.
     pub fn sweep(&self) {
         let mut evicted: Vec<Arc<FrameSequence>> = Vec::new();
         let mut state = self.state.lock();
@@ -189,9 +168,7 @@ impl FrameCache {
                 .map(|(key, _)| key.clone());
 
             let Some(victim) = victim else {
-                // Everything resident is on screen. Refusing to evict is
-                // correct: freezing a visible sticker to save memory trades a
-                // problem nobody can see for one everybody can.
+                // Everything resident is on screen; refusing to evict beats freezing a visible sticker.
                 break;
             };
 
@@ -208,10 +185,8 @@ impl FrameCache {
         }
     }
 
-    /// First response to memory pressure: drop decoded frames only.
-    ///
-    /// They refill with an LZ4 decode, so nothing stops animating and no
-    /// rasterisation is repeated.
+    /// First response to memory pressure: drop decoded frames only. They refill
+    /// with an LZ4 decode, so nothing stops animating.
     pub fn release_decoded_frames(&self) {
         self.decoded.clear();
     }
@@ -320,8 +295,7 @@ mod tests {
         );
     }
 
-    /// What one two-frame sequence costs once rasterised, so a ceiling can be
-    /// set to exactly one of them rather than to a number that happens to work.
+    /// What one two-frame sequence costs, so a ceiling can be set to exactly one.
     fn one_sequence_bytes() -> u64 {
         let cache = FrameCache::new();
         let sequence = cache
@@ -379,8 +353,7 @@ mod tests {
     fn cheap_animations_cannot_accumulate_under_the_byte_ceiling() {
         let cache = FrameCache::new();
 
-        // Nothing here comes close to the compressed ceiling, which is exactly
-        // the case where counting only bytes lets rlottie handles pile up.
+        // Well under the byte ceiling, which is where counting only bytes lets handles pile up.
         for index in 0..raster_policy::MAXIMUM_RESIDENT_SEQUENCES * 3 {
             let key = SequenceKey::new(format!("tiny-{index}"), 32);
             cache.open(key, rasterizer(2)).unwrap().frame(0);

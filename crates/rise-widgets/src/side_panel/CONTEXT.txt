@@ -1,0 +1,38 @@
+================================================================================
+rise-widgets/side_panel — the extra column
+================================================================================
+
+  panel_gestures.rs  resize, dismiss and swipe-back. Pure and tested.
+  side_panel_ui.rs   the entity, the grip and the frame.
+
+WHAT IT IS A PORT OF
+
+  The reference shows comments in a `BottomSheetUi` with snap fractions of 0.56
+  and 0.92 and a drag-down dismissal. A desktop window has no bottom to drag
+  towards, so the same three affordances are ROTATED onto the horizontal axis:
+  the snap range becomes a width range, the drag handle becomes the panel's inner
+  edge, and the dismiss threshold becomes a width below which letting go closes
+  it. The numbers are ours; the RELATIONSHIP is the reference's.
+
+THE TWO DETAILS THAT ARE EASY TO GET WRONG
+
+  A drag may go BELOW the floor. Clamping during the gesture would make a
+  dismissal happen with no warning; the floor is applied on RELEASE.
+
+  The width is restored BEFORE the dismissal is announced, so a panel reopened
+  later opens at a usable width rather than at the sliver it was dragged to.
+
+WHY THE RELEASE IS CAUGHT TWICE
+
+  `on_mouse_up` fires when the pointer is over the panel and `on_mouse_up_out`
+  when it is not — and the common case, dragging the edge left until the panel
+  closes, ends with the pointer outside it. Only one of the two is not enough.
+
+  Both are guarded on there being a drag in progress. Without that guard every
+  ordinary click inside the panel would settle its width, and some would close it.
+
+THE PAGE STACK IS THE PANEL'S, NOT ITS CONTENT'S
+
+  `PanelPages` is generic and the root can never be popped. Anything the panel
+  hosts gets comments-and-their-replies for free, and Esc has a defined meaning
+  at every depth: pop a page if there is one, close the panel if there is not.

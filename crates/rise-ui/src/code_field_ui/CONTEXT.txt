@@ -1,0 +1,63 @@
+================================================================================
+rise-ui/code_field_ui — the one-time code, one cell per digit
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt          workspace rules, boundaries, commands
+  ../../CONTEXT.txt                what rise-ui owns
+  ../input_ui/                     the field this draws over
+
+THE DESIGN, IN ONE SENTENCE
+
+  Four painted cells over ONE real text field held at 1% opacity: the cells are
+  decoration and own nothing, the field owns the caret, the keystrokes, the
+  selection and the paste.
+
+WHY NOT FOUR INPUTS
+
+  Because every hand-written version of this control is four inputs, and all of
+  them break in the same three places:
+
+  - PASTE. A code arrives from a password manager, from a notification banner,
+    or from the clipboard as ONE four-character insertion. Four inputs each
+    capped at one character keep the first character and drop three.
+  - BACKSPACE ACROSS A BOUNDARY. Deleting the first character of cell 3 has to
+    move the caret into cell 2 and delete there. Every input that owns its own
+    text has to reimplement that, and each one gets a slightly different answer.
+  - SELECTION. Cmd-A, shift-arrow and a drag across the row all mean the whole
+    code. Four inputs cannot express that at all.
+
+  One field has all three for free, because it is one string.
+
+WHAT THE COMPONENT IS RESPONSIBLE FOR
+
+  Drawing. That is all. It takes the code as a `&str`, the caller's field as an
+  element, and whether the field is focused; it returns an element.
+
+WHAT THE CALLER IS RESPONSIBLE FOR
+
+  - Keeping the field filtered to digits and capped at `CodeFieldUi::LENGTH`.
+    `auth_validation::code_input` is that filter; it exists because the server
+    compares the code byte-for-byte inside a Lua script and spends one of five
+    attempts on a mismatch, so a pasted space is a real cost.
+  - Calling `CodeFieldUi::is_complete` and submitting. The reference fires on
+    the fourth digit rather than waiting for a button, and the desktop does the
+    same: the code is the only field in the product whose length is known
+    exactly, so asking for a confirming click is asking for nothing.
+  - Focusing the field when a cell is clicked — the cells are not focusable,
+    which is why `render` takes `on_focus`.
+
+THE ONE NON-OBVIOUS NUMBER
+
+  `FIELD_OPACITY` is 0.01, not 0. A fully transparent element is one gpui may
+  skip, and the field must stay in the tree to hold the caret and receive the
+  paste. The reference lands on the same number for the same reason.
+
+WHAT IT MUST NEVER DO
+
+  Grow a caret, a scale or a shake. The reference marks the active cell with a
+  thicker border and NOTHING else, and this screen already has a mascot
+  animating on it — a fifth moving thing is noise, not feedback.
+
+  Show the server's verdict. A wrong code is a refusal, and refusals are a
+  `ModalUi` in this product, not a red cell.

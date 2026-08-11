@@ -1,35 +1,20 @@
 //! Who is allowed to animate, when everything on screen wants to.
 //!
-//! Ported from `AnimatedMediaPlaybackCoordinator`. The budget exists to bound
-//! the decode pool, not to ration animation: playing a warm sticker is an LZ4
-//! decode on a worker plus one texture write per presentation, so it is sized so
-//! that everything that can be on screen at once — a full emoji picker grid is
-//! the worst case — animates.
-//!
-//! Deliberately not degraded by thermal state or a battery saver. Freezing
-//! stickers because the machine got warm treats the symptom; the cost is held
-//! down by the frame cache instead, so there is nothing to trade away.
-//!
-//! DESKTOP CHANGE. The reference gates on `isApplicationActive`, because a
-//! phone app that is not active is not visible. A desktop window is routinely
-//! visible and unfocused — half the screen each, the user typing in the other
-//! half — and freezing every sticker because focus moved to a browser is a
-//! regression the user watches happen. The gate here is window VISIBILITY, and
-//! the host is expected to report occlusion, not focus.
+//! The budget bounds the decode pool rather than rationing animation, and is
+//! sized so a full emoji picker grid animates at once. The gate is window
+//! VISIBILITY: the host must report occlusion, not focus.
 
 pub type PlayerId = u64;
 
 /// Each grant carries an identity so a late callback from a revoked grant
-/// cannot install itself over the player's current state. Same reason every
-/// async result in this codebase carries a generation.
+/// cannot install itself over the player's current state.
 pub type GrantId = u64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PlaybackKind {
     Lottie,
     AnimatedImage,
-    /// A WEBM or MP4 sticker: a real decode session, not a rasterised sequence,
-    /// and priced accordingly.
+    /// A WEBM or MP4 sticker: a real decode session, and priced accordingly.
     VideoSticker,
 }
 
@@ -57,7 +42,7 @@ impl Default for PlaybackConditions {
     }
 }
 
-/// Sized so a full picker grid animates. See the module note.
+/// Sized so a full picker grid animates.
 pub const NOMINAL_BUDGET: usize = 128;
 
 pub const fn budget(conditions: PlaybackConditions) -> usize {
@@ -122,13 +107,8 @@ impl PlaybackHub {
 
     /// Ask for a playback slot.
     ///
-    /// A newcomer never evicts a player that is still on screen. Evicting the
-    /// oldest on every request turned scrolling into continuous slot rotation:
-    /// each newly visible sticker revoked a playing one, which tore down its
-    /// registration and re-registered it moments later. Slots are released as
-    /// their owners leave the viewport, and handed to whoever is waiting, so
-    /// the set of playing items stays stable instead of churning once per
-    /// scroll tick.
+    /// A newcomer never evicts a player that is still on screen: slots pass to
+    /// whoever is waiting only as their owners leave the viewport.
     pub fn request(&mut self, player: PlayerId, kind: PlaybackKind) -> Vec<Transition> {
         if let Some(existing) = self.active.iter_mut().find(|p| p.player == player) {
             existing.kind = kind;
@@ -179,8 +159,7 @@ impl PlaybackHub {
 
         while self.active_cost() > self.budget && !self.active.is_empty() {
             let revoked = self.active.remove(0);
-            // Back to the front of the queue: it was playing a moment ago, so
-            // it is the likeliest thing to be visible when the budget returns.
+            // Front of the queue: it was playing a moment ago, so it is likeliest to still be visible when the budget returns.
             self.waiting.insert(0, revoked);
             transitions.push(Transition::Revoked {
                 player: revoked.player,

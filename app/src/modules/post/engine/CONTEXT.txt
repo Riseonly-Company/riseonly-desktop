@@ -1,0 +1,37 @@
+================================================================================
+modules/post/engine — post-service
+================================================================================
+
+  rise_post_rpc.rs           descriptors, PostScope and wire DTOs. The ONLY
+                             place a service or method string is written.
+  rise_post_engine_models.rs PostEntry — the presentation model, narrower than
+                             the wire row on purpose.
+  rise_post_repository.rs    the actor.
+  rise_post_domain.rs        the composition root.
+
+THE REPOSITORY IS A TASK ON A CHANNEL, NOT A MUTEX
+
+  PHASES.txt Phase 2 records why, and it applies here unchanged: the canon's
+  guarantees are ORDERING guarantees. A mutex gives exclusion without ordering,
+  so two toggles on one post could interleave their optimistic write and their
+  reconciliation and settle on the wrong answer.
+
+GENERATIONS
+
+  Bumped per scope on every first load and on every reset. A response carrying an
+  old generation is DROPPED rather than installed: the account may have changed
+  while the request was out, and installing that page would show one account's
+  feed under another's session. `SetIdentity` resets whenever the user id moves,
+  which is also what stops a mutation being stamped with the previous user.
+
+WHAT IS NOT HERE YET
+
+  No RiseStore persistence. The feed is memory-only, so a relaunch refetches.
+  That is a real gap against section 12 of the store canon — cache-first is
+  implemented across the ACTIVATE path (an already-loaded feed is not re-fetched)
+  but not across a cold start. The entity/view-window plumbing to fix it exists
+  in rise-engine; wiring it is its own change, not a line in this one.
+
+  No realtime. post_liked / post_favorited / post_created events are published by
+  the gateway and nothing here subscribes, so a like from another device shows up
+  on the next refresh rather than immediately.

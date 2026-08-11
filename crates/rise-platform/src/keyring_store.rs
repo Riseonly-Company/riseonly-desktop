@@ -6,10 +6,8 @@ use crate::secure_store::{SERVICE_NAME, SecretKey, SecureStore, SecureStoreError
 /// The OS credential store: Keychain on macOS, Credential Manager on Windows,
 /// Secret Service on Linux.
 ///
-/// Values are base64 before they go in. The three backends disagree about
-/// whether a secret is bytes or a string — Secret Service in particular is
-/// text-oriented — and a database key is arbitrary bytes, so encoding once here
-/// is cheaper than three per-OS byte paths.
+/// Values are stored base64-encoded, because the backends disagree about whether a
+/// secret is bytes or text and a database key is arbitrary bytes.
 pub struct KeyringSecureStore {
     service: String,
 }
@@ -63,10 +61,8 @@ impl SecureStore for KeyringSecureStore {
         }
     }
 
-    /// Probes with a real round trip rather than trusting that the platform has
-    /// a store. On Linux a session without a running Secret Service looks
-    /// perfectly normal until the first write fails, and by then the app has
-    /// already decided it can persist a database key.
+    /// Probes with a real round trip: a Linux session with no running Secret Service
+    /// looks normal until the first write fails.
     fn is_available(&self) -> bool {
         let probe = SecretKey::installation_identity();
         let Ok(entry) = self.entry(&probe) else {
@@ -102,8 +98,7 @@ fn map_error(error: keyring::Error) -> SecureStoreError {
 mod tests {
     use super::*;
 
-    // A unique service name per run keeps these from colliding with the real
-    // app's entries or with a parallel test process.
+    // Unique service name per call: otherwise these collide with the real app's entries.
     fn store() -> KeyringSecureStore {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);

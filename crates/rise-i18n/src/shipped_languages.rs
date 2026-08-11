@@ -1,26 +1,14 @@
-use crate::app_language_catalog::{BASE_LANGUAGE, language};
+use crate::app_language_catalog::BASE_LANGUAGE;
 use crate::app_language_resolution::normalize;
 
-/// The languages this build actually ships a locale file for.
+/// The languages this build ships a locale file for — a subset of the catalogue.
 ///
-/// The catalogue knows 41 languages because the SERVER does — content language,
-/// notification language and the region system all key off that list. What the
-/// interface is translated into is a different question with a different answer,
-/// and today it is one language.
-///
-/// Shipping a locale the app has no file for is worse than shipping fewer: every
-/// missing key renders as its own identifier, so a half-translated language
-/// reads as a broken app rather than an English one. Adding a language is one
-/// entry here plus its file in `assets/locales`, and `shipped_locales_exist`
-/// fails the build if those two ever disagree.
+/// Adding one means an entry here plus its file in `assets/locales`; the
+/// `shipped_locales_exist` test fails when the two disagree.
 pub const SHIPPED: &[&str] = &["ru"];
 
-/// What the interface falls back to when the device asks for something the app
-/// does not ship.
-///
-/// Russian rather than [`BASE_LANGUAGE`]: `en` is the catalogue's base and the
-/// key namespace's source language, but this build has no English file, and a
-/// fallback to a language with no dictionary is a screen full of raw keys.
+/// Fallback interface language. Russian rather than [`BASE_LANGUAGE`]: this build
+/// ships no English file, and falling back to one would be a screen of raw keys.
 pub const FALLBACK: &str = "ru";
 
 pub fn is_shipped(code: &str) -> bool {
@@ -29,11 +17,8 @@ pub fn is_shipped(code: &str) -> bool {
 
 /// Picks the interface language for a device, honouring an explicit choice.
 ///
-/// The order is the reference's: an explicit setting always wins and is never
-/// overwritten by detection, then the device's own preference order, then the
-/// fallback. Detection never narrows to "the first preference" alone — a machine
-/// set to English with Russian second must land on Russian while Russian is all
-/// this build ships, rather than on raw keys.
+/// An explicit setting wins and is never overwritten by detection; detection then
+/// scans the WHOLE preference list, not just its first entry, before [`FALLBACK`].
 pub fn resolve_interface_language<S: AsRef<str>>(
     explicit: Option<&str>,
     device_preferences: &[S],
@@ -73,7 +58,7 @@ mod tests {
     fn every_shipped_code_is_one_the_catalogue_knows() {
         for code in SHIPPED {
             assert!(
-                language(code).is_some(),
+                crate::app_language_catalog::language(code).is_some(),
                 "{code} is not in the catalogue, so it has no plural rules"
             );
         }

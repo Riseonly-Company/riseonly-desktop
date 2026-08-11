@@ -34,11 +34,12 @@ SCALE
   media-picker 17,376. post 15,195. rtc 13,023. Then a long tail of 300-500.
 
 STATUS LEGEND
-  [done] gate passed   [active] in progress   [ ] not started
+  [done] gate passed   [active] in progress   [~] landed, not whole
+  [ ] not started
 
-CURRENT: 1,455 tests green on macOS. Phases 0-3 done, Phase 4 [active] and
+CURRENT: 1,955 tests green on macOS. Phases 0-3 done, Phase 4 [active] and
 nearly closed, Phases 5 and 6 [active] with their gates met, Phase 7 [active]
-with auth, onboarding, session and presence landed. The design system
+with auth, onboarding, session, presence, the feed and the profile landed. The design system
 exists — material tokens and their painted tier, typography over a font the
 product ships itself, the SF-Symbol-to-Lucide table, flags as assets, 41 locales
 with both interpolation dialects, a text input built on gpui's own IME plumbing,
@@ -646,8 +647,16 @@ foundations that already exist.
 
   [done] auth + onboarding   the login path, the first real network
   [done] session + presence  small, and they prove the socket lifecycle
-  [ ] user                29,208 lines; profile, settings, subscriptions
-  [ ] post + comment      15,195 lines; the feed, the first real list
+  [~] post                the feed landed: three tabs, one repository, the four
+                          card interactions optimistic. No detail screen, no
+                          media viewer, no comments.
+  [~] user                the profile landed: header, stats, the follow, and
+                          five tabs — three of them post lists keyed by
+                          PostScope::User, two read straight from the payload.
+                          Settings, the relationship lists, stories, create-post
+                          and subscriptions are the rest of the 29,208 lines.
+  [ ] comment             the comments tab of a profile and a post's own thread
+                          both wait on it.
   [ ] search
   [ ] notify              local notification generation, mute policy
   [ ] chat                125,508 lines. Split it before starting: chat list,

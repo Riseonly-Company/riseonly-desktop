@@ -10,16 +10,9 @@ use crate::modules::presence::engine::rise_presence_repository::{
 
 use super::super::presence_actions::PresenceActionsStore;
 
-/// The live presence projection.
-///
-/// Not a cache and not a source of truth: presence exists only while the socket
-/// does, and a reconnect starts it again from nothing. That is why there is no
-/// RiseStore behind it and no actor in front of it — there is no persistence to
-/// order and no pagination to merge, only pushes to fold in.
 pub struct PresenceServicesStore {
     repository: PresenceRepository,
     actions: PresenceActionsStore,
-    /// The signed-in user, so nothing subscribes to its own presence.
     self_id: Option<String>,
 }
 
@@ -40,8 +33,6 @@ impl PresenceServicesStore {
         cx.notify();
     }
 
-    /// Routes one push. Returns whether it belonged to presence at all, so the
-    /// event router can tell an unhandled type from a handled one.
     pub fn apply_event(
         &mut self,
         event_type: &str,
@@ -74,10 +65,6 @@ impl PresenceServicesStore {
         self.send(delta, cx);
     }
 
-    /// Called when the socket comes back.
-    ///
-    /// Subscriptions live on the connection, so a reconnect drops every one of
-    /// them silently and presence freezes at whatever it last showed.
     pub fn resubscribe_all(&self) {
         self.actions
             .resubscribe_action(self.repository.resubscribe_all());
@@ -125,11 +112,6 @@ impl PresenceServicesStore {
     }
 }
 
-/// Where presence lives for the life of the process.
-///
-/// Holding the interactions store rather than the pieces: a screen may only call
-/// interactions, and a global that also handed out the actions store would be a
-/// second door into the same domain.
 pub struct PresenceStores {
     pub interactions: super::super::presence_interactions::PresenceInteractionsStore,
 }

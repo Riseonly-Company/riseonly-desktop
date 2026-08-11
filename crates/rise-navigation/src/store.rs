@@ -5,45 +5,27 @@ use crate::route::{RootRoute, RootTab};
 
 type Stack = SmallVec<[RootRoute; 4]>;
 
-/// How far back the forward history remembers, per section.
-///
-/// Bounded because it is a convenience, not a source of truth: a session that
-/// opens and closes screens for an hour must not grow a list of everything it
-/// ever visited. The oldest entry is dropped, so the moves the user is likeliest
-/// to redo are the ones that survive.
+// Per section; the oldest entry is dropped once it is full.
 const FORWARD_LIMIT: usize = 16;
 
 #[derive(Clone, Default)]
 struct SectionStacks {
     stacks: [Stack; 3],
-    /// When each stack was last pushed to. Two stacks can share one drawn column
-    /// — a two-column window merges the aside into the content column — and the
-    /// one the user just opened has to be the one they see. A fixed slot
-    /// priority cannot answer that: it would show the profile that has been open
-    /// for a minute instead of the conversation just clicked.
+    // When each stack was last pushed to: recency, not slot order, wins a merged column.
     touched: [u64; 3],
     forward: SmallVec<[(PaneSlot, RootRoute); 4]>,
 }
 
 /// Per-section navigation stacks, one per pane slot, plus the column layout.
 ///
-/// Three properties this owes the rest of the app:
-///
-/// The primary stack is never empty. Its bottom entry is the section itself, so
-/// there is no window state in which the sidebar column has nothing to draw.
-///
-/// A screen never changes stacks. Narrowing the window merges COLUMNS, not
-/// stacks, so widening it again restores exactly what was there — see
-/// `PaneLayout::slots_for_column`.
-///
-/// Each section keeps its own stacks. Leaving Chats mid-conversation and coming
-/// back returns to that conversation, the way a tab's `UINavigationController`
-/// does in the reference.
+/// Three guarantees: the primary stack is never empty (its bottom is the section
+/// itself), a screen never changes stacks (narrowing merges COLUMNS), and each
+/// section keeps its own stacks across a section switch.
 pub struct NavigationStore {
     policy: PanePolicy,
     layout: PaneLayout,
     tab: RootTab,
-    sections: [SectionStacks; 5],
+    sections: [SectionStacks; RootTab::ALL.len()],
     clock: u64,
 }
 
@@ -69,14 +51,7 @@ impl NavigationStore {
     }
 
     /// Reselecting the section you are already in returns its PRIMARY column to
-    /// its root and leaves the others alone.
-    ///
-    /// The reference pops the whole tab stack, because on a phone that stack IS
-    /// the conversation. Here the conversation is a column of its own, and every
-    /// desktop app with a rail leaves it alone when you click the section it is
-    /// already showing. Closing what the user is reading because they reached
-    /// for the section it lives in would be the phone's behaviour arriving where
-    /// its premise does not.
+    /// its root and leaves the other columns alone.
     pub fn select_tab(&mut self, tab: RootTab) {
         if self.tab == tab {
             let section = &mut self.sections[tab.index()];
@@ -89,12 +64,8 @@ impl NavigationStore {
         self.seed_section_root();
     }
 
-    /// Returns whether the column layout actually changed.
-    ///
-    /// A resize that does not cross a threshold must not report a change: the
-    /// caller uses this to decide whether the set of visible screens moved, and
-    /// a false positive there is a re-registered lease on every mouse move
-    /// during a drag.
+    /// Returns whether the column layout actually changed. A resize that stays
+    /// inside a threshold returns `false`, so a drag does not report per-pixel.
     pub fn window_resized(&mut self, width: gpui::Pixels) -> bool {
         let next = self.policy.layout_for_resize(width, self.layout);
         if next == self.layout {
@@ -123,9 +94,7 @@ impl NavigationStore {
     }
 
     /// Closes the topmost screen and remembers it, so `forward` can restore it.
-    ///
-    /// The bottom of the primary stack is the section and is not closable: the
-    /// sidebar column always has something to draw.
+    /// The bottom of the primary stack is the section and is never closable.
     pub fn back(&mut self) -> Option<RootRoute> {
         let slot = self.most_recent_occupied_slot()?;
         let route = self.stack_mut(slot).pop()?;
@@ -158,11 +127,8 @@ impl NavigationStore {
         self.stack(slot).last()
     }
 
-    /// The screen drawn in a given column, and which stack it came from.
-    ///
-    /// When a column merges several stacks, the one the user touched last wins.
-    /// Anything else means opening a conversation while a profile is open shows
-    /// nothing at all in a two-column window.
+    /// The screen drawn in a given column, and which stack it came from. When a
+    /// column merges several stacks, the one touched last wins.
     pub fn column(&self, column: usize) -> Option<(PaneSlot, &RootRoute)> {
         let section = self.section();
         self.layout
@@ -173,12 +139,8 @@ impl NavigationStore {
             .and_then(|slot| self.stack(*slot).last().map(|route| (*slot, route)))
     }
 
-    /// Every screen currently drawn, leftmost column first.
-    ///
-    /// The desktop shows several at once, so revalidation, cache eviction and
-    /// push suppression key off this set rather than off a single current
-    /// screen. It is also why the set must stay stable across a resize: see
-    /// `PaneLayout::slots_for_column`.
+    /// Every screen currently drawn, leftmost column first. Revalidation, cache
+    /// eviction and push suppression key off this set, never a single screen.
     pub fn active_panes(&self) -> SmallVec<[(PaneSlot, &RootRoute); 3]> {
         (0..self.layout.column_count())
             .filter_map(|column| self.column(column))
@@ -189,12 +151,8 @@ impl NavigationStore {
         self.active_panes().into_iter().map(|(_, r)| r).collect()
     }
 
-    /// The drawn screen the user reached for last.
-    ///
-    /// Not simply the rightmost column: opening a profile in the aside and then
-    /// clicking a different conversation leaves the profile further right, and
-    /// treating it as focused would send a dropped file to the screen the user
-    /// stopped looking at.
+    /// The drawn screen the user reached for last — by recency, NOT the
+    /// rightmost column.
     pub fn focused_route(&self) -> Option<&RootRoute> {
         let section = self.section();
         self.active_panes()
@@ -203,13 +161,8 @@ impl NavigationStore {
             .map(|(_, route)| route)
     }
 
-    /// Every route the store is holding, in every section, not only the drawn
-    /// ones.
-    ///
-    /// The shell keeps one live view per screen and drops the rest, and the set
-    /// it must keep is this one rather than `active_routes`: narrowing a window
-    /// hides a column without closing what is in it, and rebuilding that screen
-    /// when the window widens again would lose its scroll position.
+    /// Every route the store holds, in every section, not only the drawn ones.
+    /// Keep live views for this set: a hidden column is not a closed screen.
     pub fn all_routes(&self) -> Vec<&RootRoute> {
         self.sections
             .iter()
@@ -218,11 +171,8 @@ impl NavigationStore {
             .collect()
     }
 
-    /// Unwinds every stack in the current section back to its root.
-    ///
-    /// This is the account transition, not a navigation: signing out has to
-    /// leave no screen of the previous account behind, and `back` cannot express
-    /// that because it is exactly the history that must not survive.
+    /// Unwinds EVERY section back to its root and drops the history. This is the
+    /// account transition, not a navigation.
     pub fn reset_to_root(&mut self) {
         for section in &mut self.sections {
             section.stacks[PaneSlot::Primary.index()].truncate(1);
@@ -246,13 +196,8 @@ impl NavigationStore {
         self.section_mut().touched[slot.index()] = clock;
     }
 
-    /// The stack `back` unwinds: the one most recently pushed to that still has
-    /// something closable, and the rightmost such stack when nothing has been
-    /// touched yet.
-    ///
-    /// Recency rather than position, for the same reason `column` uses it: after
-    /// opening a profile and then a conversation, Esc has to close the
-    /// conversation the user is looking at, not the profile behind it.
+    // The stack `back` unwinds: most recently touched with something closable,
+    // falling back to the rightmost.
     fn most_recent_occupied_slot(&self) -> Option<PaneSlot> {
         let section = self.section();
         PaneSlot::ALL
@@ -284,6 +229,23 @@ impl NavigationStore {
 
 #[cfg(test)]
 mod tests {
+    // `sections` is indexed by `RootTab::index()`, so its length must track `ALL`.
+    #[test]
+    fn every_section_has_a_stack_of_its_own() {
+        let store = NavigationStore::new(
+            PanePolicy::from_shell_metrics(rise_theme::ShellMetrics::default()),
+            PaneLayout::Stacked,
+        );
+        assert_eq!(store.sections.len(), RootTab::ALL.len());
+
+        for tab in RootTab::ALL {
+            assert!(
+                tab.index() < store.sections.len(),
+                "{tab:?} indexes past the end of the section array"
+            );
+        }
+    }
+
     #[test]
     fn every_stack_is_listed_including_the_columns_a_narrow_window_hides() {
         let mut store = store(PaneLayout::ThreeColumn);

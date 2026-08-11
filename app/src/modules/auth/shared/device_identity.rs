@@ -2,13 +2,6 @@ use rise_platform::{DeviceLocale, HostOs};
 
 use crate::modules::auth::engine::core::rise_auth_rpc::DeviceEnvelope;
 
-/// What this installation tells the server it is.
-///
-/// The reference sends `platform: "ios"` and a UIDevice name. There is no
-/// counterpart here, so the values are composed from `HostOs` — a value, never a
-/// `cfg`, which is what keeps all three arms exercised from one machine — and
-/// they end up in the user's own session list, so they have to read as a device
-/// rather than as a build identifier.
 pub struct DeviceIdentity;
 
 impl DeviceIdentity {
@@ -22,9 +15,6 @@ impl DeviceIdentity {
         }
     }
 
-    /// The line the session list shows. "Riseonly Desktop (macOS)" rather than a
-    /// hostname: a machine name is personal data that the session list shows to
-    /// nobody but its owner, but it also travels to the "new login" notification.
     pub fn display_name(host: HostOs) -> String {
         format!("Riseonly Desktop ({})", host_label(host))
     }
@@ -48,11 +38,6 @@ impl DeviceIdentity {
         Self::envelope(HostOs::current(), device_token)
     }
 
-    /// The locale hints registration freezes into the account.
-    ///
-    /// Returned as `(region, languages)` so an empty answer stays empty: sending
-    /// an invented region is worse than sending none, because the server then
-    /// has no way to fall back to the connection.
     pub fn locale_hints(locale: &DeviceLocale) -> (Option<String>, Vec<String>) {
         (locale.region.clone(), locale.languages.clone())
     }

@@ -1,19 +1,11 @@
 //! The transport keys on the keyboard, and the now-playing card the OS shows.
 //!
-//! Three unrelated OS APIs sit behind this seam — MediaPlayer on macOS, MPRIS
-//! over D-Bus on Linux, SystemMediaTransportControls on Windows — and they
-//! disagree about almost everything: whether a playback state is a number or a
-//! string, which number, whether a play/pause toggle exists at all, and whether
-//! publishing is a synchronous call or a service the process has to run. All of
-//! those disagreements are resolved here as pure functions of [`HostOs`], so
-//! they are exercised by the suite on a Mac; only the final call into the OS is
-//! behind a `cfg`.
+//! MediaPlayer on macOS, MPRIS over D-Bus on Linux and
+//! SystemMediaTransportControls on Windows sit behind this seam.
 //!
-//! The one policy worth stating up front is the elapsed-time rule. The card is
-//! not a progress bar: every OS extrapolates the position itself from the last
-//! `(elapsed, rate)` pair it was given. Pushing a new pair on every frame, or
-//! even on every half-second progress tick, buys nothing and costs an IPC round
-//! trip (a D-Bus signal to every listening shell, on Linux) each time. See
+//! The card is not a progress bar: every OS extrapolates the position itself
+//! from the last `(elapsed, rate)` pair it was given, so pushing a new pair on
+//! every tick buys nothing and costs an IPC round trip. See
 //! [`PositionPublisher`].
 
 use std::future::Future;
@@ -59,11 +51,8 @@ pub enum MediaKeysError {
     Backend(String),
 }
 
-/// How the app names itself to the OS.
-///
-/// Only MPRIS actually reads this, but it is validated on every host on
-/// purpose: an invalid bus name is a runtime failure that would otherwise
-/// surface for the first time on a Linux machine nobody is sitting at.
+/// How the app names itself to the OS. Only MPRIS reads it, but it is validated
+/// on every host so an invalid bus name is not first seen on Linux.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MediaIdentity {
     /// Human-readable, shown by MPRIS clients as `Identity`.
@@ -77,8 +66,7 @@ pub const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 
 const MPRIS_BUS_PREFIX: &str = "org.mpris.MediaPlayer2";
 
-/// D-Bus refuses a name longer than this, and the error arrives as a connection
-/// failure rather than anything that mentions the name.
+/// D-Bus refuses a longer name, reporting it as a connection failure.
 const MAX_BUS_NAME: usize = 255;
 
 impl MediaIdentity {
@@ -94,9 +82,7 @@ impl MediaIdentity {
     }
 
     /// A bus name element may hold `[A-Za-z0-9_-]` and may not begin with a
-    /// digit. The hyphen is the trap: it is legal in a *bus* name and illegal
-    /// in an *interface* name, so `riseonly-desktop` is fine here and would be
-    /// rejected if the same string were ever reused as an interface.
+    /// digit. The hyphen is legal here and illegal in an *interface* name.
     pub fn validate(&self) -> Result<(), MediaKeysError> {
         let name = self.bus_name();
         let invalid = || MediaKeysError::InvalidBusName(name.clone());
@@ -126,16 +112,10 @@ fn legal_in_bus_name(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_' || character == '-'
 }
 
-/// Where the cover art can be found.
-///
-/// Deliberately a reference and not bytes: the card is rebuilt on every track
-/// change and copying a megabyte of JPEG through this seam each time is the
-/// kind of cost that only shows up as battery.
+/// Where the cover art can be found. A reference, never bytes.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Artwork {
-    /// Already on disk. The only form the macOS card can use, because building
-    /// an `MPMediaItemArtwork` from anything else needs an image the caller
-    /// does not have at this layer.
+    /// Already on disk. The only form the macOS card can use.
     File(PathBuf),
     /// A remote URL. MPRIS hands it to the shell untouched.
     Url(String),
@@ -198,9 +178,7 @@ impl NowPlaying {
         self
     }
 
-    /// Position is excluded on purpose: it is what changes constantly, and a
-    /// position update must not be mistaken for a track change or the OS card
-    /// restarts its artwork fetch several times a second.
+    /// Position is excluded: an update must not be mistaken for a track change.
     pub fn is_same_track(&self, other: &Self) -> bool {
         self.title == other.title
             && self.artist == other.artist
@@ -219,11 +197,8 @@ pub enum PlaybackState {
     Interrupted,
 }
 
-/// The value the platform's own API wants for a playback state.
-///
-/// Not a bare integer, because MPRIS does not use one: `PlaybackStatus` is a
-/// string enum on the wire, and flattening it to a number would mean inventing
-/// a number no D-Bus client would recognise.
+/// The value the platform's own API wants for a playback state. Not a bare
+/// integer: MPRIS's `PlaybackStatus` is a string enum on the wire.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RawPlaybackState {
     /// macOS `MPNowPlayingPlaybackState`, Windows `MediaPlaybackStatus`.
@@ -260,23 +235,18 @@ impl PlaybackState {
         self == Self::Playing
     }
 
-    /// The two integer scales run in opposite directions — macOS numbers
-    /// `Playing` 1 and Windows numbers it 4, where macOS's 4 means
-    /// `Interrupted` and Windows's 1 means `Changing`. Sharing a constant
-    /// between the two arms would produce a card that silently shows the wrong
-    /// state rather than failing.
+    /// The two integer scales run in opposite directions: macOS numbers `Playing`
+    /// 1 and Windows numbers it 4, where macOS's 4 means `Interrupted`.
     pub fn raw(self, host: HostOs) -> RawPlaybackState {
         match host {
-            // MPNowPlayingPlaybackState: Unknown 0, Playing 1, Paused 2,
-            // Stopped 3, Interrupted 4.
+            // MPNowPlayingPlaybackState: Playing 1, Paused 2, Stopped 3, Interrupted 4.
             HostOs::MacOs => RawPlaybackState::Integer(match self {
                 Self::Playing => 1,
                 Self::Paused => 2,
                 Self::Stopped => 3,
                 Self::Interrupted => 4,
             }),
-            // MediaPlaybackStatus: Closed 0, Changing 1, Stopped 2, Paused 3,
-            // Playing 4. There is no interrupted state.
+            // MediaPlaybackStatus: Stopped 2, Paused 3, Playing 4; no interrupted state.
             HostOs::Windows => RawPlaybackState::Integer(match self {
                 Self::Playing => 4,
                 Self::Paused | Self::Interrupted => 3,
@@ -290,9 +260,8 @@ impl PlaybackState {
         }
     }
 
-    /// The rate to hand the OS, which is 0 for anything not playing. The OS
-    /// extrapolates the position from this number, so reporting the nominal
-    /// rate while paused makes the card's timer run on its own.
+    /// The rate to hand the OS: 0 for anything not playing, or the card's timer
+    /// runs on its own.
     pub fn effective_rate(self, nominal: f64) -> f64 {
         if self.is_playing() { nominal } else { 0.0 }
     }
@@ -323,12 +292,10 @@ impl MediaCommand {
     ];
 
     /// Whether the platform's own transport API can hand this command over at
-    /// all — a statement about the API, not about how much of it this crate has
-    /// bound yet. See [`transport_support`] for the latter.
+    /// all — see [`transport_support`] for what this crate has bound.
     ///
-    /// `SystemMediaTransportControls` has no toggle button in
-    /// `SystemMediaTransportControlsButton`, so a Windows build that waits for
-    /// `Toggle` waits forever; [`MediaCommand::toggle_for`] is the way out.
+    /// Windows has no toggle button, so a build that waits for `Toggle` waits
+    /// forever; [`MediaCommand::toggle_for`] is the way out.
     pub fn is_deliverable_on(self, host: HostOs) -> bool {
         match host {
             HostOs::MacOs | HostOs::Linux => true,
@@ -337,8 +304,7 @@ impl MediaCommand {
     }
 
     /// The member name on `org.mpris.MediaPlayer2.Player`. Seeking is
-    /// `SetPosition` rather than `Seek` because MPRIS's `Seek` is a *relative*
-    /// offset and this command carries an absolute one.
+    /// `SetPosition`: MPRIS's `Seek` is a *relative* offset, this one absolute.
     pub fn mpris_member(self) -> &'static str {
         match self {
             Self::Play => "Play",
@@ -351,11 +317,8 @@ impl MediaCommand {
         }
     }
 
-    /// What a play/pause key has to become on `host`.
-    ///
-    /// macOS and MPRIS both own a real toggle and resolve it themselves, which
-    /// is the correct answer because they know the state at the instant the key
-    /// was pressed. Windows cannot, so the app resolves it and accepts the race.
+    /// What a play/pause key has to become on `host`. macOS and MPRIS resolve a
+    /// real toggle themselves; Windows cannot, so the app resolves it and races.
     pub fn toggle_for(host: HostOs, state: PlaybackState) -> Self {
         if Self::Toggle.is_deliverable_on(host) {
             Self::Toggle
@@ -392,27 +355,21 @@ impl MediaCommandEvent {
 }
 
 /// What the app did with a command. macOS turns this back into an
-/// `MPRemoteCommandHandlerStatus`, which is what stops the key from being
-/// reported as working when nothing happened.
+/// `MPRemoteCommandHandlerStatus`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CommandOutcome {
     Handled,
     Rejected,
 }
 
-/// Shared, not boxed: the macOS binding is called from Objective-C with no
-/// receiver of ours, so the handler has to live in a process-wide slot as well
-/// as in the shared state, and cloning an `Arc` is how both get one.
+/// Shared, not boxed: the macOS binding needs a copy in a process-wide slot.
 pub type CommandHandler = Arc<dyn Fn(MediaCommandEvent) -> CommandOutcome + Send + Sync + 'static>;
 
-/// How far the OS card may drift from the truth before republishing is worth
-/// the round trip. Three quarters of a second is under the threshold at which a
-/// reader notices a seconds counter is wrong, and well above the jitter of a
-/// player that reports its position from an audio callback.
+/// How far the OS card may drift from the truth before republishing is worth the
+/// round trip.
 pub const POSITION_EPSILON: Duration = Duration::from_millis(750);
 
-/// Rates are compared with a tolerance because they arrive as `f64` from a
-/// player that computes them; an exact comparison republishes on noise.
+/// An exact `f64` rate comparison would republish on noise.
 const RATE_EPSILON: f64 = 0.001;
 
 /// The last `(position, rate)` pair the OS was given, and when.
@@ -427,9 +384,7 @@ pub struct PublishedPosition {
 
 impl PublishedPosition {
     /// What the OS believes the position is at `now`, having been told nothing
-    /// since. This is the number the republish decision is made against, and
-    /// getting it wrong in either direction is expensive: too generous and the
-    /// card lies, too strict and it republishes every tick.
+    /// since.
     pub fn extrapolated(&self, now: Duration) -> Duration {
         let advanced = now.saturating_sub(self.at).as_secs_f64() * self.rate;
         if advanced >= 0.0 {
@@ -443,8 +398,7 @@ impl PublishedPosition {
 
 /// Whether the OS card is far enough from the truth to be worth updating.
 ///
-/// Steady playback must answer `false` forever: the OS is already running the
-/// same clock we are, so a tick that merely confirms it is pure cost.
+/// Steady playback must answer `false` forever.
 pub fn should_republish_position(
     last: Option<PublishedPosition>,
     now: Duration,
@@ -499,9 +453,8 @@ impl PositionPublisher {
         true
     }
 
-    /// Drops the extrapolation base. Required on a track change and on any
-    /// state change, because the OS is about to be told a new pair anyway and
-    /// extrapolating across the boundary produces a position from the old track.
+    /// Drops the extrapolation base. Required on a track change and on any state
+    /// change, or the extrapolation runs across the boundary.
     pub fn invalidate(&mut self) {
         self.last = None;
     }
@@ -512,9 +465,6 @@ impl PositionPublisher {
 }
 
 /// One entry of the MPRIS `Metadata` map, before it becomes a `zvariant` value.
-///
-/// Modelled separately so the projection — which is where the real traps are —
-/// is testable on a machine with no D-Bus.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MprisMetadata {
     Text(String),
@@ -533,19 +483,14 @@ fn micros(duration: Duration) -> i64 {
 }
 
 /// The object path published as `mpris:trackid` for a track ordinal.
-///
-/// Built in one place because `SetPosition`'s staleness check compares against
-/// it: if the two ever disagreed about the format, every seek would be rejected
-/// as stale and the scrubber would appear simply broken.
+/// `SetPosition`'s staleness check compares against it.
 pub fn track_path(ordinal: u64) -> String {
     format!("/net/riseonly/track/{ordinal}")
 }
 
 /// The MPRIS `Metadata` map for a track.
-///
-/// `ordinal` distinguishes successive tracks: MPRIS clients key their state off
-/// `mpris:trackid`, so reusing one path across two tracks makes a client treat
-/// the second as a seek within the first.
+/// `ordinal` must differ between successive tracks, or a client reads the
+/// second as a seek within the first.
 pub fn mpris_metadata(track: &NowPlaying, ordinal: u64) -> Vec<(&'static str, MprisMetadata)> {
     let mut entries = vec![("mpris:trackid", MprisMetadata::Path(track_path(ordinal)))];
 
@@ -576,12 +521,8 @@ pub fn mpris_metadata(track: &NowPlaying, ordinal: u64) -> Vec<(&'static str, Mp
 
 /// Which hosts this crate can currently drive.
 ///
-/// Windows reports `Unsupported`: `SystemMediaTransportControls` is WinRT, and
-/// the only way to obtain one for a desktop app is
-/// `ISystemMediaTransportControlsInterop::GetForWindow`, which needs the `HWND`
-/// of the app window. This layer does not own a window — gpui does — so binding
-/// it means threading a raw window handle down here, which is a different seam's
-/// decision. Nothing else is missing.
+/// Windows reports `Unsupported`: binding `SystemMediaTransportControls` needs
+/// an `HWND` this layer does not own.
 pub fn transport_support(host: HostOs) -> PlatformSupport {
     match host {
         HostOs::MacOs | HostOs::Linux => PlatformSupport::Performed,
@@ -591,10 +532,8 @@ pub fn transport_support(host: HostOs) -> PlatformSupport {
 
 /// Whether the now-playing card refuses to appear for an unbundled process.
 ///
-/// macOS keys the card off bundle identity: `MPNowPlayingInfoCenter` accepts
-/// the dictionary from a bare binary and simply shows nothing, with no error
-/// anywhere. This is why the app always runs from `Riseonly.app`, and why
-/// [`MediaKeys::install`] fails loudly instead of reproducing that silence.
+/// macOS accepts the dictionary from a bare binary and shows nothing, with no
+/// error anywhere; [`MediaKeys::install`] fails loudly instead.
 pub fn card_requires_bundle_identity(host: HostOs) -> bool {
     host == HostOs::MacOs
 }
@@ -655,10 +594,8 @@ impl MediaShare {
 
     /// Whether an MPRIS `TrackId` still names the track that is loaded.
     ///
-    /// A client computes a seek against the track it last saw. If the track
-    /// changed in between, obeying that seek scrubs the wrong song — which is
-    /// why the spec makes the argument mandatory and says to ignore a mismatch.
-    /// With no track loaded nothing can match.
+    /// A seek computed against a track that has since changed scrubs the wrong
+    /// song; with no track loaded nothing matches.
     pub fn is_current_track(&self, path: &str) -> bool {
         let inner = self.inner.lock();
         inner.now.is_some() && path == track_path(inner.track)
@@ -674,9 +611,8 @@ impl MediaShare {
         }
     }
 
-    /// False until a binding has actually claimed the OS-side resource. The
-    /// setters report `Unsupported` while it is false rather than claiming a
-    /// success that went nowhere.
+    /// False until a binding has claimed the OS-side resource; the setters report
+    /// `Unsupported` while it is false.
     pub fn is_attached(&self) -> bool {
         self.inner.lock().attached
     }
@@ -702,10 +638,6 @@ impl MediaShare {
     }
 
     /// Resolves the next time the published state differs from `seen`.
-    ///
-    /// This crate has no async runtime and cannot acquire one — `zbus` with the
-    /// `tokio` feature borrows the caller's. So the Linux arm cannot poll on a
-    /// timer, and instead waits here for the app to change something.
     pub fn changed(&self, seen: u64) -> Changed<'_> {
         Changed { share: self, seen }
     }
@@ -756,9 +688,7 @@ impl MediaShare {
     }
 }
 
-/// The waker is taken out from under the lock before it is called: a waker is
-/// arbitrary code, and on a single-threaded executor it can poll the very
-/// future that is about to lock this mutex again.
+/// Call the waker outside the lock: it can re-poll the future that locks this mutex.
 fn wake(waker: Option<Waker>) {
     if let Some(waker) = waker {
         waker.wake();
@@ -785,8 +715,7 @@ impl Future for Changed<'_> {
     }
 }
 
-/// The outcome of a position update, which is richer than supported/not
-/// because the interesting answer is the third one.
+/// The outcome of a position update.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PositionUpdate {
     Published,
@@ -804,9 +733,7 @@ pub struct MediaKeys {
     clock: Instant,
     #[cfg(target_os = "macos")]
     mac: MacTransport,
-    /// Held on every platform, not only the one where the binding is genuinely
-    /// main-thread-only, so that a Linux build cannot compile a `Send` bound
-    /// that the macOS build then rejects.
+    /// Held on every platform so a Linux build cannot compile a `Send` bound.
     _main_thread_only: PhantomData<*const ()>,
 }
 
@@ -838,10 +765,8 @@ impl MediaKeys {
 
     /// The part of the seam that needs an executor.
     ///
-    /// macOS has none: the card is a synchronous main-thread call. MPRIS is a
-    /// D-Bus *service* — the process owns a bus name and answers method calls —
-    /// which cannot be done from a synchronous call site, so the Linux work is
-    /// handed to a future the app drives on the engine's runtime.
+    /// macOS has none; MPRIS is a D-Bus service and needs a future the app drives
+    /// on its own runtime.
     pub fn service(&self) -> MediaService {
         MediaService {
             share: Arc::clone(&self.share),
@@ -863,8 +788,7 @@ impl MediaKeys {
     }
 
     pub fn set_playback_state(&mut self, state: PlaybackState) -> PlatformSupport {
-        // A state change is a rate change, and the OS extrapolates from the
-        // rate: the next position has to go out whatever the epsilon says.
+        // A state change is a rate change, so the next position must go out.
         self.publisher.invalidate();
         if let Some(track) = self.share.set_state(state) {
             self.publish_to_os(&track, state);
@@ -900,8 +824,7 @@ impl MediaKeys {
 
     fn transport(&self) -> PlatformSupport {
         match HostOs::current() {
-            // `install` returns an error rather than a half-installed seam, so
-            // reaching here on macOS means the binding is live.
+            // `install` errors rather than half-installs, so the binding is live.
             HostOs::MacOs => PlatformSupport::Performed,
             HostOs::Linux if self.share.is_attached() => PlatformSupport::Performed,
             HostOs::Linux | HostOs::Windows => PlatformSupport::Unsupported,
@@ -913,8 +836,7 @@ impl MediaKeys {
         self.mac.publish(track, state);
         #[cfg(not(target_os = "macos"))]
         {
-            // Linux publishes from the service task, which the generation bump
-            // has already woken.
+            // Linux publishes from the service task, already woken by the bump.
             let _ = (track, state);
         }
     }
@@ -947,15 +869,6 @@ impl MediaService {
     }
 }
 
-// ---------------------------------------------------------------------------
-// macOS: MPNowPlayingInfoCenter and MPRemoteCommandCenter.
-//
-// Neither has a binding crate in this workspace's dependency set, so the
-// classes are looked up at runtime and the framework is linked by hand. A
-// missing class means the framework is absent on this OS version, which is an
-// honest `Unavailable`, not a panic.
-// ---------------------------------------------------------------------------
-
 #[cfg(target_os = "macos")]
 #[link(name = "MediaPlayer", kind = "framework")]
 unsafe extern "C" {}
@@ -969,9 +882,8 @@ const REMOTE_SUCCESS: isize = 0;
 #[cfg(target_os = "macos")]
 const REMOTE_COMMAND_FAILED: isize = 200;
 
-/// The remote command targets are Objective-C objects with no Rust receiver, so
-/// the handler lives here. An `Arc` is cloned out and the lock released before
-/// the handler runs, so a handler that reinstalls the seam cannot deadlock.
+/// Objective-C targets have no Rust receiver, so the handler lives here. Clone
+/// it out and release the lock before running it, or a reinstall deadlocks.
 #[cfg(target_os = "macos")]
 static MAC_HANDLER: Mutex<Option<CommandHandler>> = Mutex::new(None);
 
@@ -982,9 +894,8 @@ struct MacTransport {
     target: Retained<AnyObject>,
 }
 
-/// The seven commands, and the selector wired to each. One array so that
-/// registration and unregistration cannot drift apart: a command added here but
-/// forgotten in `Drop` is a dangling pointer in a process-wide singleton.
+/// The seven commands and their selectors. One array so registration and
+/// unregistration cannot drift: a miss in `Drop` leaves a dangling pointer.
 #[cfg(target_os = "macos")]
 const MAC_COMMANDS: [(&std::ffi::CStr, &std::ffi::CStr); 7] = [
     (c"playCommand", c"riseHandlePlay:"),
@@ -1066,21 +977,13 @@ impl MacTransport {
             return;
         };
 
-        // These are the literal runtime values of the MediaPlayer constants:
-        // the MPMediaItem keys are the bare property names, while the
-        // MPNowPlayingInfoProperty keys are their own constant names verbatim.
-        // Reading them as symbols would need an import this crate does not have.
-        //
+        // Literal runtime values of the MediaPlayer constants, not symbols.
         // SAFETY: `info` is a mutable dictionary and every value is an object.
         unsafe {
             set_entry(&info, "title", &*NSString::from_str(&track.title));
             set_entry(&info, "artist", &*NSString::from_str(&track.artist));
             set_entry(&info, "albumTitle", &*NSString::from_str(&track.album));
-            // Omitted at zero, exactly as `mpris_metadata` omits `mpris:length`:
-            // a live stream has no length, and claiming a duration of zero draws
-            // a scrubber that is permanently at its end. The reference guards
-            // every one of its own `MPMediaItemPropertyPlaybackDuration` writes
-            // the same way.
+            // Omitted at zero: a stream has no length, and zero draws a full scrubber.
             if track.duration > Duration::ZERO {
                 set_entry(
                     &info,
@@ -1142,14 +1045,8 @@ impl MacTransport {
 
 #[cfg(target_os = "macos")]
 impl Drop for MacTransport {
-    /// `MPRemoteCommand.addTarget:action:` does **not** retain its target, and
-    /// `MPRemoteCommandCenter` is a process-wide singleton that outlives this
-    /// struct. Releasing the target without unregistering it would leave seven
-    /// unowned pointers to freed memory inside a live OS object, and the next
-    /// press of a media key — by this app or any other — would message it.
-    ///
-    /// The card is torn down too: an app that has exited must not still be what
-    /// the system shows as playing.
+    /// `addTarget:action:` does not retain its target and the command centre is a
+    /// process-wide singleton, so every target must be unregistered here.
     fn drop(&mut self) {
         self.clear();
 
@@ -1197,12 +1094,8 @@ unsafe fn set_entry<V: objc2::Message>(dictionary: &AnyObject, key: &str, value:
     }
 }
 
-/// `MPMediaItemArtwork`'s current initialiser takes a block, and no block crate
-/// is in this workspace's dependency set. The image initialiser it replaced is
-/// deprecated rather than removed, and is what this uses — after checking the
-/// method is really still there, because a missing selector raises an
-/// Objective-C exception rather than answering nil, and losing the cover art is
-/// not worth losing the process over.
+/// Uses the deprecated image initialiser, checking it still exists first: a
+/// missing selector raises an Objective-C exception rather than answering nil.
 #[cfg(target_os = "macos")]
 fn artwork_object(artwork: &Artwork) -> Option<Retained<AnyObject>> {
     let Artwork::File(path) = artwork else {
@@ -1292,9 +1185,8 @@ fn command_target_class() -> Option<&'static AnyClass> {
     })
 }
 
-/// A panic crossing back into Objective-C from an `extern "C"` function aborts
-/// the process, so a media key would take the whole app down with it. The
-/// handler is app code; it is caught here and reported as a failed command.
+/// A panic crossing back into Objective-C aborts the process, so the handler's
+/// panics are caught here and reported as a failed command.
 #[cfg(target_os = "macos")]
 fn dispatch(event: MediaCommandEvent) -> isize {
     let handler = MAC_HANDLER.lock().clone();
@@ -1359,14 +1251,7 @@ extern "C" fn handle_seek(_this: *mut AnyObject, _cmd: Sel, event: *mut AnyObjec
     dispatch(MediaCommandEvent::seek(Duration::from_secs_f64(position)))
 }
 
-// ---------------------------------------------------------------------------
-// Linux: MPRIS over D-Bus. Written blind — nothing here has been run.
-//
-// The shape follows the spec: two interfaces on one object path, the bus name
-// owned for as long as the connection lives. `Seeked` is not emitted; clients
-// read `Position` on demand, which the spec allows and which avoids a signal
-// this arm has no way to test.
-// ---------------------------------------------------------------------------
+// Linux MPRIS, written blind. `Seeked` is not emitted; clients read `Position`.
 
 #[cfg(target_os = "linux")]
 fn backend(error: impl std::fmt::Display) -> MediaKeysError {
@@ -1455,9 +1340,8 @@ impl MprisPlayer {
         self.send(MediaCommand::Stop);
     }
 
-    /// MPRIS `Seek` is a signed offset in microseconds; this seam only carries
-    /// absolute positions, so the offset is resolved against the last published
-    /// one here rather than at the app.
+    /// MPRIS `Seek` is a signed offset in microseconds; it is resolved against
+    /// the last published position here rather than at the app.
     fn seek(&self, offset: i64) {
         let Some(track) = self.share.snapshot().now else {
             return;
@@ -1470,13 +1354,8 @@ impl MprisPlayer {
             )));
     }
 
-    /// MPRIS puts two staleness rules on this method and both are ignorable only
-    /// at the user's expense. A negative position must be *dropped*, not clamped
-    /// — clamping restarts the track the user was scrubbing. And the `TrackId`
-    /// exists because the client may have computed the seek against a track that
-    /// has since changed; obeying it then seeks the wrong song. The macOS handler
-    /// for the same command already rejects a negative position, so ignoring both
-    /// here made one file disagree with itself about the same gesture.
+    /// Two MPRIS staleness rules: a negative position is *dropped*, not clamped,
+    /// and a `TrackId` naming a track that has since changed is ignored.
     fn set_position(&self, track: OwnedObjectPath, position: i64) {
         let Ok(position) = u64::try_from(position) else {
             return;
@@ -1624,14 +1503,10 @@ async fn serve_mpris(
             .map_err(backend)?;
         let emitter = player.signal_emitter();
 
-        // A read guard, not a write one: nothing here mutates the interface,
-        // and a write guard would block every incoming method call for as long
-        // as three signals take to go out.
+        // A read guard: a write one blocks method calls while signals go out.
         let interface = player.get().await;
 
-        // Position is deliberately absent: MPRIS forbids it in
-        // PropertiesChanged, because a position that changes by itself would
-        // make every client redraw at whatever rate we chose to emit at.
+        // Position is absent: MPRIS forbids it in PropertiesChanged.
         interface
             .playback_status_changed(emitter)
             .await
@@ -1670,10 +1545,6 @@ mod tests {
             .with_duration(Duration::from_secs(258))
     }
 
-    /// MPRIS makes the `TrackId` mandatory precisely so a seek computed against
-    /// a track that has since changed can be discarded. Obeying it scrubs the
-    /// song the user is now listening to, to a position they chose for the
-    /// previous one.
     #[test]
     fn a_seek_aimed_at_the_previous_track_is_ignored() {
         let share = MediaShare::new(accepting());
@@ -1702,9 +1573,7 @@ mod tests {
         assert!(!share.is_current_track("/net/riseonly/track/1"));
     }
 
-    /// The card and the MPRIS map must make the same claim about a stream: a
-    /// duration of zero is not a duration, and publishing it draws a scrubber
-    /// pinned to its own end.
+    /// A duration of zero is not a duration; publishing it draws a full scrubber.
     #[test]
     fn a_stream_reports_no_duration_to_either_host() {
         let stream = NowPlaying::new("Live", "Riseonly Radio");
@@ -2263,8 +2132,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn an_unbundled_process_is_refused_the_card_instead_of_being_ignored() {
-        // The test binary is not inside Riseonly.app, which is exactly the
-        // situation macOS answers by showing nothing at all.
+        // The test binary is not inside Riseonly.app.
         let identity = MediaIdentity::new("Riseonly", "riseonly.test");
         assert!(
             matches!(

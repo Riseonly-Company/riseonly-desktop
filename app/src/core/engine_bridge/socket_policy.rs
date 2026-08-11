@@ -1,11 +1,5 @@
 use std::time::Duration;
 
-/// What the app believes about the one socket.
-///
-/// `Reconnecting` is not the same as `Disconnected`: a screen shows a cached
-/// snapshot and a quiet banner during the first, and only the second means the
-/// user should be told anything at all. The reference draws the same line with
-/// `saiWsDidConnect` / `saiWsDidDisconnect`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConnectionState {
     Idle,
@@ -20,11 +14,6 @@ impl ConnectionState {
     }
 }
 
-/// The credential the handshake carries, or its absence.
-///
-/// Anonymous is a real, supported state rather than an error: the gateway admits
-/// send_code, register, login and ping on an unauthenticated socket, which is
-/// exactly what the sign-in screen needs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub enum SocketCredential {
     #[default]
@@ -41,14 +30,7 @@ impl SocketCredential {
         Self::Bearer(trimmed.to_owned())
     }
 
-    /// The value of `Sec-WebSocket-Protocol`.
-    ///
-    /// `Bearer.<jwt>` with a dot, not a space: a subprotocol token may not
-    /// contain whitespace, and the gateway's handshake strips exactly this
-    /// prefix (`raw_websocket/server.rs`). It echoes whatever it was sent back
-    /// verbatim, so a malformed value is accepted at the HTTP layer and simply
-    /// leaves the connection anonymous — the failure is silent, which is why it
-    /// is composed in one tested place.
+    // `Bearer.<jwt>`, dot not space: whitespace is illegal here and lands the socket anonymous.
     pub fn subprotocol(&self) -> Option<String> {
         match self {
             Self::Anonymous => None,
@@ -57,12 +39,6 @@ impl SocketCredential {
     }
 }
 
-/// Reconnect backoff.
-///
-/// Exponential from one second to a minute. The jitter is derived from the
-/// attempt and a per-process seed rather than a clock or an RNG, so a test can
-/// assert the schedule while two clients still do not retry in lockstep after a
-/// gateway restart — which is the thundering herd the cap alone does not solve.
 #[derive(Clone, Copy, Debug)]
 pub struct BackoffSchedule {
     seed: u64,
@@ -91,24 +67,10 @@ impl BackoffSchedule {
     }
 }
 
-/// Whether a credential change means the socket has to be torn down.
-///
-/// A rotated access token is a NEW identity to the gateway: the session and the
-/// user id are decided once, at handshake, and never re-read. Keeping the old
-/// connection after a refresh leaves the socket authenticated as a token the
-/// server has already retired, and every push it fans out belongs to a session
-/// the client no longer holds.
 pub fn requires_reconnect(current: &SocketCredential, next: &SocketCredential) -> bool {
     current != next
 }
 
-/// Where the app opens the socket.
-///
-/// The gateway's raw listener ignores the request target, but the public ingress
-/// pins `/ws` on staging and production, so the path is always appended. A
-/// configured URL that already names a path is left alone: that is somebody
-/// pointing a dev build at a tunnel, and rewriting it would break exactly the
-/// case the override exists for.
 pub fn socket_url(configured: &str) -> String {
     let trimmed = configured.trim().trim_end_matches('/');
     let after_scheme = trimmed.split_once("://").map_or(trimmed, |(_, rest)| rest);

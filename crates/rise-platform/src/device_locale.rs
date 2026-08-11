@@ -1,14 +1,8 @@
 //! What the machine says about where it is and what it reads.
 //!
-//! This exists because of one server rule: `signup_region` and `signup_language`
-//! are written exactly once, at registration, and are frozen afterwards. If the
-//! client sends nothing, the server infers the market from the connection — and
-//! a VPN or a carrier's foreign exit node then freezes the wrong market into the
-//! account permanently. So the device has to say for itself.
-//!
-//! Split the usual way: [`DeviceLocale::parse`] is pure and is exercised for
-//! every platform's output shape from a Mac; the OS binding below it is one call
-//! with no decisions in it.
+//! The server writes `signup_region` and `signup_language` exactly once, at registration,
+//! and freezes them; if the client sends nothing it infers the market from the connection,
+//! so a VPN exit node would freeze the wrong market into the account permanently.
 
 use crate::host_os::HostOs;
 
@@ -17,25 +11,20 @@ use crate::host_os::HostOs;
 pub struct DeviceLocale {
     /// BCP-47 language tags, most preferred first, region subtags stripped.
     pub languages: Vec<String>,
-    /// Uppercase ISO-3166 alpha-2, from the most preferred locale that carries
-    /// one. `None` is honest and the server falls back; a guess is not.
+    /// Uppercase ISO-3166 alpha-2, from the most preferred locale that carries one.
+    /// `None` when the machine says nothing — never a guessed default market.
     pub region: Option<String>,
 }
 
 impl DeviceLocale {
-    /// Parses whatever the platform hands back.
-    ///
-    /// The three shapes differ and all three arrive here: macOS gives
-    /// `["en-GB", "ru"]`, Windows gives `["en-GB", "ru-RU"]`, and a Linux
-    /// `LANG` gives `ru_RU.UTF-8`. Normalising in one pure place is what lets
-    /// the two untested platforms be tested anyway.
+    /// Parses whatever the platform hands back — `en-GB`, `ru-RU`, `ru_RU.UTF-8@euro` —
+    /// in preference order, deduplicating languages.
     pub fn parse<S: AsRef<str>>(raw: &[S]) -> Self {
         let mut languages: Vec<String> = Vec::new();
         let mut region: Option<String> = None;
 
         for entry in raw {
-            // `ru_RU.UTF-8@euro` — strip the encoding and the modifier first, or
-            // the region reads as "UTF-8".
+            // Strip encoding and modifier first, or `ru_RU.UTF-8` reads its region as "UTF".
             let cleaned = entry
                 .as_ref()
                 .split(['.', '@'])
@@ -92,12 +81,8 @@ pub const fn source_for(host: HostOs) -> LocaleSourceKind {
     }
 }
 
-/// The current machine's locale.
-///
-/// Falls back to the POSIX environment on any platform whose native call returns
-/// nothing, which is why a bundled `.app` launched from Finder — where `LANG` is
-/// unset — still answers on macOS through AppKit, and a terminal launch answers
-/// either way.
+/// The current machine's locale, falling back to the POSIX environment on any platform
+/// whose native call returns nothing.
 pub fn current() -> DeviceLocale {
     let native = native_identifiers();
     if !native.is_empty() {
@@ -122,16 +107,14 @@ fn posix_identifiers() -> Vec<String> {
 fn native_identifiers() -> Vec<String> {
     use objc2_foundation::NSLocale;
 
-    // `preferredLanguages` is the user's ORDERED list and is what the system
-    // itself resolves against; `currentLocale` alone would lose the order and,
-    // on a machine set to English with a Russian region, the second language.
+    // `preferredLanguages` is the ordered list the system resolves against; `currentLocale`
+    // alone loses both the order and every language after the first.
     let mut identifiers: Vec<String> = NSLocale::preferredLanguages()
         .iter()
         .map(|language| language.to_string())
         .collect();
 
-    // The region can differ from every language tag: "English (Kazakhstan)"
-    // reports `en` with no subtag, and the region is the whole point here.
+    // The region can differ from every language tag: "English (Kazakhstan)" reports bare `en`.
     let current = NSLocale::currentLocale();
     identifiers.push(current.localeIdentifier().to_string());
     identifiers
@@ -175,10 +158,7 @@ fn native_identifiers() -> Vec<String> {
 
 #[cfg(target_os = "linux")]
 fn native_identifiers() -> Vec<String> {
-    // The POSIX environment IS the native mechanism here, and `current` reads it
-    // as the fallback for every platform, so this arm has nothing of its own to
-    // add. Written out rather than left to a catch-all so that adding a real
-    // mechanism — a portal, or AccountsService — is an edit here.
+    // The POSIX environment IS the native mechanism here, and `current` already reads it.
     Vec::new()
 }
 

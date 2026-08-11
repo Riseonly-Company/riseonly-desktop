@@ -1,21 +1,18 @@
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, Context, Div, Entity, FontWeight, IntoElement, Render, SharedString, Window, div,
     prelude::*,
 };
-use rise_theme::{AppTheme, Appearance, Density, Material, ThemePalette};
+use rise_theme::{AppTheme, Appearance, Density, Material, SettingsIconPalette, ThemePalette};
 use rise_ui::animation::ShimmerBand;
 use rise_ui::input_ui::{InputMode, InputUiState};
 use rise_ui::{
     BoxUi, ButtonSize, ButtonTone, ButtonUi, FlagUi, IconSize, IconUi, MainText, SkeletonShape,
     SkeletonUi, TextTone,
 };
+use rise_widgets::{GroupedActivate, GroupedBtn, GroupedBtns, GroupedEndAction};
 
-/// The launch argument that opens the storybook instead of the app.
-///
-/// A launch argument and not a route: the reference gates its own developer
-/// surfaces the same way (`-riseChatPerformanceTools`), and a `RootRoute`
-/// variant would put a developer screen in the product's exhaustive route
-/// match forever.
 pub const LAUNCH_ARGUMENT: &str = "-riseStorybook";
 
 pub fn requested_by(arguments: impl IntoIterator<Item = String>) -> bool {
@@ -24,16 +21,11 @@ pub fn requested_by(arguments: impl IntoIterator<Item = String>) -> bool {
         .any(|argument| argument == LAUNCH_ARGUMENT)
 }
 
-/// Every component, at both appearances and all three densities.
-///
-/// This is the Phase 5 gate made visible. It builds its themes locally rather
-/// than switching the installed global, so light and dark stand side by side in
-/// one window and a difference between them is a difference you can see rather
-/// than one you have to remember across a restart.
 pub struct Storybook {
     single_line: Entity<InputUiState>,
     multi_line: Entity<InputUiState>,
     secure: Entity<InputUiState>,
+    selected_setting: SharedString,
 }
 
 impl Storybook {
@@ -53,6 +45,7 @@ impl Storybook {
             single_line,
             multi_line,
             secure,
+            selected_setting: Self::SETTINGS_ROWS[2].0.into(),
         }
     }
 
@@ -71,10 +64,6 @@ impl Storybook {
         ]
     }
 
-    /// A sample rather than all 229 icons: the storybook is for judging the
-    /// design, and a wall of glyphs is a stress test, not a review. The
-    /// approximate ones are shown deliberately, because those are the ones a
-    /// designer has to sign off.
     fn icon_sample() -> [&'static str; 8] {
         [
             "doc.text",
@@ -86,6 +75,86 @@ impl Storybook {
             "gearshape.fill",
             "paperplane.fill",
         ]
+    }
+
+    const SETTINGS_ROWS: [(&'static str, &'static str, &'static str); 5] = [
+        ("profile", "person.fill", "Мой профиль"),
+        ("sessions", "iphone", "Активные сессии"),
+        ("general", "gearshape.fill", "Общие"),
+        ("privacy", "lock.fill", "Конфиденциальность"),
+        ("chats", "bubble.left.and.bubble.right", "Чаты"),
+    ];
+
+    fn settings_chip(index: usize) -> gpui::Hsla {
+        match index {
+            0 => SettingsIconPalette::profile(),
+            1 => SettingsIconPalette::sessions(),
+            2 => SettingsIconPalette::customization(),
+            3 => SettingsIconPalette::privacy(),
+            _ => SettingsIconPalette::chat_folders(),
+        }
+    }
+
+    fn grouped(
+        theme: &AppTheme,
+        key: &SharedString,
+        selected: &SharedString,
+        activate: &GroupedActivate<Self>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let card = GroupedBtns::new(
+            SharedString::from(format!("{key}.card")),
+            vec![
+                GroupedBtn::new("profile", "Мой профиль")
+                    .icon("person.fill", SettingsIconPalette::profile()),
+                GroupedBtn::new("sessions", "Активные сессии")
+                    .icon("iphone", SettingsIconPalette::sessions())
+                    .trailing("4"),
+                GroupedBtn::new("music", "Музыка")
+                    .icon("music.note", SettingsIconPalette::memory_audio())
+                    .subtitle("Скачано 128 треков"),
+                GroupedBtn::new("blocked", "Заблокированные")
+                    .icon("hand.raised.fill", SettingsIconPalette::blocks())
+                    .disabled(),
+            ],
+        )
+        .title("КОНФИДЕНЦИАЛЬНОСТЬ")
+        .right_top_text("4")
+        .end_group_title("Эти настройки видны только вам.")
+        .end_action(GroupedEndAction::new("delete_account", "Удалить аккаунт"))
+        .render(theme, activate, cx);
+
+        let rows = Self::SETTINGS_ROWS
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, symbol, label))| {
+                GroupedBtn::new(id, label)
+                    .icon(symbol, Self::settings_chip(index))
+                    .selected(id == selected.as_ref())
+            })
+            .collect();
+
+        let bare = GroupedBtns::new(SharedString::from(format!("{key}.bare")), rows)
+            .without_wrapper()
+            .render(theme, activate, cx);
+
+        Self::section(
+            theme,
+            "GroupedBtns — card, and without_wrapper on a panel",
+            vec![
+                div()
+                    .w(theme.shell.sidebar_width)
+                    .child(card)
+                    .into_any_element(),
+                div()
+                    .w(theme.shell.sidebar_width)
+                    .py(theme.spacing._400)
+                    .bg(theme.bg._100)
+                    .rounded(theme.radius._300)
+                    .child(bare)
+                    .into_any_element(),
+            ],
+        )
     }
 
     fn section(theme: &AppTheme, title: &'static str, body: Vec<AnyElement>) -> Div {
@@ -177,8 +246,6 @@ impl Storybook {
         for region in ["RU", "US", "DE", "BR", "KZ", "TW"] {
             row.push(FlagUi::render(theme, region, width));
         }
-        // The fallback: a region with no shipped flag must read as its own two
-        // letters, never as a blank or a pair of boxes.
         row.push(FlagUi::render(theme, "ZZ", width));
         Self::section(theme, "FlagUi", row)
     }
@@ -233,14 +300,6 @@ impl Storybook {
         )
     }
 
-    /// The inputs stand outside the six-column grid.
-    ///
-    /// `InputUiState` is a live entity that reads the INSTALLED theme, not one
-    /// handed to it, so it cannot be shown six times at six different
-    /// appearances the way a stateless component can. Showing one row of real,
-    /// typeable fields at the installed theme is worth more than six dead
-    /// screenshots of a field, and the storybook says which it is rather than
-    /// letting the row look like part of the matrix.
     fn inputs(theme: &AppTheme, storybook: &Self) -> Div {
         Self::section(
             theme,
@@ -263,7 +322,14 @@ impl Storybook {
         )
     }
 
-    fn column(appearance: Appearance, palette: &ThemePalette, density: Density) -> Div {
+    fn column(
+        appearance: Appearance,
+        palette: &ThemePalette,
+        density: Density,
+        selected: &SharedString,
+        activate: &GroupedActivate<Self>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = AppTheme::new(palette, appearance, density);
         let label = theme.typography.style(11.0, FontWeight::BOLD);
         let name = Self::densities()
@@ -271,6 +337,7 @@ impl Storybook {
             .find(|(_, d)| *d == density)
             .map(|(name, _)| name)
             .unwrap_or("custom");
+        let key = SharedString::from(format!("storybook.grouped.{appearance:?}.{name}"));
 
         div()
             .flex()
@@ -294,6 +361,7 @@ impl Storybook {
             .child(Self::flags(&theme))
             .child(Self::surfaces(&theme))
             .child(Self::skeletons(&theme))
+            .child(Self::grouped(&theme, &key, selected, activate, cx))
     }
 }
 
@@ -302,7 +370,10 @@ impl Render for Storybook {
         let installed = rise_ui::theme(cx as &gpui::App).clone();
         let gap = installed.button.height_600 / 2.0;
 
+        // Its own fill, unlike a product screen: the storybook is the whole
+        // window's content and there is no plate under it to show through.
         let mut grid = BoxUi::screen(&installed)
+            .bg(installed.bg._100)
             .id("storybook")
             .overflow_scroll()
             .flex()
@@ -311,10 +382,18 @@ impl Render for Storybook {
             .p(gap)
             .child(Self::inputs(&installed, self));
 
+        let selected = self.selected_setting.clone();
+        let activate: GroupedActivate<Self> = Rc::new(|storybook, id, _window, cx| {
+            storybook.selected_setting = id;
+            cx.notify();
+        });
+
         for (appearance, palette) in Self::appearances() {
             let mut row = div().flex().flex_row().items_start().gap(gap);
             for (_, density) in Self::densities() {
-                row = row.child(Self::column(appearance, &palette, density));
+                row = row.child(Self::column(
+                    appearance, &palette, density, &selected, &activate, cx,
+                ));
             }
             grid = grid.child(row);
         }
@@ -326,6 +405,59 @@ impl Render for Storybook {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    const FRIENDLY_FLAG: &str = "--design";
+
+    #[cfg(unix)]
+    fn translate(arguments: &str) -> Vec<String> {
+        let script =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/dev-args.sh");
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "set -- {arguments}; . \"{}\"; for a in \"$@\"; do printf '%s\\n' \"$a\"; done",
+                script.display()
+            ))
+            .output()
+            .unwrap_or_else(|error| panic!("{}: {error}", script.display()));
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_friendly_flag_translates_to_the_argument_this_module_reads() {
+        assert_eq!(translate(FRIENDLY_FLAG), vec![LAUNCH_ARGUMENT.to_owned()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_other_argument_reaches_the_app_untouched() {
+        assert!(
+            translate("").is_empty(),
+            "a plain `cargo make dev-macos` must launch with no arguments at all"
+        );
+        assert_eq!(
+            translate("--design -riseUITestReset"),
+            vec![LAUNCH_ARGUMENT.to_owned(), "-riseUITestReset".to_owned()],
+            "a flag with no friendly name yet still has to pass through"
+        );
+        assert_eq!(
+            translate("'a b'"),
+            vec!["a b".to_owned()],
+            "the rewrite must not split an argument on its spaces"
+        );
+    }
 
     #[test]
     fn the_storybook_opens_only_when_it_is_asked_for() {

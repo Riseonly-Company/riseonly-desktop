@@ -1,45 +1,13 @@
-//! Which screens are on the glass, and which of them may revalidate this cycle.
-//!
-//! The reference has `SaiNavigationBridge.currentScreen()` — exactly one screen —
-//! and builds four subsystems on that scalar: once-per-cycle revalidation,
-//! route-driven cache eviction, the route matcher, and push suppression for the
-//! chat you are reading. A desktop window shows a sidebar, a conversation and a
-//! profile at once, so the scalar becomes a stack of visible resource leases and
-//! the once-per-cycle rule is restated as once per cycle PER KEY, GLOBALLY. Held
-//! per pane instead, the app would storm the socket every time the window is
-//! rearranged, because rearranging is not new information about freshness.
-//!
-//! CACHE-OPTIMIZATION-AUDIT.txt section 6 specifies this registry and iOS never
-//! built it. It is pure policy: no gpui, no OS, no clock, no I/O, which is what
-//! makes the resize invariant testable without a window.
-
-// This is a binary crate, so an entry point with no caller yet is dead code and
-// fails the build. The registry lands before the first store by design; the
-// allowance goes when the shell has wired every one of them.
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
 
 use rise_navigation::{PaneSlot, RootRoute};
 
-/// How many leases may exist at once.
-///
-/// A window holds three columns plus the overlays above them, and every screen
-/// a column has covered keeps its lease while the stack is deep. Sixty-four is
-/// an order of magnitude past any real layout, and small enough that the linear
-/// scans over the list cost nothing.
 pub const MAX_LEASES: usize = 64;
 
-/// How many distinct keys may be recorded as already refreshed in one cycle.
-///
-/// The record is cleared at every `begin_cycle`, so it only has to span a single
-/// foreground, reconnect or gap pass — during which one screen can legitimately
-/// claim several resources (a profile plus its active tab projection). Twice
-/// `MAX_LEASES` keeps that headroom without letting a screen that mints a key
-/// per keystroke, like search, grow the registry forever.
 pub const MAX_CLAIM_RECORDS: usize = 128;
 
-/// Who holds a lease: a screen, identified the way the router identifies it.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScreenIdentity {
     screen_id: &'static str,
@@ -54,8 +22,6 @@ impl ScreenIdentity {
         }
     }
 
-    /// For what the router does not own — a sheet, a palette, a search query —
-    /// whose resource key is not a route.
     pub fn new(screen_id: &'static str, resource_key: impl Into<String>) -> Self {
         Self {
             screen_id,
@@ -99,8 +65,6 @@ impl From<&str> for CacheKey {
     }
 }
 
-/// Declaration order is the z-order, and `Overlay` is above every column
-/// because a sheet or a command palette covers the window rather than a pane.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum LeaseColumn {
     Primary,
@@ -183,8 +147,6 @@ impl VisibleResourceLease {
         self.depth
     }
 
-    /// A tick this registry owns, never a wall clock: a suspended laptop must not
-    /// be able to reorder the stack, and the tests must not need a time source.
     pub fn appeared_at(&self) -> u64 {
         self.appeared_at
     }
@@ -194,11 +156,6 @@ impl VisibleResourceLease {
     }
 }
 
-/// Permission to issue exactly one revalidation of one key in one cycle.
-///
-/// `reason` travels to the caller because this registry decides who may refresh
-/// and how often, never whether the data is stale: a `Manual` grant is the one
-/// the caller lets bypass its freshness interval (audit section 5.4).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RefreshGrant {
     cycle: RefreshCycle,
@@ -225,8 +182,6 @@ impl RefreshGrant {
     }
 }
 
-/// A fresh registry already sits inside the cold-start cycle, so the first
-/// screens to appear can revalidate without the shell declaring a cycle first.
 #[derive(Default)]
 pub struct ActiveScreens {
     leases: Vec<VisibleResourceLease>,
@@ -257,9 +212,6 @@ impl ActiveScreens {
         self.leases.is_empty()
     }
 
-    /// Appearance, not a per-frame call. Registering an owner that already holds
-    /// a lease updates it in place — the lease keeps its tick and the revision
-    /// the UI has seen — and only a change of column restamps its z-order.
     pub fn register(
         &mut self,
         owner: ScreenIdentity,
@@ -270,17 +222,11 @@ impl ActiveScreens {
         &self.leases[index]
     }
 
-    /// Releases the lease. It deliberately does not touch the claim record: a
-    /// screen that vanishes because the window narrowed must not be able to
-    /// refetch when the window widens again inside the same cycle.
+    // Never clears the claim record: a resize must not refetch inside the same cycle.
     pub fn release(&mut self, owner: &ScreenIdentity) {
         self.leases.retain(|lease| lease.owner != *owner);
     }
 
-    /// The whole visible set at once, in z-order per column: the caller's order
-    /// is the depth order. Leases whose owner is still listed are retained with
-    /// their tick and revision even when they moved column; the rest are
-    /// released; the new ones are registered under their own resource key.
     pub fn sync_visible(&mut self, visible: &[(ScreenIdentity, LeaseColumn)]) {
         self.leases
             .retain(|lease| visible.iter().any(|(owner, _)| *owner == lease.owner));
@@ -314,10 +260,6 @@ impl ActiveScreens {
         self.index_of(owner).map(|index| &self.leases[index])
     }
 
-    /// Derived, never assigned: the topmost overlay if one is open, otherwise
-    /// the topmost lease of the rightmost occupied column. A second source of
-    /// truth for focus would drift from the lease stack the first time a sheet
-    /// closed during a resize.
     pub fn focused(&self) -> Option<&ScreenIdentity> {
         let index = self.topmost_in(LeaseColumn::Overlay).or_else(|| {
             [
@@ -331,10 +273,6 @@ impl ActiveScreens {
         Some(&self.leases[index].owner)
     }
 
-    /// While any overlay is open only the topmost overlay may refresh — a feed
-    /// underneath an open comments sheet must not fetch alongside it. Otherwise
-    /// the topmost lease of every column is eligible at once, and that
-    /// simultaneity is the whole desktop difference.
     pub fn is_eligible(&self, owner: &ScreenIdentity) -> bool {
         let Some(index) = self.index_of(owner) else {
             return false;
@@ -345,8 +283,6 @@ impl ActiveScreens {
         self.topmost_in(self.leases[index].column) == Some(index)
     }
 
-    /// Foreground, reconnect, event gap, manual refresh, cold start — and never
-    /// a visibility change, which carries no information about staleness.
     pub fn begin_cycle(&mut self, reason: RefreshReason) -> RefreshCycle {
         self.cycle = RefreshCycle(self.cycle.0 + 1);
         self.reason = reason;
@@ -354,9 +290,6 @@ impl ActiveScreens {
         self.cycle
     }
 
-    /// Eligibility is asked of the owner, deduplication is done on the key, and
-    /// the two are separate because one screen can own more than one resource
-    /// and one resource can be shown by more than one screen.
     pub fn claim_refresh(
         &mut self,
         owner: &ScreenIdentity,
@@ -383,9 +316,6 @@ impl ActiveScreens {
         self.index_of(screen).is_some()
     }
 
-    /// The visibility fact only. Composing it with `SessionActivity` — whether
-    /// the window is even in front — belongs at the call site, because this
-    /// registry knows nothing about the OS.
     pub fn suppresses_notification(&self, key: &CacheKey) -> bool {
         self.holds(key)
     }
@@ -398,8 +328,6 @@ impl ActiveScreens {
             .collect()
     }
 
-    /// The revision lives on the lease and dies with it. It is a hint that lets
-    /// a grant skip republishing unchanged data; the store stays the authority.
     pub fn note_revision(&mut self, key: &CacheKey, revision: u64) {
         for lease in self.leases.iter_mut().filter(|lease| lease.key == *key) {
             lease.seen_revision = Some(match lease.seen_revision {

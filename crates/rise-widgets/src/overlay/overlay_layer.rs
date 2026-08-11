@@ -10,23 +10,16 @@ type DismissHandler = Box<dyn Fn(&mut Window, &mut App)>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum OverlayScrim {
-    /// A click-catcher that paints nothing. What a menu wants: a desktop menu
-    /// dismisses on a click outside without dimming the window behind it.
+    /// A click-catcher that paints nothing, which is what a menu wants.
     #[default]
     Invisible,
     /// A faded backdrop, for a surface that takes the window over.
     Dimmed,
 }
 
-/// The in-window layer an overlay is drawn on.
-///
-/// gpui has no native popups outside Wayland, so every menu, dropdown and
-/// tooltip is a child of this window rather than a window of its own. The layer
-/// fills the window, holds an optional scrim, and puts its child at the origin
-/// [`crate::overlay::place`] computed.
-///
-/// It is a rendering helper, not a screen: it owns no state and decides nothing
-/// about what is open. That is [`OverlayStack`]'s job.
+/// The in-window layer an overlay is drawn on: it fills the window, holds an
+/// optional scrim, and puts its child at the origin [`crate::overlay::place`]
+/// computed. It owns no state — what is open is [`OverlayStack`]'s job.
 pub struct OverlayLayer {
     placement: OverlayPlacement,
     scrim: OverlayScrim,
@@ -54,21 +47,16 @@ impl OverlayLayer {
         self
     }
 
-    /// What a press anywhere on the scrim does.
-    ///
-    /// Mouse-down rather than click, and any button rather than the primary one:
-    /// a right-click outside an open menu must close it before it opens the next
-    /// one, and a press that starts outside has already left the overlay.
+    /// What a press anywhere on the scrim does. Mouse-down and any button, so a
+    /// right-click outside an open menu closes it before opening the next one.
     pub fn on_dismiss(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.dismiss = Some(Box::new(handler));
         self
     }
 
-    /// The layer, ready to be a child of the window root.
-    ///
-    /// Deferred, so it paints above everything laid out around it whatever order
-    /// the root mounts it in. The placement is in WINDOW coordinates, so the
-    /// element this is given to must fill the window.
+    /// The layer, ready to be a child of the window root. Deferred, so it paints
+    /// above its siblings; the placement is in window coordinates, so whatever
+    /// this is given to must fill the window.
     pub fn render(self, cx: &App) -> AnyElement {
         deferred(self.layer(cx)).into_any_element()
     }
@@ -91,13 +79,8 @@ impl OverlayLayer {
             .size_full()
             .child(scrim)
             .child(
-                // `occlude` is load-bearing, not a hint. gpui's hit test collects
-                // EVERY hitbox under the pointer and stops only at a blocking
-                // one, so without this the window-filling scrim is still hovered
-                // while the pointer is over the overlay's own content — and its
-                // dismiss handler, which fires on mouse DOWN, tears the overlay
-                // out of the tree before the mouse UP that would have completed
-                // a click on it. The menu would be reachable only by keyboard.
+                // Without `occlude` the scrim stays hovered under the content, and
+                // its mouse-down dismiss kills the overlay before the mouse-up.
                 div()
                     .occlude()
                     .absolute()
@@ -108,12 +91,8 @@ impl OverlayLayer {
     }
 }
 
-/// What is open, innermost last.
-///
-/// Bounded on purpose. A screen that opens an overlay and never dismisses it
-/// leaks one entry per open, and an unbounded stack turns that into a slow leak
-/// nothing ever reports; dropping the oldest keeps the failure visible as a
-/// missing overlay instead of invisible as growing memory.
+/// What is open, innermost last. Bounded at [`OverlayStack::CAPACITY`]: a screen
+/// that never dismisses shows a missing overlay rather than leaking memory.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct OverlayStack {
     open: Vec<OverlayId>,
@@ -126,8 +105,8 @@ impl OverlayStack {
         Self::default()
     }
 
-    /// Opening what is already open raises it rather than stacking a second copy
-    /// of it, so a repeated open cannot make Esc take two presses.
+    /// Opening what is already open raises it rather than stacking a second copy,
+    /// so a repeated open cannot make Esc take two presses.
     pub fn open(&mut self, id: impl Into<OverlayId>) {
         let id = id.into();
         self.open.retain(|existing| existing != &id);

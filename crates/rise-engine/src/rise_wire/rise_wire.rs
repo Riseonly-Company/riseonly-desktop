@@ -28,12 +28,8 @@ pub enum WireError {
     Disconnected,
 }
 
-/// Whatever actually puts bytes on a socket.
-///
-/// The engine deliberately does not own the socket: the reference keeps
-/// reconnect, backoff and auth in the host, and hands the engine a sender plus
-/// a stream of inbound frames. That is also what makes every path below
-/// testable without a network.
+/// Puts bytes on a socket. The host owns reconnect, backoff and auth and hands
+/// the engine only this sender plus a stream of inbound frames.
 pub trait FrameSender: Send + Sync {
     fn send(&self, frame: String) -> Result<(), WireError>;
 }
@@ -106,9 +102,8 @@ impl RiseWire {
         }
     }
 
-    /// Feeds one inbound frame in. Unknown correlation ids are dropped rather
-    /// than treated as errors: a response can outlive a timed-out request, and
-    /// that is normal rather than exceptional.
+    /// Feeds one inbound frame in. An unknown correlation id is dropped, not an
+    /// error: a response may outlive its timed-out request.
     pub fn accept(&self, raw: &str) {
         let Ok(root) = serde_json::from_str::<Value>(raw) else {
             return;

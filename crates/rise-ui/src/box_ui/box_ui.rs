@@ -1,23 +1,14 @@
 use gpui::{Div, div, prelude::*};
 use rise_theme::AppTheme;
 
-/// The two containers every screen is built out of.
-///
-/// Both return a bare `Div` with nothing but theme values applied, so a call
-/// site keeps styling on top of them with the usual gpui builders —
-/// `BoxUi::surface(theme).p_4().child(..)`. Nothing here owns layout: a helper
-/// that also picked padding and direction would be copied-and-tweaked at the
-/// first screen that disagreed, and the shared part — which background sits on
-/// which — would stop being shared.
+/// The two containers every screen is built out of. Both return a bare `Div`
+/// carrying theme values only — no layout — so the call site styles on top:
+/// `BoxUi::surface(theme).p_4().child(..)`.
 pub struct BoxUi;
 
 impl BoxUi {
     /// A card: one step lighter than the screen it sits on, with a hairline
-    /// border.
-    ///
-    /// The lift is carried by `bg._200` against `bg._000`, not by a shadow, so
-    /// it costs nothing to move — section 13 of the performance guide rules out
-    /// unbounded shadows on anything that animates.
+    /// border. The lift is a background step, never a shadow.
     pub fn surface(theme: &AppTheme) -> Div {
         div()
             .bg(theme.bg._200)
@@ -26,16 +17,16 @@ impl BoxUi {
             .rounded(theme.radius._300)
     }
 
-    /// The root of a window or a page: fills its parent and establishes the
-    /// inherited text colour.
+    /// The root of a page: fills its parent and sets the inherited text colour,
+    /// so labels below it need not name one.
     ///
-    /// Setting `text_color` once here is what lets every label below it stay
-    /// silent about colour and still be readable in both themes.
+    /// It paints NO background. The shell's plate owns the app's colour, and a
+    /// page that repaints it fills its own square bounds — which, at the plate's
+    /// edge, squares off the rounded corner from the inside, because gpui clips
+    /// to a rectangle and never to a radius. A page that genuinely needs a shade
+    /// of its own says so at the call site.
     pub fn screen(theme: &AppTheme) -> Div {
-        div()
-            .size_full()
-            .bg(theme.bg._000)
-            .text_color(theme.text.primary)
+        div().size_full().text_color(theme.text.primary)
     }
 }
 

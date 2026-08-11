@@ -1,15 +1,6 @@
 use rise_navigation::{RootRoute, RootTab};
 use rise_platform::DeepLink;
 
-/// Turns a link the OS handed us into a screen.
-///
-/// `rise-platform` parses; this decides. Keeping the two apart is what lets the
-/// platform crate stay ignorant of what a chat is, and what makes every case
-/// here testable without an OS event.
-///
-/// An unknown target is `None` rather than a guess: a link the running version
-/// does not understand must leave the user where they were, not somewhere
-/// arbitrary.
 pub fn route_for(link: &DeepLink) -> Option<RootRoute> {
     match link.target.as_str() {
         "chat" => {

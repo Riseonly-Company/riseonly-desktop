@@ -1,0 +1,42 @@
+================================================================================
+rise-widgets/block_ui — the shape the whole frame is made of
+================================================================================
+
+WHAT A BLOCK IS
+
+  A surface inside the window: the rail, the list column, the content pane, the
+  comments panel. Rounded, inset from the window edge, drawn on a material the
+  component never names.
+
+  Telegram for macOS is built this way and this is a port of that idea, not of
+  its code: the window is one rounded rectangle, and every surface inside it is
+  another rounded rectangle inset from it on all four sides. The frame then reads
+  as a set of panels. The alternative — surfaces flush against the window edge
+  with no radius of their own — reads as one flat sheet with strips drawn on it,
+  which is what this replaced.
+
+THE TWO RADII NEST, THEY DO NOT MATCH
+
+  `window_radius` is larger than `block_radius`. An inner corner as round as its
+  outer one reads as a mistake, and `ShellMetrics` has a test that keeps them
+  apart at every density.
+
+THE WINDOW BUTTONS LIVE INSIDE THE RAIL BLOCK
+
+  Which is why `traffic_light_inset` is BLOCK-relative and
+  `traffic_light_origin()` adds the window inset to it: AppKit is told a
+  window-relative point, and the sum is what lands the buttons in the block's
+  top-left corner instead of over its rounded edge or on the window background
+  beside it.
+
+  It is also why the rail has a floor on its width. Density scales the rail;
+  AppKit draws the buttons at a fixed size. At compact density a proportionally
+  narrower rail would be too narrow to hold them, so `rail_width` takes the max
+  of the scaled value and the buttons' own span plus their insets. There is a
+  test at all three densities.
+
+EVERY SURFACE GOES THROUGH HERE
+
+  That is the point. The radius, the material and the inset are decided once. A
+  panel that drew itself with its own numbers would be a second design system
+  inside the frame, and the divergence would only be visible in a screenshot.

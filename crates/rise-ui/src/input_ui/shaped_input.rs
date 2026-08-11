@@ -6,10 +6,6 @@ use smallvec::SmallVec;
 use crate::input_ui::display_text::DisplayText;
 
 /// Everything a shaped result depends on.
-///
-/// Shaping is the expensive half of drawing text, so it happens once per key and
-/// never inside a mouse-move handler: a drag that reshapes on every pointer
-/// sample is the classic way an input field falls off the frame budget.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ShapeKey {
     pub revision: u64,
@@ -22,10 +18,8 @@ pub struct ShapeKey {
 
 /// The visible lines, shaped.
 ///
-/// `visible` is a range of hard-line indices, not the whole document: a field
-/// holding a long message shapes the rows on screen and nothing else. Hard lines
-/// are what makes that possible — every row is exactly one line height tall, so
-/// the row under a y coordinate is arithmetic rather than a layout pass.
+/// `visible` is a range of hard-line indices, not the whole document; every row
+/// is exactly one line height tall.
 pub struct ShapedInput {
     key: ShapeKey,
     lines: Vec<ShapedLine>,
@@ -79,11 +73,6 @@ impl ShapedInput {
     }
 
     /// The byte offset within `line_index` closest to `x`.
-    ///
-    /// `closest_index_for_x` rather than `index_for_x`: a click past the last
-    /// glyph has to land after it, and a click in the right half of a glyph has
-    /// to land after that glyph, which is the difference between a caret that
-    /// feels right and one that is always one character behind.
     pub fn offset_for_x(&self, line_index: usize, x: Pixels) -> usize {
         self.line(line_index)
             .map_or(0, |line| line.closest_index_for_x(x))

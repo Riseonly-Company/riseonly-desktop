@@ -1,8 +1,6 @@
 use gpui::{App, Global, KeyBinding, actions};
 
 /// The key context the bindings below are scoped to.
-///
-/// Scoped rather than global so a field never eats a shortcut the shell owns.
 pub const KEY_CONTEXT: &str = "InputUi";
 
 actions!(
@@ -49,14 +47,6 @@ struct KeyBindingsInstalled;
 impl Global for KeyBindingsInstalled {}
 
 /// Idempotent, and safe to call from anywhere.
-///
-/// `InputUiState::new` calls this so a field works in an app that never heard of
-/// it; an app that wants the bindings present before the first field is built
-/// can call it at startup. `secondary-` is gpui's own portable modifier — cmd on
-/// macOS, ctrl elsewhere — which is why nothing here needs a `cfg`. The word and
-/// document jumps bind both the macOS spelling and the Windows/Linux one, since
-/// the other platform's chord is either free or already owned by the window
-/// manager, and a keymap that guesses wrong leaves a dead key.
 pub fn install_key_bindings(cx: &mut App) {
     if cx.has_global::<KeyBindingsInstalled>() {
         return;

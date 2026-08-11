@@ -31,6 +31,7 @@ equivalent, not because it was more convenient.
 | Crate | Target | Why | If it dies |
 |---|---|---|---|
 | `objc2`, `objc2-foundation`, `objc2-app-kit` | macOS | The tray, the Dock badge, launch-at-login and the macOS version probe are AppKit and ServiceManagement, and gpui exposes none of them. Pinned to the same 0.6/0.3 family gpui already links, so there is no second ObjC runtime in the binary. | Nothing else is viable for AppKit from Rust; the fallback is hand-written `msg_send` against the ObjC runtime, which is what `objc2` already is. |
+| `raw-window-handle` | macOS | Reads the public AppKit `NSView` handle from `gpui::Window` so `rise-platform` can reach the owning `NSWindow` and GPUI's Metal layer and give both the same system corner. The version matches GPUI's own resolved 0.6 trait. MIT/Apache-2.0. | Add an equivalent native-view accessor to GPUI or maintain the one-line accessor in the pinned GPUI fork. |
 | `windows` | Windows | `Shell_NotifyIconW` for the tray and the `HKCU\...\Run` value for autostart. Microsoft's own bindings, generated from the platform metadata. | `winapi`, which is unmaintained, or hand-declared `extern "system"` items. |
 | `zbus` | Linux | The tray is `StatusNotifierItem` and the now-playing card is MPRIS; both are D-Bus interfaces with no C library worth linking. | Hand-rolled D-Bus over a Unix socket, which is a protocol implementation, not a weekend. |
 

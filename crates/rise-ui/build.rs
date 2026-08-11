@@ -1,8 +1,5 @@
-//! Turns `assets/icons/sf-to-lucide.json` into a static table.
-//!
-//! Generated rather than parsed at startup so that a missing icon is a build
-//! failure instead of a blank square at runtime, and so the lookup is a binary
-//! search over `&'static str` with nothing to allocate on the render path.
+//! Turns `assets/icons/sf-to-lucide.json` into a static table, so a missing icon
+//! is a build failure rather than a blank square at runtime.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -52,11 +49,7 @@ fn main() {
     std::fs::write(out_dir.join("flags.rs"), render_flags(&flags_dir)).unwrap();
 }
 
-/// The region codes the bundle actually carries.
-///
-/// Listed at build time rather than probed at render time: a component that
-/// touched the filesystem to decide whether to draw a flag would be doing disk
-/// I/O inside a frame, which the performance contract forbids outright.
+/// Listed at build time; probing the filesystem inside a frame is forbidden.
 fn render_flags(dir: &PathBuf) -> String {
     let entries = std::fs::read_dir(dir).unwrap_or_else(|error| {
         panic!(
@@ -98,12 +91,9 @@ fn render_flags(dir: &PathBuf) -> String {
 
 #[derive(serde::Deserialize)]
 struct Document {
-    /// Keyed by the SF Symbol name exactly as `riseonly-ios` writes it, so a
-    /// ported call site stays character for character the same.
+    /// Keyed by the SF Symbol name exactly as `riseonly-ios` writes it.
     map: BTreeMap<String, String>,
-    /// The SF names whose Lucide match is a compromise rather than an
-    /// equivalent. Carried into the binary so a test can count them and a
-    /// designer can find them.
+    /// SF names whose Lucide match is a compromise rather than an equivalent.
     #[serde(default)]
     approximate: Vec<String>,
 }
@@ -162,9 +152,7 @@ fn entries_table(
     out
 }
 
-/// The keys are dotted SF names and the values are hyphenated Lucide names, so
-/// neither can contain a quote or a backslash. Escaping anyway costs nothing and
-/// means a hand-edited table cannot emit code that does not compile.
+/// Escaping is defensive: a hand-edited table must not emit uncompilable code.
 fn quote(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")

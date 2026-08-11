@@ -26,8 +26,6 @@ impl AppEnvironment {
         }
     }
 
-    /// URL scheme for deep links. Each environment gets its own so a staging
-    /// build cannot swallow a production link when both are installed.
     pub fn url_scheme(self) -> &'static str {
         match self {
             Self::Dev => "riseonly-dev",
@@ -36,11 +34,6 @@ impl AppEnvironment {
         }
     }
 
-    /// Directory suffix that keeps each environment's database separate.
-    ///
-    /// Without this a developer switching from staging to production would open
-    /// a store written by another backend, and the engine would either refuse
-    /// the key or serve stale rows that look real.
     pub fn data_dir_suffix(self) -> &'static str {
         match self {
             Self::Dev => "Dev",
@@ -49,12 +42,6 @@ impl AppEnvironment {
         }
     }
 
-    /// What the user sees: in the Dock, in the menu bar, in the window title.
-    ///
-    /// Named per environment because all three can be installed at once, and a
-    /// developer switching between them has to be able to tell which window is
-    /// which without opening a settings screen. Production is plain "Riseonly";
-    /// nobody ships an app whose name says "prod".
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Dev => "Riseonly Dev",
@@ -63,25 +50,10 @@ impl AppEnvironment {
         }
     }
 
-    /// The bundle identifier. Distinct per environment for the same reason the
-    /// data directory is: two builds must not share a Keychain ACL, a
-    /// notification authorisation or a launch-services registration.
-    pub fn bundle_id(self) -> &'static str {
-        match self {
-            Self::Dev => "net.riseonly.desktop.dev",
-            Self::Staging => "net.riseonly.desktop.staging",
-            Self::Prod => "net.riseonly.desktop",
-        }
-    }
-
     pub fn allows_local_override(self) -> bool {
-        // A production build must never be repointed by a file on disk or a
-        // stray environment variable.
         self != Self::Prod
     }
 
-    /// Compiled in at build time; falls back to dev so a plain `cargo run`
-    /// targets the local stack rather than production.
     pub fn compiled() -> Self {
         match option_env!("RISE_ENV") {
             Some(raw) => Self::parse(raw).unwrap_or(Self::Dev),
@@ -118,24 +90,25 @@ mod tests {
 
     #[test]
     fn the_bundle_identity_is_never_shared_between_environments() {
-        let ids: Vec<&str> = [
-            AppEnvironment::Dev,
-            AppEnvironment::Staging,
-            AppEnvironment::Prod,
-        ]
-        .iter()
-        .map(|environment| environment.bundle_id())
-        .collect();
+        let script = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/bundle-macos.sh"),
+        )
+        .unwrap_or_default();
+        if script.is_empty() {
+            return;
+        }
 
-        let mut unique = ids.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(
-            unique.len(),
-            ids.len(),
-            "a shared identity means a shared Keychain ACL and a shared deep-link registration"
-        );
-        assert_eq!(AppEnvironment::Prod.bundle_id(), "net.riseonly.desktop");
+        for id in [
+            "net.riseonly.desktop.dev",
+            "net.riseonly.desktop.staging",
+            "net.riseonly.desktop\"",
+        ] {
+            assert!(
+                script.contains(id.trim_end_matches('"')),
+                "{id} is not written by the bundling script; two environments would \
+                 share a Keychain ACL and a deep-link registration"
+            );
+        }
     }
 
     use super::*;

@@ -1,20 +1,7 @@
 //! The actual sound device, on all three operating systems.
 //!
-//! cpal is the one dependency here that is genuinely three implementations —
-//! CoreAudio, WASAPI, ALSA — and the reason it is a dependency rather than
-//! three files in `rise-platform` is that those three APIs have nothing in
-//! common beyond the concept of a callback, and the wrapper would be cpal.
-//!
-//! Everything interesting happens above this file. What is left is: ask the
-//! device what it supports, hand that to the pure chooser in `output.rs`, open
-//! a stream, and in the callback do nothing but drain the ring and convert
-//! sample format. No allocation, no lock, no logging in the callback — see
-//! `ring.rs`.
-//!
-//! WHAT IS VERIFIED
-//!
-//! macOS only, and only when a device exists. The tests below say so out loud
-//! and skip rather than passing vacuously; a CI runner has no sound card.
+//! The callback drains the ring and converts sample format, nothing else: no
+//! allocation, no lock, no logging (see `ring.rs`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,10 +19,8 @@ pub struct CpalSink {
 }
 
 impl CpalSink {
-    /// Open the default output device for a track.
-    ///
-    /// The consumer is moved into the callback, which is what makes the ring
-    /// single-consumer by construction rather than by convention.
+    /// Open the default output device for a track. The consumer is moved into
+    /// the callback, making the ring single-consumer by construction.
     pub fn open(source: StreamFormat, consumer: Consumer) -> Result<Self, OutputError> {
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
@@ -76,8 +61,7 @@ impl CpalSink {
                 None,
             ),
             SampleFormat::I16 => {
-                // One scratch buffer, allocated here and reused: the callback
-                // may not allocate.
+                // Allocated here and reused: the callback may not allocate.
                 let mut scratch = vec![0.0f32; 0];
                 device.build_output_stream(
                     &stream_config,
@@ -141,11 +125,8 @@ impl AudioSink for CpalSink {
     }
 }
 
-/// Translate what cpal reports into what the chooser understands.
-///
-/// Separated out so the mapping is testable without opening anything: a device
-/// that advertises a format this crate does not handle must be dropped from the
-/// list rather than turning into a wrong guess.
+/// Translate what cpal reports into what the chooser understands. Formats this
+/// crate does not handle are dropped from the list, never guessed at.
 pub fn supported_configs(device: &cpal::Device) -> Result<Vec<SupportedConfig>, OutputError> {
     let ranges = device
         .supported_output_configs()
@@ -181,8 +162,7 @@ mod tests {
 
     #[test]
     fn the_host_can_be_asked_for_a_device_without_panicking() {
-        // True on a CI runner with no sound card too: cpal must report the
-        // absence, not fall over.
+        // A CI runner has no sound card; cpal must report that, not fall over.
         let _ = default_device();
     }
 

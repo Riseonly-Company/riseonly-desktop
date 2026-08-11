@@ -1,17 +1,9 @@
 //! What arrives off the network, and whether rlottie is allowed to see it.
 //!
-//! This is the security boundary of the sticker path. rlottie is C++ parsing
-//! attacker-supplied JSON, animated stickers have published exploit precedent,
-//! and a sticker is a thing strangers can send you. Everything below runs
-//! before a single byte reaches the C++ side: the container is identified from
-//! its magic rather than its filename or its Content-Type, inflation is bounded
-//! so a gzip bomb cannot be turned into an allocation, and the document must
-//! actually look like a Lottie before it is handed over.
-//!
-//! Ported from `LottieStickerLoader.detectedContainer` and
-//! `normalizedJSONData` in the reference, with the inflation bound tightened:
-//! the reference inflates fully and then checks the size, which is one
-//! allocation too late.
+//! The security boundary of the sticker path: everything here runs before a
+//! byte reaches the C++ parser. The container is identified from its magic and
+//! never its filename or Content-Type, inflation is bounded so a gzip bomb
+//! cannot become an allocation, and the document must look like a Lottie.
 
 use std::io::Read;
 
@@ -22,9 +14,8 @@ pub enum Container {
     Json,
     /// Riseonly's own sticker container: gzipped Lottie JSON.
     Ros,
-    /// Telegram's `.tgs`, which is the same thing. Kept as a separate variant
-    /// because the reference does, and because a pack imported from Telegram
-    /// is worth being able to see in a trace.
+    /// Telegram's `.tgs`, the same wrapper as `Ros`, kept separate so an
+    /// imported pack is distinguishable in a trace.
     TgsLegacy,
     /// A `.lottie` archive: a zip with a manifest and one or more animations.
     DotLottie,
@@ -39,26 +30,19 @@ pub enum ContainerError {
     },
     /// The magic matches nothing this client renders.
     Unrecognised,
-    /// Detected, deliberately not handled. The reference renders these through
-    /// Airbnb's engine, which has no counterpart here; a zip reader plus
-    /// manifest handling is a decision, not an oversight, and this variant is
-    /// what makes it visible instead of silently blank.
+    /// Detected, deliberately not handled: no zip or manifest reader here.
     DotLottieUnsupported,
     /// Inflation failed, or the payload is not a Lottie document.
     Malformed,
 }
 
 /// The largest sticker accepted, compressed or inflated.
-///
-/// The reference's number. A Lottie above this is not a sticker, it is a
-/// denial-of-service with a preview image.
 pub const MAXIMUM_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Identify the container from its first bytes.
 ///
-/// Never from the file extension or the server's Content-Type: both are
-/// attacker-controlled for user-uploaded media, and the reference's own Accept
-/// header asks for five different types for the same sticker.
+/// Never from the file extension or Content-Type: both are attacker-controlled
+/// for user-uploaded media.
 pub fn detect(bytes: &[u8]) -> Option<Container> {
     if bytes.is_empty() {
         return None;
@@ -112,11 +96,8 @@ pub fn to_animation_json(bytes: &[u8]) -> Result<Vec<u8>, ContainerError> {
     Ok(json)
 }
 
-/// Inflate with a hard ceiling on the OUTPUT, not just the input.
-///
-/// A 20 MiB gzip of zeroes inflates to gigabytes. Reading through `take` means
-/// the ceiling is enforced by the reader rather than by a length check that
-/// only runs once the allocation already happened.
+/// The ceiling is on the OUTPUT and enforced by the reader, so a gzip bomb is
+/// refused before the allocation rather than after it.
 fn inflate(bytes: &[u8]) -> Result<Vec<u8>, ContainerError> {
     let mut decoder = flate2::read::GzDecoder::new(bytes).take(MAXIMUM_FILE_BYTES + 1);
     let mut out = Vec::new();
@@ -137,8 +118,6 @@ fn inflate(bytes: &[u8]) -> Result<Vec<u8>, ContainerError> {
     Ok(out)
 }
 
-/// The reference's shape check: a Lottie has layers, a frame rate, an in and
-/// out point, and a size. Anything else is not worth starting a C++ parser for.
 fn validate(json: &[u8]) -> Result<(), ContainerError> {
     let value: serde_json::Value =
         serde_json::from_slice(json).map_err(|_| ContainerError::Malformed)?;

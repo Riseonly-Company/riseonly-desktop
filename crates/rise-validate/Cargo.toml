@@ -1,0 +1,12 @@
+[package]
+name = "rise-validate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Deliberately empty. This crate is the product's rules and nothing else: it
+# must be usable from the engine, from a store and from a headless test, so it
+# may never learn about a UI toolkit, a runtime or an OS.
+[dependencies]

@@ -1,17 +1,5 @@
-//! Playing an album end to end, with no device and no clock.
-//!
-//! The audio equivalent of `feed_memory_ceiling.rs`. Two things are proven that
-//! the unit tests cannot, because both are properties of the whole path rather
-//! than of any one piece:
-//!
-//!   - forty tracks played in sequence hold two decoders and one ring, whatever
-//!     the length of the queue;
-//!   - the frames that reach the device are the frames that were in the file,
-//!     with the encoder's priming and padding removed and nothing else.
-//!
-//! The second is the one that matters for gapless: an album is a single
-//! recording split into files, and the join has to be sample-exact or the
-//! product has a click between every track.
+//! Playing an album end to end, with no device and no clock: a whole queue
+//! costs two decoders and one ring, and the join is sample-exact.
 
 use rise_media::audio::format::SampleFormat;
 use rise_media::audio::gapless::Trim;
@@ -165,8 +153,7 @@ fn an_untrimmed_track_reaches_the_device_whole() {
 
 #[test]
 fn two_trimmed_tracks_join_with_no_gap_and_no_lost_audio() {
-    // The album was one recording; the encoder primed each file and padded it
-    // to a whole frame. What reaches the device has to be the master back.
+    // The album was one recording; what reaches the device must be the master.
     let priming = 1_105;
     let real_frames = TRACK_FRAMES as u64 - priming - 431;
 
@@ -199,15 +186,14 @@ fn the_ring_is_the_same_size_after_forty_tracks_as_after_one() {
 
         while pump.fill().unwrap() != PumpStep::EndOfStream {}
 
-        // The pump is dropped with the track; the ring outlives it, which is
-        // what makes a track change cost nothing.
+        // The pump is dropped with the track; the ring outlives it.
         let (next, _) = ring::ring(1 << 15);
         carried = next;
         assert_eq!(carried.capacity(), capacity);
     }
 }
 
-/// Same coarse RSS check as the video and sticker ceilings.
+/// Resident set size in bytes, or `None` where the OS will not report it.
 fn resident_bytes() -> Option<u64> {
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return None;

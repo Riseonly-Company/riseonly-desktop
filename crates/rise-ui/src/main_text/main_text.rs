@@ -1,11 +1,8 @@
 use gpui::{Div, div, prelude::*};
 use rise_theme::AppTheme;
 
-/// How much of the reader's attention a run of text is asking for.
-///
-/// Emphasis in this design system is carried by colour, not by weight: the
-/// typography tokens fix the face and the size, and a secondary line differs
-/// only in how far it recedes from the background.
+/// How much of the reader's attention a run of text is asking for. Emphasis is
+/// carried by colour, not by weight.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum TextTone {
     /// The content itself.
@@ -15,12 +12,9 @@ pub enum TextTone {
     Secondary,
 }
 
-/// Text styled from the typography tokens.
-///
-/// Each function returns a `Div` carrying size, line height, face and colour;
-/// the string goes on with `.child(..)`. Size and line height always travel
-/// together — setting `text_size` alone leaves the previous line height in place
-/// and the run silently changes its leading.
+/// Text styled from the typography tokens. Each function returns a `Div` with
+/// size, line height, face and colour set; the string goes on with `.child(..)`.
+/// Never set `text_size` alone — the stale line height changes the leading.
 pub struct MainText;
 
 impl MainText {

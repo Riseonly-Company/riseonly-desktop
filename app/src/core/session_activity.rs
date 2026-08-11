@@ -1,22 +1,5 @@
-//! What replaces iOS `scenePhase`, and the inversion at the centre of it.
-//!
-//! On the phone `.background` fails every pending request and blocks new ones.
-//! A desktop app that did that would drop its socket the moment the user
-//! alt-tabbed to a browser, then reconnect and resync on the way back — several
-//! times a minute. So `setApplicationActive(false)` here changes presence and
-//! speculation and nothing else: the connection and the in-flight requests are
-//! not the OS's business.
-//!
-//! There is also not one signal but four — window focus, minimised, system idle,
-//! screen locked — plus the window count, because on macOS an app with no window
-//! at all is a normal running state. Pure policy: no gpui, no OS, no clock.
-
-// This is a binary crate, so an entry point with no caller yet is dead code and
-// fails the build. The policy lands before the first store by design; the
-// allowance goes when the shell has wired every one of them.
 #![allow(dead_code)]
 
-/// Everything the shell can learn about the user's attention.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ActivitySignal {
     WindowFocus(bool),
@@ -26,20 +9,11 @@ pub enum ActivitySignal {
     WindowCount(usize),
 }
 
-/// One variant, on purpose. No combination of activity signals may disconnect
-/// the socket: realtime events are the product's freshness contract, and a
-/// reconnect costs a handshake, a resume token and a resync of every open
-/// resource. If a second variant ever appears here, it has to be justified by
-/// something other than "the window is not in front".
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SocketPolicy {
     KeepConnected,
 }
 
-/// One variant, on purpose, and it is the iOS inversion stated as a type. A
-/// request in flight when the window loses focus is still a request the user
-/// asked for; failing it would make the reply the user came back for depend on
-/// where their mouse was.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PendingRequestPolicy {
     Keep,
@@ -57,7 +31,6 @@ pub enum NotificationDelivery {
     Suppress,
 }
 
-/// The default is the state the app launches in: one window, focused, awake.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SessionActivity {
     focused: bool,
@@ -115,10 +88,7 @@ impl SessionActivity {
         }
     }
 
-    /// What other people are told. Focus is part of it — a window sitting behind
-    /// a browser is not somewhere the user is reading — and so is the window
-    /// count: closing the last window on macOS leaves the app frontmost with its
-    /// menu bar and nothing to look at, so focus alone would report a lie.
+    // macOS keeps an app frontmost with zero windows, so focus alone would report presence.
     pub fn presence(&self) -> PresenceState {
         if self.focused && !self.idle && !self.locked && self.windows > 0 {
             PresenceState::Active
@@ -127,17 +97,10 @@ impl SessionActivity {
         }
     }
 
-    /// Whether the app has pixels a human could be looking at. Deliberately not
-    /// a question about focus: an unfocused window on a second monitor is still
-    /// on screen, and freezing its animations would be visible.
     pub fn is_user_present(&self) -> bool {
         self.windows > 0 && !self.minimised && !self.idle && !self.locked
     }
 
-    /// Suppression asks whether this window is in front with the resource on
-    /// screen — the desktop restatement of "no push for the chat you are
-    /// reading". `target_is_visible` is `ActiveScreens::suppresses_notification`,
-    /// composed here rather than inside either half.
     pub fn notification_delivery(&self, target_is_visible: bool) -> NotificationDelivery {
         if target_is_visible && self.focused && !self.minimised && !self.locked && self.windows > 0
         {

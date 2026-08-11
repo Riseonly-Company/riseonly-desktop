@@ -59,14 +59,6 @@ impl Endpoints {
         }
     }
 
-    /// Resolution order, highest wins:
-    ///   1. RISE_API_URL / RISE_WS_URL in the process environment
-    ///   2. config/local.json beside the repo or the bundle
-    ///   3. the compiled defaults for this build's environment
-    ///
-    /// Production ignores 1 and 2 entirely. A shipped build that a file on disk
-    /// can repoint at another backend is a credential-theft vector, not a
-    /// convenience.
     pub fn resolve(
         environment: AppEnvironment,
         local_file: Option<&Path>,
@@ -125,12 +117,6 @@ impl Endpoints {
         Self::resolve(environment, local_file, &|key| std::env::var(key).ok())
     }
 
-    /// Safe to log: it names where the app is pointed without leaking a token.
-    /// The host a shared web link must carry to belong to this build.
-    ///
-    /// The port is part of it: a dev build's links are `127.0.0.1:3000`, and a
-    /// check that dropped the port would let a link for any service on the
-    /// loopback interface open this app.
     pub fn web_host(&self) -> &str {
         self.public_site_url
             .split_once("://")

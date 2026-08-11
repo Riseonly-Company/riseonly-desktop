@@ -43,6 +43,7 @@ rise-engine.workspace = true
 rise-platform.workspace = true
 rise-theme.workspace = true
 rise-ui.workspace = true
+rise-validate.workspace = true
 rise-widgets.workspace = true
 rise-media = { workspace = true, features = ["rlottie"] }
 rise-navigation.workspace = true
@@ -54,3 +55,6 @@ directories.workspace = true
 # shortcut addresses — are only reachable through a real App. Same gpui, same
 # rev, one feature: no second crate enters the graph.
 gpui = { workspace = true, features = ["test-support"] }
+# Paused time. The tag debounce is a real 500 ms in the product, and a test that
+# waited it out in wall-clock would be both slow and flaky.
+tokio = { workspace = true, features = ["test-util"] }

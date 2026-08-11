@@ -1,10 +1,5 @@
-//! Agreement with the two things outside this crate that define it: the
-//! catalogue's own source of truth, and the locale files that ship next to it.
-//!
-//! Both are skipped rather than failed when absent. The generator's input lives
-//! in a sibling repository and the locale files are copied into `assets/` by
-//! the bundling step; a checkout that has neither is still a checkout whose
-//! logic should be testable.
+//! Agreement with `languages.json` and the shipped locale files; both live outside
+//! this checkout, so every test here SKIPS rather than fails when they are absent.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -84,10 +79,8 @@ fn every_shipped_locale_parses_as_a_flat_string_map() {
     }
 }
 
-/// The two dialects are kept apart by the catalogue, not by the formatters:
-/// each formatter is blind to the other's syntax, so a value carrying both
-/// would render one placeholder and leave the other on screen. 113k shipped
-/// values, none of them mixed — this is the assumption that decision holds.
+/// Each formatter is blind to the other's syntax, so a value carrying both
+/// dialects would render one placeholder and leave the other on screen.
 #[test]
 fn no_shipped_value_mixes_the_two_dialects() {
     let dir = locales_dir();
@@ -140,10 +133,8 @@ fn has_named_placeholder(value: &str) -> bool {
     false
 }
 
-/// `chat_thread_title_*` end to end against the real files: plural-suffixed
-/// keys whose values are braced. The family ships `zero/one/few/many` and no
-/// `other`, which is why the reference selects the key by hand — a language
-/// whose CLDR family can return `other` has nothing to fall back to.
+/// The `chat_thread_title_*` family ships no `other`, so a language whose CLDR
+/// family returns `other` has nothing to fall back to.
 #[test]
 fn the_thread_title_family_renders_from_the_shipped_catalogue() {
     let dir = locales_dir();
@@ -254,8 +245,7 @@ fn the_generated_catalogue_matches_languages_json() {
     }
 }
 
-/// The generator is the only thing allowed to write `app_language_catalog.rs`,
-/// so a hand edit is a defect the same way a stale generated file is.
+/// A hand edit of `app_language_catalog.rs` is a defect the same way a stale one is.
 #[test]
 fn the_generator_reproduces_the_checked_in_catalogue() {
     let source = languages_json();

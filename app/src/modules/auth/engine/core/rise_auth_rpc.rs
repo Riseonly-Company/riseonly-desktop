@@ -2,42 +2,17 @@ use rise_engine::{HttpDescriptor, MethodDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The typed catalogue for auth-service.
-///
-/// Every method the module can reach is named here once, with its replay policy
-/// beside it, so no store ever carries a service or method string. Two of them
-/// are HTTP, and the comment on each says why the socket cannot carry it.
 pub const SEND_CODE: MethodDescriptor = MethodDescriptor::mutation("auth", "send_code");
 pub const REGISTER: MethodDescriptor = MethodDescriptor::mutation("auth", "register");
 pub const LOGIN: MethodDescriptor = MethodDescriptor::mutation("auth", "login");
 pub const LOGOUT: MethodDescriptor = MethodDescriptor::mutation("auth", "logout");
 
-/// Refreshing happens exactly when the access token has expired, and the
-/// socket's action gate admits only send_code, register, login, ping and the QR
-/// verbs without a session — so a refresh over the socket is refused by
-/// construction. `refresh_token` is the idempotency key by the backend's own
-/// contract: auth-service answers a parallel retry with the same pair rather
-/// than rotating twice, and `ws-handlers.test.ts` pins that.
+// The WS action gate admits no session-less call beyond sign-in; hence the two HTTP verbs.
 pub const REFRESH: HttpDescriptor =
     HttpDescriptor::idempotent_mutation("/auth/refresh", "refresh_token");
 
-/// Tag availability during sign-up, which happens before there is a session.
-/// The gateway exposes it only over HTTP (`/api/auth/check-tag` → tag-service
-/// `check_tag_exist`); the WS action gate would require the account that is
-/// being created.
 pub const CHECK_TAG: HttpDescriptor = HttpDescriptor::read("/auth/check-tag");
 
-/// What the device tells the server about itself.
-///
-/// Registration is the ONE moment `signup_region` and `signup_language` are
-/// written — they are frozen afterwards — so the locale hints have to travel
-/// with the request rather than be guessed from the connection, where a VPN
-/// would freeze the wrong market into the account permanently.
-///
-/// `ip_address` is deliberately absent. The gateway strips every client-supplied
-/// address from an auth body before routing it (`strip_unverifiable_client_
-/// network_claims`) and stamps the peer it resolved itself, so sending one is at
-/// best ignored and at worst a forged value in somebody's session list.
 #[derive(Clone, Debug, Serialize)]
 pub struct DeviceEnvelope {
     pub device_info: String,
@@ -64,10 +39,6 @@ pub struct SendCodeResponse {
 }
 
 impl SendCodeResponse {
-    /// The gateway answers `success` from auth-service and always attaches a
-    /// message, so a truthful "sent" is `success == true`. The reference also
-    /// accepts the Russian message text, which was how it read the answer before
-    /// the flag existed; keeping that is bug-compatibility, not belt and braces.
     pub fn code_sent(&self) -> bool {
         self.success == Some(true)
             || self
@@ -101,13 +72,6 @@ pub struct RegisterRequest {
     pub timezone: Option<String>,
 }
 
-/// Login and register answer with the same shape.
-///
-/// Snake case, because the gateway builds this JSON itself
-/// (`grpc_routes/auth.rs`) rather than forwarding a proto. The camelCase aliases
-/// exist because the reference's decoder converts from snake case and its DTOs
-/// therefore read camel — a build pointed at an older gateway must not silently
-/// decode every field as `None` and look like a login with no tokens.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct SessionGrant {
     pub success: Option<bool>,
@@ -122,11 +86,6 @@ pub struct SessionGrant {
 }
 
 impl SessionGrant {
-    /// A grant is only usable when all three parts arrived non-empty.
-    ///
-    /// Half a grant is worse than none: an access token with no refresh token
-    /// signs the user in for fifteen minutes and then drops them at the sign-in
-    /// screen with no way to recover.
     pub fn resolved(&self) -> Option<GrantedTokens> {
         let access = non_empty(self.access_token.as_deref())?;
         let refresh = non_empty(self.refresh_token.as_deref())?;
@@ -152,11 +111,6 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-/// The refresh answer, in both shapes the deployed backends produce.
-///
-/// The HTTP route returns the gateway's flat object; older builds nested it
-/// under `data`. The reference decodes both, and a client that dropped the
-/// nested form would sign the user out on a backend that still uses it.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RefreshResponse {
     #[serde(alias = "accessToken")]
@@ -180,9 +134,6 @@ pub struct RefreshPayload {
 }
 
 impl RefreshResponse {
-    /// The session id may legitimately be absent: a rotation that keeps the same
-    /// session answers with only the token pair, and the caller keeps the one it
-    /// already had.
     pub fn resolved(&self) -> Option<(String, String, Option<String>)> {
         let nested = self.data.as_ref();
         let access = non_empty(self.access_token.as_deref())
@@ -266,21 +217,14 @@ pub struct AuthUserDto {
     pub more: Option<AuthUserMoreDto>,
 }
 
-/// The gateway omits `status` on success and puts the payload under `data` for
-/// some services and `result` for others; the frame decoder already normalises
-/// both. What is left here is the one thing it cannot know: a 2xx frame whose
-/// body says `success: false` is still a failure.
+// A proto `string` has no absent form, so `error` is present and `""` on every successful reply.
 pub fn refusal_message(payload: &Value) -> Option<String> {
-    if payload.get("success").and_then(Value::as_bool) == Some(false)
-        || payload.get("error").is_some()
-    {
-        return payload
-            .get("error")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| Some(String::new()));
-    }
-    None
+    let message = rise_engine::remote_message(payload.get("error").and_then(Value::as_str));
+
+    let refused =
+        payload.get("success").and_then(Value::as_bool) == Some(false) || message.is_some();
+
+    refused.then(|| message.unwrap_or_default().to_owned())
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
@@ -456,6 +400,49 @@ mod tests {
             refusal_message(&json!({"success": false})),
             Some(String::new()),
             "a refusal with no message is still a refusal"
+        );
+    }
+
+    #[test]
+    fn a_successful_reply_still_carries_an_empty_error_and_is_not_a_refusal() {
+        let granted = json!({
+            "success": true,
+            "error": "",
+            "user": {"id": "773fb9c6-bcc6-4886-a85d-388c7cf933f8"},
+            "session_id": "17df871b-945e-4f7d-a910-5d83d2e116f5",
+            "access_token": "access",
+            "refresh_token": "refresh"
+        });
+
+        assert_eq!(
+            refusal_message(&granted),
+            None,
+            "an empty error is the proto's default, not a message"
+        );
+
+        let grant: SessionGrant = serde_json::from_value(granted).unwrap();
+        assert!(
+            grant.resolved().is_some(),
+            "the tokens were there the whole time"
+        );
+    }
+
+    #[test]
+    fn a_blank_error_is_never_mistaken_for_a_message() {
+        for blank in ["", "   ", "\n"] {
+            assert_eq!(
+                refusal_message(&json!({"success": true, "error": blank})),
+                None
+            );
+        }
+        assert_eq!(refusal_message(&json!({"error": null})), None);
+    }
+
+    #[test]
+    fn a_message_with_no_success_flag_is_a_refusal() {
+        assert_eq!(
+            refusal_message(&json!({"error": "Failed to reserve tag"})),
+            Some("Failed to reserve tag".to_owned())
         );
     }
 }

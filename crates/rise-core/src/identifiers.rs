@@ -56,9 +56,7 @@ impl RequestIdAllocator {
         self.next_at(wall_clock_millis())
     }
 
-    // The logical clock never regresses: a backwards wall clock advances the
-    // logical millisecond instead, so ids stay unique and monotonic across a
-    // system time change or a leap second.
+    // The logical clock never regresses: a backwards wall clock bumps the logical ms.
     pub fn next_at(&self, wall_millis: u64) -> RequestId {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 

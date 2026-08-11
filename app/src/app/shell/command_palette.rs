@@ -15,11 +15,6 @@ use crate::app::shell::shell_actions::{
     ConfirmSelection, PALETTE_KEY_CONTEXT, SelectNextItem, SelectPreviousItem,
 };
 
-/// What running a palette entry does.
-///
-/// A target rather than a closure, so an entry stays a value: it can be compared,
-/// listed in a test, and handed to the shell without the palette knowing what a
-/// section or a route means.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum CommandTarget {
     Section(RootTab),
@@ -35,12 +30,6 @@ pub struct PaletteCommand {
     pub target: CommandTarget,
 }
 
-/// How well a query matched, best first.
-///
-/// Three tiers rather than a fuzzy score: a palette that reorders its list on
-/// every keystroke by a similarity number is one the user cannot build muscle
-/// memory against. Prefix beats word start beats anywhere, and inside a tier the
-/// catalogue's own order wins.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum MatchRank {
     Prefix,
@@ -76,7 +65,6 @@ pub fn catalogue(folders: &[RailFolder]) -> Vec<PaletteCommand> {
     commands
 }
 
-/// Indices into `commands`, best match first, stable within a tier.
 pub fn filter(query: &str, commands: &[PaletteCommand]) -> Vec<usize> {
     let needle = normalise(query);
     if needle.is_empty() {
@@ -160,8 +148,6 @@ impl CommandPalette {
         }
     }
 
-    /// The palette opens with the caret already in the field, so the first
-    /// keystroke after the shortcut is a query and not a lost one.
     pub fn query_focus_handle(&self, cx: &App) -> FocusHandle {
         self.query.read(cx).focus_handle(cx)
     }
@@ -229,10 +215,6 @@ impl CommandPalette {
         cx.notify();
     }
 
-    /// Runs the entry the pointer landed on.
-    ///
-    /// The highlight moves first, so that whichever way the entry was chosen —
-    /// arrow keys or mouse — the palette reports the same thing.
     fn activate_index(&mut self, position: usize, cx: &mut Context<Self>) {
         if position >= self.matches.len() {
             return;
@@ -241,9 +223,6 @@ impl CommandPalette {
         self.confirm(&ConfirmSelection, cx);
     }
 
-    /// Returns an `AnyElement` rather than `impl IntoElement`: under Rust 2024
-    /// the opaque type would capture the `Context` borrow and the loop that
-    /// builds the list could only ever run once.
     fn row(
         &self,
         theme: &AppTheme,
@@ -296,9 +275,6 @@ impl Render for CommandPalette {
         let theme = rise_ui::theme(cx as &App).clone();
         let metrics = theme.shell;
 
-        // What the token asks for, clamped to what the window can give: a 400px
-        // window must still show the whole palette rather than pushing half of
-        // it past the frame, and gpui has no popup that could escape it anyway.
         let available = window.viewport_size().width - metrics.overlay_margin * 2.0;
         let width = clamp_width(metrics.palette_width, available);
 
@@ -320,10 +296,7 @@ impl Render for CommandPalette {
         }
 
         GlassPanel::surface("shell.command_palette", Material::Overlay, cx)
-            // The scrim behind this panel dismisses on a click, and gpui's hit
-            // test reports every hitbox under the pointer unless one blocks it.
-            // Without this, clicking a result — or the query field — would land
-            // on the scrim as well and close the palette instead.
+            // gpui reports every hitbox under the pointer, so without this a click also hits the scrim.
             .occlude()
             .key_context(PALETTE_KEY_CONTEXT)
             .track_focus(&self.focus_handle)
@@ -336,10 +309,6 @@ impl Render for CommandPalette {
             .flex_col()
             .gap(theme.spacing._300)
             .p(theme.spacing._600)
-            // The ENTITY, not `InputUi::new(..)`: the bare element carries no key
-            // context and tracks no focus, so focusing it would put the caret in a
-            // node the dispatch tree cannot find — and every shortcut in the frame
-            // around it would go to the window root and die there.
             .child(self.query.clone())
             .child(
                 div()

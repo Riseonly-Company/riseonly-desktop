@@ -1,26 +1,84 @@
 ================================================================================
-rise-user
+modules/user — the profile
 ================================================================================
 
-READ FIRST
-  ../CONTEXT.txt      (the module convention — layout, store triad, hard rules)
-  ../../../CONTEXT.txt (workspace rules)
+WHAT THIS OWNS
 
-REFERENCE
-  ../../../riseonly-ios/Riseonly/modules/user/
-  29,208 lines of Swift in the reference.
+  Everything user-service answers for about a person: who they are, what they
+  publish, and the one relationship a viewer can change. Mirrors
+  riseonly-ios/Riseonly/modules/user, 29,208 lines of Swift.
 
-FOLDERS HERE
-  components, engine, pages, shared, stores
+  engine/      the data layer: descriptor catalogue, hand-written DTOs, the
+               repository actor, the domain that owns it.
+  stores/user/ the triad. Thin command facade, snapshot selectors, one entry
+               point for views.
+  components/  ProfileTop (the header) and ProfileContent (tabs and their rows).
+  pages/       Profile, and nothing else.
 
-  This module owns a backend service, so it has engine/: the domain, the actor
-  repositories, the endpoint catalogue and the presentation snapshots.
+  Modules are an organisation, not an isolation: this one reads
+  modules/post's stores directly for the three post tabs, exactly as
+  ProfileContent's pages do in the reference.
 
-NOTES
-  29,208 lines. In the reference this module reaches into 32 other stores; here
-  every one of those becomes a rise-contracts trait.
+THE REFERENCE NEVER MIGRATED THIS MODULE, SO THIS IS A REDESIGN
 
-REMINDERS
-  pages/ holds screens and nothing else.
-  A view calls only <Feature>InteractionsStore.
-  This crate must not depend on another module crate.
+  riseonly-ios has a `user/engine`, but it covers ONLY theme settings and locale
+  settings. Profiles, the follow verbs and the relationship lists still go
+  through SaiWs from user-actions.swift — 1,039 lines of request options,
+  cache keys and overlay bookkeeping. Everything here goes through rise-engine
+  instead, which is PHASES.txt Phase 7's "budget nobody expects" being spent.
+
+  What that costs in practice: the follow overlay, the baseline map, the pending
+  set and the per-scope cache registry of the reference collapse into one actor
+  holding the profile and one `committed` relationship to roll back to.
+
+THREE KEYS, THREE METHODS, AND WHY `Own` IS NOT `Id(my id)`
+
+  ProfileKey::Own    get_my_profile        — the owner's payload. Carries the
+                                             fields only an owner may see
+                                             (is_phone_public, the subscription)
+                                             and is addressable before the
+                                             account id is known.
+  ProfileKey::Id     get_profile_by_id     — needs a viewer id; the server reads
+                                             privacy against it.
+  ProfileKey::Tag    get_profile_by_tag    — the only read a signed-out client
+                                             can make, so the viewer is omitted
+                                             rather than sent empty.
+
+  A tag key is lowercased on the way in. Two spellings of one profile would
+  otherwise be two entries holding two copies of the same person.
+
+WHAT `is_viewer` IS FOR
+
+  A profile reached by id or tag can still be your own. The screen asks the
+  snapshot rather than comparing ids itself, because by tag the answer is not
+  knowable until the payload lands — and a header that guesses shows a
+  "Subscribe" button on your own profile for one frame.
+
+THE FOLLOW, WHICH IS THE ONLY MUTATION HERE
+
+  It is optimistic, debounced 600 ms per profile, and reconciled asymmetrically:
+
+    follow    → user.send_friend_request. There is no `follow_user` verb. The
+                gateway answers with the created FriendRequestDto and NO
+                relationship flags, so nothing authoritative comes back and the
+                optimistic state stands until the next read. Only the request id
+                is taken from it.
+    unfollow  → user.unfollow_user, which DOES answer with is_friend / is_subbed
+                / is_subscriber, and those replace the guess.
+
+  Friendship is derived on the optimistic write (`following && they follow me`,
+  copied from applyFollowOptimistic) but read from the server's own is_friend
+  everywhere else. The button never derives it.
+
+  A read that lands while a follow is in flight keeps the pending relationship:
+  the mutation is newer than the request that raced it.
+
+WHAT IS NOT BUILT, SO NOBODY LOOKS FOR IT
+
+  Settings (all 24 screens of it), the relationship lists, create-post, stories
+  and highlights, the featured track, direct chat, the share sheet, contacts,
+  theme and locale settings, subscriptions, goal and plan editing. Each is its
+  own screen or its own subsystem.
+
+  The comments tab is missing from ProfileContent for a different reason: it is
+  answered by comment-service, and one microservice is one parent domain.

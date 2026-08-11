@@ -1,9 +1,7 @@
 use gpui::{Pixels, px};
 
-/// Desktop-only. iOS lengths are phone-derived (45pt controls, 56pt headers);
-/// a 27" display wants the same proportions at a different scale. The multiplier
-/// is applied once, at the token layer, so no component carries its own idea of
-/// how big things are.
+/// The length multiplier, applied once at the token layer so no component
+/// carries its own idea of how big things are.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Density(f32);
 

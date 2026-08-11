@@ -89,11 +89,8 @@ pub fn resolve_alias(
     Ok(found.map(LocalId::new))
 }
 
-/// Reads a window of a materialized view in position order.
-///
-/// Ordering is `position_key, local_id` — the same order the index is declared
-/// in — so two rows sharing a position still come back in a stable sequence
-/// rather than whatever the page cache happened to hold.
+/// Reads a window of a materialized view, ordered by `position_key, local_id` so
+/// rows sharing a position still come back in a stable sequence.
 pub fn read_view_window(
     connection: &Connection,
     account_id: &str,

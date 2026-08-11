@@ -1,17 +1,8 @@
 //! Launch at login.
 //!
-//! One switch in a settings screen and three mechanisms with nothing in common:
-//! a registered application on macOS, a file on Linux, a registry value on
-//! Windows. What they do share is policy — which mechanism a host uses, what
-//! actually has to be asked of it to reach a requested state, and how the Linux
-//! entry is rendered. That policy lives here as plain functions and is tested
-//! for all three hosts; each binding underneath is the call and nothing else.
-//!
-//! Whether the row should exist at all is a different question from whether the
-//! switch is on. An unbundled macOS build has nothing to register and a session
-//! with no home directory has nowhere to write, so `availability()` answers the
-//! first and `state()` the second. A settings screen that conflates them draws a
-//! switch that silently does nothing.
+//! Whether the row should exist at all (`availability()`) is a different
+//! question from whether the switch is on (`state()`). A settings screen that
+//! conflates them draws a switch that silently does nothing.
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -24,9 +15,7 @@ use crate::host_os::HostOs;
 
 #[derive(Debug, Error)]
 pub enum AutostartError {
-    /// The mechanism exists on this OS but this process cannot use it — a macOS
-    /// build running loose instead of from its bundle, or a session with no home
-    /// directory to write into.
+    /// The mechanism exists on this OS but this process cannot use it.
     #[error("{0} is not usable in this process")]
     Unavailable(AutostartMechanism),
     #[error("io: {0}")]
@@ -39,27 +28,15 @@ pub enum AutostartError {
 /// How one OS is asked to start the app when the user logs in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AutostartMechanism {
-    /// `SMAppService.mainAppService`, macOS 13 and later.
-    ///
-    /// Not a hand-written `~/Library/LaunchAgents` plist. Apple deprecated those
-    /// for login items, and the modern service is the one that appears under
-    /// System Settings > General > Login Items, where the user can see it and
-    /// revoke it. An autostart the user cannot find is the reason the old
-    /// mechanism went away.
-    ///
-    /// It registers the *bundle*, not a path, so it does nothing for a loose
-    /// binary — see [`is_bundled_macos_executable`].
+    /// `SMAppService.mainAppService`, macOS 13 and later. It registers the
+    /// *bundle*, not a path, so it does nothing for a loose binary — see
+    /// [`is_bundled_macos_executable`].
     LoginItemService,
     /// A desktop entry under `$XDG_CONFIG_HOME/autostart`, per the freedesktop
-    /// Desktop Application Autostart Specification. No daemon and no session bus
-    /// involved, which is why this is the one arm that is plain file I/O.
+    /// Desktop Application Autostart Specification.
     XdgDesktopEntry,
-    /// A value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
-    ///
-    /// HKCU rather than HKLM: the machine-wide key needs elevation to write and
-    /// then starts the client for every account on the machine. Both are wrong
-    /// for a per-user chat client — a checkbox must not raise a UAC prompt, and
-    /// one user's preference must not follow another user into their session.
+    /// A value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` —
+    /// per-user, so writing it never needs elevation.
     CurrentUserRunKey,
 }
 
@@ -72,8 +49,7 @@ impl AutostartMechanism {
         }
     }
 
-    /// True where the OS registers an installed application rather than a path,
-    /// so a loose executable has nothing it can register.
+    /// True where the OS registers an installed application rather than a path.
     pub const fn needs_application_bundle(self) -> bool {
         matches!(self, Self::LoginItemService)
     }
@@ -93,10 +69,8 @@ impl std::fmt::Display for AutostartMechanism {
 pub enum AutostartState {
     Enabled,
     Disabled,
-    /// macOS only. The login item is registered, but the user switched it off in
-    /// System Settings and it will not run until they switch it back on.
-    /// Re-registering does not clear this, so it must never be offered as a fix;
-    /// all the app can do is point at the setting.
+    /// macOS only. Registered, but switched off by the user in System Settings.
+    /// Re-registering does not clear it; only the setting can.
     RequiresApproval,
 }
 
@@ -106,16 +80,13 @@ impl AutostartState {
         matches!(self, Self::Enabled)
     }
 
-    /// Whether the OS holds a registration at all, approved or not. Distinct
-    /// from [`AutostartState::is_enabled`], and the right question to ask when
-    /// deciding whether a register or unregister call has anything left to do.
+    /// Whether the OS holds a registration at all, approved or not.
     pub const fn is_registered(self) -> bool {
         matches!(self, Self::Enabled | Self::RequiresApproval)
     }
 }
 
-/// What a binding has to ask the OS for, given where it is and where it should
-/// be.
+/// What a binding has to ask the OS for, given current and desired state.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AutostartTransition {
     Register,
@@ -124,15 +95,10 @@ pub enum AutostartTransition {
     AlreadySettled,
 }
 
-/// Enabling is always re-applied rather than skipped when it is already on. It
-/// is idempotent on all three mechanisms, and re-applying is what repairs an
-/// entry still pointing at an executable that has since moved — the ordinary
-/// result of an update or a reinstall.
-///
-/// Disabling something already off is skipped, because two of the three report
-/// it as a failure: `SMAppService` errors when asked to unregister a job it
-/// never registered, and `RegDeleteValueW` returns `ERROR_FILE_NOT_FOUND`.
-/// Turning off a switch that was never on is not an error the user should see.
+/// Enabling is always re-applied: it is idempotent, and re-applying repairs an
+/// entry still pointing at an executable that has since moved. Disabling
+/// something already off is skipped, because `SMAppService` and
+/// `RegDeleteValueW` both report that as a failure.
 pub const fn transition(current: AutostartState, desired: bool) -> AutostartTransition {
     match (current, desired) {
         (_, true) => AutostartTransition::Register,
@@ -157,16 +123,14 @@ pub trait Autostart: Send + Sync {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AutostartConfig {
-    /// Names the desktop entry file on Linux and the registry value on Windows.
-    /// Unused on macOS, where the bundle identifier is the identity. It is
-    /// sanitised before it becomes a file name; see [`desktop_file_name`].
+    /// Names the desktop entry file on Linux and the registry value on Windows;
+    /// unused on macOS. Sanitised before it becomes a file name; see
+    /// [`desktop_file_name`].
     pub id: String,
-    /// Shown in the desktop environment's startup list. Never a file name and
-    /// never a key.
+    /// Shown in the desktop environment's startup list. Never a file name.
     pub display_name: String,
     pub executable: PathBuf,
-    /// Passed to the executable at login. The usual member is whatever flag
-    /// tells the app to come up in the tray instead of opening a window.
+    /// Passed to the executable at login.
     pub arguments: Vec<String>,
 }
 
@@ -189,21 +153,12 @@ impl AutostartConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// XDG desktop entry — pure, and the whole of the Linux arm except for reading
-// two environment variables.
-// ---------------------------------------------------------------------------
-
-/// The characters the Desktop Entry Specification reserves inside `Exec`; an
-/// argument containing any of them has to be quoted. `\r` is here on top of the
-/// specification's list, because a bare carriage return would otherwise be left
-/// to whichever whitespace rule the reader happens to implement.
+/// Reserved by the Desktop Entry Specification inside `Exec`; `\r` is added on
+/// top of that list so a bare carriage return cannot be read as whitespace.
 const EXEC_RESERVED: &str = " \t\n\r\"'\\><~|&;$*?#()`";
 
 /// Renders the whole entry. Every value goes through [`escape_desktop_value`],
-/// which is what stops a name from carrying a newline and introducing a key of
-/// its own — the desktop entry format is line-oriented and would otherwise take
-/// `Riseonly\nExec=…` at its word.
+/// so a name carrying a newline cannot introduce a key of its own.
 pub fn render_desktop_entry(config: &AutostartConfig) -> String {
     let name = escape_desktop_value(&config.display_name);
     let exec = exec_value(&config.executable, &config.arguments);
@@ -220,14 +175,8 @@ pub fn render_desktop_entry(config: &AutostartConfig) -> String {
 }
 
 /// The `Exec` value: each argument quoted, then the result escaped for the file
-/// format.
-///
-/// The order is forced. A reader undoes the string escapes first and only then
-/// splits the line into quoted arguments, so a writer has to do it the other way
-/// round. The visible consequence is that a literal backslash inside a quoted
-/// argument comes out as four characters — one pair from the quoting rule,
-/// doubled again by the escape rule. The specification says so explicitly, and
-/// it is the part everybody gets wrong.
+/// format — in that order, because a reader undoes the escapes before it splits
+/// on quoting. A literal backslash therefore comes out as four characters.
 pub fn exec_value(executable: &Path, arguments: &[String]) -> String {
     let mut parts = Vec::with_capacity(arguments.len() + 1);
     parts.push(quote_exec_argument(&executable.to_string_lossy()));
@@ -252,14 +201,11 @@ fn quote_exec_argument(argument: &str) -> String {
 
     for character in argument.chars() {
         match character {
-            // All four are reserved, so reaching them means the argument is
-            // quoted and they need the inner escape.
             '"' | '`' | '$' | '\\' => {
                 out.push('\\');
                 out.push(character);
             }
-            // A lone percent is a field code — `%f`, `%U` — and a path holding
-            // one would be silently rewritten by the launcher.
+            // A lone percent is a field code (`%f`) the launcher would rewrite.
             '%' => out.push_str("%%"),
             _ => out.push(character),
         }
@@ -273,8 +219,7 @@ fn quote_exec_argument(argument: &str) -> String {
 }
 
 /// The string-escape rule of the file format. Applies to every value, not only
-/// `Exec`: it is the only thing keeping a newline in user-supplied text from
-/// becoming a new key.
+/// `Exec`: it is what keeps a newline in user text from becoming a new key.
 pub fn escape_desktop_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
 
@@ -291,13 +236,9 @@ pub fn escape_desktop_value(value: &str) -> String {
     out
 }
 
-/// The autostart directory, per the Base Directory Specification.
-///
-/// A relative `$XDG_CONFIG_HOME` is ignored rather than joined: the
-/// specification says a path in these variables must be absolute and that an
-/// implementation must treat anything else as invalid. Honouring a relative one
-/// would resolve it against the process's working directory, which for a desktop
-/// launch is wherever the session manager happened to be.
+/// The autostart directory, per the Base Directory Specification. A relative
+/// `$XDG_CONFIG_HOME` is ignored rather than joined, as the specification
+/// requires: honouring it would resolve against the launcher's working directory.
 pub fn autostart_directory(config_home: Option<&Path>, home: &Path) -> PathBuf {
     match config_home {
         Some(directory) if directory.is_absolute() => directory.join("autostart"),
@@ -305,11 +246,9 @@ pub fn autostart_directory(config_home: Option<&Path>, home: &Path) -> PathBuf {
     }
 }
 
-/// The entry's file name, derived from the application id.
-///
-/// The id arrives from configuration, so it is sanitised rather than trusted. A
-/// `/` or a `..` in it would place the entry outside the autostart directory,
-/// and a leading dot would hide it from every startup list that exists.
+/// The entry's file name, derived from the application id. The id is sanitised
+/// rather than trusted: a `/` or `..` would place the entry outside the
+/// autostart directory, and a leading dot would hide it from every startup list.
 pub fn desktop_file_name(id: &str) -> String {
     let sanitised: String = id
         .chars()
@@ -327,13 +266,9 @@ pub fn desktop_file_name(id: &str) -> String {
     format!("{stem}.desktop")
 }
 
-/// Reads the enabled state back out of an entry.
-///
-/// Existence of the file is not the answer. GNOME's Startup Applications does
-/// not delete an entry when the user switches it off; it rewrites it with
-/// `X-GNOME-Autostart-enabled=false`, and the freedesktop-wide equivalent is
-/// `Hidden=true`. Checking only for the file reports "on" for something the user
-/// has explicitly turned off.
+/// Reads the enabled state back out of an entry. Existence of the file is not
+/// the answer: a desktop environment switches an entry off by rewriting it with
+/// `Hidden=true` or `X-GNOME-Autostart-enabled=false`.
 pub fn desktop_entry_is_enabled(contents: &str) -> bool {
     let mut enabled = true;
 
@@ -353,9 +288,8 @@ pub fn desktop_entry_is_enabled(contents: &str) -> bool {
     enabled
 }
 
-/// The file half of the Linux arm, taking the directory as an argument so it can
-/// be exercised on a Mac against a temporary one. The binding supplies the
-/// resolved XDG directory and adds nothing else.
+/// The file half of the Linux arm; the caller supplies the resolved XDG
+/// directory.
 pub fn read_desktop_entry_state(
     directory: &Path,
     config: &AutostartConfig,
@@ -391,29 +325,20 @@ pub fn apply_desktop_entry(
     Ok(PlatformSupport::Performed)
 }
 
-// ---------------------------------------------------------------------------
-// Windows Run key — pure parts.
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RegistryRoot {
     CurrentUser,
     LocalMachine,
 }
 
-/// Deliberately a value rather than a constant folded into the binding: it is
-/// the one place the HKCU-not-HKLM decision is written down, and a test can hold
-/// it to that.
+/// HKCU, never HKLM: the machine-wide key needs elevation and would start the
+/// client for every account on the machine.
 pub const WINDOWS_RUN_ROOT: RegistryRoot = RegistryRoot::CurrentUser;
 
 pub const WINDOWS_RUN_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
-/// The single string Windows stores in the Run value.
-///
-/// Quoted for `CommandLineToArgvW`, which is what the shell uses to split it
-/// back apart — not for `cmd.exe`, and the two do not agree. Its rules are the
-/// awkward ones: a backslash is literal unless it precedes a quote, in which case
-/// runs of backslashes are doubled and the quote is escaped.
+/// The single string Windows stores in the Run value, quoted for
+/// `CommandLineToArgvW` — not for `cmd.exe`, whose rules differ.
 pub fn windows_run_command(executable: &Path, arguments: &[String]) -> String {
     let mut parts = Vec::with_capacity(arguments.len() + 1);
     parts.push(quote_windows_argument(&executable.to_string_lossy()));
@@ -450,8 +375,7 @@ fn quote_windows_argument(argument: &str) -> String {
         }
     }
 
-    // The closing quote is a quote too, so a trailing run has to be doubled or
-    // it would escape it.
+    // The closing quote is a quote too: a trailing run has to be doubled.
     push_backslashes(&mut out, pending_backslashes * 2);
     out.push('"');
     out
@@ -461,20 +385,10 @@ fn push_backslashes(out: &mut String, count: usize) {
     out.extend(std::iter::repeat_n('\\', count));
 }
 
-// ---------------------------------------------------------------------------
-// macOS bundle check — pure.
-// ---------------------------------------------------------------------------
-
-/// Whether this executable is the main binary of a real `.app`.
-///
-/// `SMAppService.mainAppService` registers the bundle it is called from. Run from
-/// a loose binary there is no bundle, the call fails or registers something that
-/// never launches, and nothing about the failure names the cause. This project
-/// always runs from `Riseonly.app` for exactly that family of reasons — Keychain
-/// ACLs and notification identity key off bundle identity the same way — so a
-/// bare-binary run reports Unsupported instead.
-///
-/// The shape of the path is the check: `…/Something.app/Contents/MacOS/binary`.
+/// Whether this executable is the main binary of a real `.app` — the shape of
+/// the path is the check: `…/Something.app/Contents/MacOS/binary`.
+/// `SMAppService.mainAppService` registers the bundle it is called from, so a
+/// loose binary has nothing to register and reports Unsupported.
 pub fn is_bundled_macos_executable(executable: &Path) -> bool {
     let mut ancestors = executable
         .components()
@@ -488,10 +402,6 @@ pub fn is_bundled_macos_executable(executable: &Path) -> bool {
 
     macos == "MacOS" && contents == "Contents" && bundle.to_ascii_lowercase().ends_with(".app")
 }
-
-// ---------------------------------------------------------------------------
-// Implementations
-// ---------------------------------------------------------------------------
 
 /// The real setting for the host this binary was built for.
 pub struct SystemAutostart {
@@ -526,12 +436,9 @@ impl Autostart for SystemAutostart {
     }
 }
 
-/// The test double.
-///
-/// It reports Performed like the real ones so a settings screen can be driven end
-/// to end, and it forgets everything at exit. Wiring it into a shipped build
-/// gives the user a switch that resets on every launch, which is worse than no
-/// switch at all.
+/// The test double. It reports Performed like the real ones, and forgets
+/// everything at exit — a shipped build wired to it gives the user a switch
+/// that resets on every launch.
 #[derive(Default)]
 pub struct InMemoryAutostart {
     enabled: AtomicBool,
@@ -562,10 +469,6 @@ impl Autostart for InMemoryAutostart {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bindings. No decisions live below this line.
-// ---------------------------------------------------------------------------
-
 #[cfg(target_os = "macos")]
 mod platform {
     use objc2::msg_send;
@@ -576,8 +479,7 @@ mod platform {
     use super::*;
 
     // Linking the framework is what puts SMAppService into the runtime's class
-    // table; a lookup without it fails on every macOS version, including the ones
-    // that have the class.
+    // table; without it the lookup fails even where the class exists.
     #[link(name = "ServiceManagement", kind = "framework")]
     unsafe extern "C" {}
 
@@ -590,9 +492,7 @@ mod platform {
         AutostartError::Unavailable(AutostartMechanism::for_host(HostOs::current()))
     }
 
-    /// None means there is nothing to talk to: either the app is not a bundle, or
-    /// the class is missing because this is a macOS older than 13. Neither is a
-    /// panic — both are an honest Unsupported.
+    /// None means no bundle, or a macOS older than 13.
     fn main_app_service(config: &AutostartConfig) -> Option<Retained<AnyObject>> {
         if !is_bundled_macos_executable(&config.executable) {
             return None;
@@ -601,15 +501,12 @@ mod platform {
         let class = AnyClass::get(c"SMAppService")?;
 
         // SAFETY: +mainAppService takes no arguments and returns an autoreleased
-        // SMAppService or nil, which is what the Option here is for. The selector
-        // has existed for as long as the class has, so a successful class lookup
-        // is enough to send it.
+        // SMAppService or nil, which is what the Option here is for.
         unsafe { msg_send![class, mainAppService] }
     }
 
     fn status_of(service: &AnyObject) -> Result<AutostartState, AutostartError> {
-        // SAFETY: -status takes no arguments and returns SMAppServiceStatus,
-        // which is an NSInteger.
+        // SAFETY: -status takes no arguments and returns an NSInteger.
         let status: isize = unsafe { msg_send![service, status] };
 
         match status {
@@ -649,8 +546,7 @@ mod platform {
         }
 
         // SAFETY: both selectors take a trailing NSError out-parameter and
-        // return BOOL. The `_` is objc2's spelling of that convention: it builds
-        // the out-parameter and turns the BOOL into this Result.
+        // return BOOL; objc2's `_` builds it and yields this Result.
         let outcome: Result<(), Retained<NSError>> = unsafe {
             if action == AutostartTransition::Register {
                 msg_send![&*service, registerAndReturnError: _]
@@ -661,9 +557,8 @@ mod platform {
 
         match outcome {
             Ok(()) => Ok(PlatformSupport::Performed),
-            // Both calls report failure for what is really a no-op on some system
-            // versions. The status is the authority: if the login item is already
-            // registered or already gone, as asked, nothing went wrong.
+            // Both calls report failure for what is a no-op on some system
+            // versions, so the status is the authority.
             Err(error) => {
                 if matches!(status_of(&service), Ok(state) if state.is_registered() == enabled) {
                     Ok(PlatformSupport::Performed)
@@ -732,9 +627,8 @@ mod platform {
         AutostartError::Refused(format!("registry error {}", status.0))
     }
 
-    /// Opened, never created: `RegCreateKeyExW` sits behind the `windows` crate's
-    /// `Win32_Security` feature, which this workspace does not enable, and the Run
-    /// key is part of the default user hive on every Windows installation.
+    /// Opened, never created: `RegCreateKeyExW` needs the `Win32_Security`
+    /// feature this workspace does not enable, and the Run key always exists.
     struct RunKey(HKEY);
 
     impl RunKey {
@@ -742,8 +636,8 @@ mod platform {
             let subkey = HSTRING::from(WINDOWS_RUN_SUBKEY);
             let mut handle = HKEY::default();
 
-            // SAFETY: the out-parameter points at a live HKEY for the duration of
-            // the call, and the handle it writes is closed exactly once, in Drop.
+            // SAFETY: the out-parameter points at a live HKEY for the call, and
+            // the handle it writes is closed exactly once, in Drop.
             let status = unsafe {
                 RegOpenKeyExW(
                     root_handle(WINDOWS_RUN_ROOT),
@@ -770,8 +664,7 @@ mod platform {
         }
     }
 
-    /// REG_SZ is UTF-16 with a NUL terminator, and the length the API wants is in
-    /// bytes rather than characters.
+    /// REG_SZ is NUL-terminated UTF-16, and its length is counted in bytes.
     fn wide_bytes(value: &str) -> Vec<u8> {
         value
             .encode_utf16()
@@ -792,8 +685,8 @@ mod platform {
         let name = HSTRING::from(config.id.as_str());
         let mut size: u32 = 0;
 
-        // SAFETY: a null data pointer asks only for the size, which is how the
-        // value's presence is probed without allocating a buffer for it.
+        // SAFETY: a null data pointer asks only for the size, which probes the
+        // value's presence without allocating a buffer.
         let status =
             unsafe { RegQueryValueExW(key.0, &name, None, None, None, Some(&raw mut size)) };
 
@@ -818,12 +711,10 @@ mod platform {
 
         let status = if action == AutostartTransition::Register {
             let value = wide_bytes(&windows_run_command(&config.executable, &config.arguments));
-            // SAFETY: the slice outlives the call, and its length is what the
-            // wrapper passes as cbData.
+            // SAFETY: the slice outlives the call; its length becomes cbData.
             unsafe { RegSetValueExW(key.0, &name, None, REG_SZ, Some(value.as_slice())) }
         } else {
-            // SAFETY: deleting a value needs nothing beyond the open key and the
-            // value name.
+            // SAFETY: deleting needs nothing beyond the open key and the name.
             unsafe { RegDeleteValueW(key.0, &name) }
         };
 
@@ -853,10 +744,8 @@ mod tests {
         dir
     }
 
-    /// Reads an `Exec` value back the way the specification says a launcher must:
-    /// undo the string escapes first, then split on quoting, then collapse `%%`.
-    /// Round-tripping through this is a much stronger claim than comparing the
-    /// rendered line to a literal.
+    /// Reads an `Exec` value the way a launcher must: unescape, then split on
+    /// quoting, then collapse `%%`.
     fn exec_arguments(entry: &str) -> Vec<String> {
         let raw = entry
             .lines()

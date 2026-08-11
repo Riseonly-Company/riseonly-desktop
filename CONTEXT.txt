@@ -16,7 +16,7 @@ them later is not. Never collapse a platform seam just because only one arm is
 currently tested.
 
 STATUS: Phases 0-3 done, Phase 4 nearly closed, Phases 5 and 6 gated, Phase 7
-begun. 1,455 tests green on macOS.
+begun. 1,955 tests green on macOS.
 
 The engine (wire, encrypted store, sync, outbox) is built headless with contract
 tests, the fifteen platform seams are in, and the media bet has landed: the
@@ -50,11 +50,13 @@ gateway's silence reaper does not count protocol Pongs. The engine gained a
 second, narrow transport for the two auth calls an unauthenticated client has to
 make, which the socket's action gate refuses by construction.
 
-Four modules exist: auth (accounts, credentials, the token lifecycle),
-onboarding, session (the active-sessions list) and presence. A signed-out launch
-shows onboarding and the step flow; a signed-in one restores from the credential
-store, refreshes if the access token has aged out, and opens the shell. The other
-eighteen modules are the rest of Phase 7.
+Six modules exist: auth (accounts, credentials, the token lifecycle),
+onboarding, session (the active-sessions list), presence, post (the feed) and
+user (the profile). A signed-out launch shows onboarding and the step flow; a
+signed-in one restores from the credential store, refreshes if the access token
+has aged out, and opens the shell. The feed and a profile are real screens over
+real data, with optimistic likes and an optimistic follow that reconcile and roll
+back. The other sixteen modules are the rest of Phase 7.
 
 docs/PLATFORM_MATRIX.md says, per seam, what is verified, what merely compiles on
 the CI matrix, and what is only written. Read it before claiming any coverage.
@@ -106,6 +108,8 @@ LAYOUT
 crates/    THE LIBRARIES — layered, reusable, each with its own CONTEXT.txt
   rise-core         identifiers, generations, StaleGuard. No UI, no OS, no engine.
   rise-i18n         41 locales, plurals, both interpolation dialects.
+  rise-validate     every rule about what a user may type. Zero dependencies.
+                    ALL validation goes through a schema here — see below.
   rise-engine       wire, store, sync, upload. The data layer.
   rise-platform     every OS difference behind traits, plus the gpui shim.
   rise-theme        design tokens: palette, radii, heights, density, materials,
@@ -155,6 +159,66 @@ Android and wasm later. (2) is what keeps three OSes from becoming three
 codebases. (3) is STORE_ARCHITECTURE.md expressed as a check.
 
 --------------------------------------------------------------------------------
+VALIDATION GOES THROUGH rise-validate. ALWAYS.
+--------------------------------------------------------------------------------
+
+A bare `if value.len() < 3` in a store, a screen or a repository is a bug even
+when it is correct today: it is a second copy of a server bound that will move.
+Declare a `TextSchema` beside the field and let every layer read THAT.
+
+  const TAG: TextSchema = TextSchema::new("tag").trim().lowercase().checks(&[
+      Check::min_bytes(3).message("tag_too_short"),
+      Check::charset(Charset::TAG).message("tag_invalid_characters"),
+  ]);
+
+`check` returns the NORMALISED value, so what was judged and what is sent cannot
+differ. Violations are data carrying an i18n key, never a rendered sentence.
+Schemas are `const`, so they cost nothing and live next to the field.
+
+This is not defence in depth. `api/docs/VALIDATES_SUMMARY.md` records 712 fields
+with no validation on ANY server layer — for much of the product this crate is
+the only check there is. crates/rise-validate/CONTEXT.txt has the rest.
+
+--------------------------------------------------------------------------------
+ANYTHING THAT FLOATS OVER THE PAGE IS A ModalUi
+--------------------------------------------------------------------------------
+
+`rise_widgets::ModalUi` — a dialog, a confirmation, a picker, a hand-off, an
+error the user has to acknowledge. If it dims the page behind it, it is that
+component. A hand-rolled `div().absolute().inset_0().bg(scrim)` is a bug even
+when it looks right.
+
+  ModalUi::new("auth.telegram")
+      .title(tr("tg_redirect_title"))
+      .width(ModalWidth::Medium)
+      .track_focus(&self.focus_handle)
+      .on_dismiss(handler)
+      .action(ModalAction::primary("open", tr("tg_redirect_open_btn")).on_click(..))
+      .render(&theme, window, cx)
+
+Four things it gets right that three hand-rolled ones each got a different
+subset of: it is OPAQUE (a native material is below the Metal layer, so a
+GlassPanel over page content shows the page through it), it OCCLUDES (or a
+click on a button inside also hits the scrim and dismisses first), it FITS the
+viewport (or there is no outside left to click), and Esc works.
+crates/rise-widgets/src/modal_ui/CONTEXT.txt has the rest, including when to
+reach for `ModalDismiss::Explicit`.
+
+--------------------------------------------------------------------------------
+DEBOUNCE COMES FROM rise-engine
+--------------------------------------------------------------------------------
+
+`rise_engine::Debouncer` — trailing, with a `with_max_wait` ceiling so a user
+typing steadily still gets an answer, and cancellation by drop. One line in an
+actor: `self.debounce.send(&self.commands, Command::DoItNow { .. })`.
+
+STORE_ARCHITECTURE.md section 7 puts debounce in the InteractionsStore, and on
+the phone that is where the Task/sleep lives. Here it cannot: stores run on the
+GPUI thread and rise-engine may never see gpui, so the actor repository — the
+only place with a runtime, and the one that already owns the request generation
+— is where it goes. Same rule, one layer down.
+
+--------------------------------------------------------------------------------
 COMMANDS
 --------------------------------------------------------------------------------
 
@@ -183,13 +247,51 @@ macOS always runs from a bundled .app, never a bare binary: Keychain ACLs,
 notifications and now-playing all key off bundle identity.
 
 --------------------------------------------------------------------------------
+COMMENTS
+--------------------------------------------------------------------------------
+
+The default is NO COMMENT. A comment is a claim that the code could not say this
+itself, and nearly always the code could. Two things survive, and nothing else:
+
+  A doc comment on a PUBLIC item of a crate in crates/*.
+      Those crates are libraries that other code links against, so their `pub`
+      surface is documentation with an actual reader. ONE line. Two or three only
+      when the item carries a contract a caller can get wrong: units, ordering,
+      what panics, "the row id must be a stable server id". Never longer.
+
+  A single-line // recording a fact that is not in the code.
+      A platform quirk, an ordering requirement, a licensing constraint, a
+      concurrency / transaction / replay / reconciliation invariant, a gateway
+      wire deviation. ONE line. If it needs two, it needs CONTEXT.txt.
+
+Everything else is deleted on sight:
+
+  - every doc comment in app/. `pub` inside a binary is not public API and
+    nothing links against it, so there is no reader to document for;
+  - doc comments on private, pub(crate) and pub(super) items in crates/;
+  - EVERY comment in app/src/modules/*/stores/**. Stores get zero: no file
+    headers, no doc comments, no section markers, no inline notes. This is canon
+    (../riseonly-ios/STORE_ARCHITECTURE.md section 17), not a preference;
+  - multi-paragraph rationale — why this design won, what the alternative was,
+    what riseonly-ios does, what PHASES.txt decided, what upstream generates.
+    That is what CONTEXT.txt is for, and it is the only place an agent who has
+    never seen this repo will actually read it;
+  - file-header banners, `// ----` rules, section markers, MARK:, and narration
+    of the next five lines;
+  - TODO and FIXME. Finish the work, or write the exact entry in
+    backend/BACKEND_TODO.txt.
+
+The test, before you type a comment: delete it and read the code. If nothing was
+lost it was noise. If what was lost is a DECISION rather than a FACT, it belongs
+in that directory's CONTEXT.txt, not above the function.
+
+Comment budget is a review item. A diff that adds prose faster than it adds code
+is wrong however well the prose is written.
+
+--------------------------------------------------------------------------------
 HOUSE RULES
 --------------------------------------------------------------------------------
 
-- No comments that restate the code. In stores: no comments at all, no file
-  headers, no doc comments on obvious items. In engine code a comment is allowed
-  only for a non-obvious concurrency, transaction, replay or reconciliation
-  invariant. CONTEXT.txt is where explanation belongs.
 - gpui is pinned to an exact git rev in the workspace manifest. Never move it to
   a branch, never to crates.io (which is a year stale and predates the
   gpui_platform split). Bumping the rev is scheduled work with a test gate.

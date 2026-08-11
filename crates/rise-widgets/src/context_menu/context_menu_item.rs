@@ -8,15 +8,9 @@ pub enum ContextMenuTone {
     Destructive,
 }
 
-/// One row of a context menu.
-///
-/// `id` is the reference's `key` — `Core/UI/ContextMenuUi.swift` — and it is the
-/// STABLE ACTION ID, never a display string and never a position. The handler
-/// and the analytics event on the other side of an activation both key off it,
-/// so it has to be the same string the phone sends for the same action.
-///
-/// `label_key` is a string key, resolved at render time. Literal copy here would
-/// be untranslatable in all 41 locales and invisible until someone switched one.
+/// One row of a context menu. `id` is the stable action id an activation carries
+/// — never a display string, never a position — and `label_key` is an i18n key,
+/// resolved at render time rather than literal copy.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ContextMenuItem {
     pub id: SharedString,
@@ -57,9 +51,8 @@ impl ContextMenuItem {
     }
 }
 
-/// A menu is a flat list of entries rather than a list of items, because the
-/// separator has to occupy an index: keyboard traversal steps over indices, and
-/// a separator kept outside the list would make every index mean two things.
+/// A menu is a flat list of entries: the separator occupies an index, because
+/// keyboard traversal steps over indices.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ContextMenuEntry {
     Item(ContextMenuItem),
@@ -96,13 +89,10 @@ pub enum HighlightDirection {
     Backward,
 }
 
-/// The next index the highlight is allowed to sit on, wrapping.
-///
-/// `from` is where the highlight is now; `None` means it is nowhere, and the
-/// answer is then the first entry in that direction rather than the second.
-/// Disabled items and separators are skipped, so a menu whose only entries are
-/// either has no answer at all — which is the case that turns into an index out
-/// of range if this returns a number regardless.
+/// The next index the highlight is allowed to sit on, wrapping. `from: None`
+/// means the highlight is nowhere, so the answer is the first entry in that
+/// direction. Disabled items and separators are skipped, and a menu made only of
+/// those has no answer at all.
 pub fn next_enabled_index(
     entries: &[ContextMenuEntry],
     from: Option<usize>,

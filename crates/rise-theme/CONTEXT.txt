@@ -32,6 +32,34 @@ WHAT THIS CRATE OWNS
   Typography: the family the product ships, the weights the bundle actually
   contains, and the size/weight pairs the reference uses. See below.
 
+  GroupedMetrics: the product's settings rows, from Core/UI/GroupedBtns.swift.
+
+  The horizontal rhythm, the type sizes and the hairline are the reference's.
+  The VERTICAL rhythm is not, and this is the one place in the crate where a
+  reference number was deliberately re-based rather than carried across. The
+  reference's 53pt row is a 44pt touch target with margin — Apple's minimum, for
+  a finger. A pointer hits 40pt as reliably, so the row box is Telegram's,
+  measured off its macOS settings list: a 26pt chip with 7pt above and below.
+  Density then scales that, as it scales everything else. This is exactly the
+  re-basing §7 of the workspace prompt licenses, done at the token layer where a
+  component cannot disagree with it.
+
+  Two lengths have no counterpart on the phone at all and are marked DESKTOP in
+  the source: the inset a wrapperless group keeps, and the corner a selected row
+  rounds itself by when there is no card. card_radius is a third departure — 25
+  rather than 20, because the same corner around a 13pt shorter row reads as
+  barely rounded.
+
+  row_height() and label_offset_x() are derived, not stored: a caller reserving
+  space for a group asks there instead of adding the parts up again.
+
+  SettingsIconPalette: the coloured chip behind each settings icon, from
+  Core/UI/SettingsIconPalette.swift. Deliberately NOT part of ThemePalette —
+  that struct is serde-compatible with theme-service's palette_json, so a field
+  added to it changes a wire contract. These are also appearance-independent,
+  exactly like AvatarPalette's sixteen: the chips are saturated enough to read
+  on a light card and a dark one, so there is nothing to switch between.
+
   ShellMetrics: the desktop frame's geometry — rail 56, list 320, aside 300,
   content minimum 460. rise-navigation's PanePolicy decides how many columns a
   width affords; this decides how wide each one is, and PanePolicy is built

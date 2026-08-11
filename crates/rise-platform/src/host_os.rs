@@ -1,14 +1,8 @@
 /// Which operating system a decision is being made *for*.
 ///
-/// Only macOS is built and run today; the Linux and Windows arms of every seam
-/// are written blind. This type is what keeps "blind" from also meaning
-/// "untested": per-OS behaviour is expressed as a pure function of `HostOs`, so
-/// all three arms are exercised by the suite on a Mac, and the only thing left
-/// unverified elsewhere is the final call into the OS API itself.
-///
-/// A seam that reaches for `#[cfg(target_os)]` to make a *decision* has put that
-/// decision beyond the reach of the tests. The cfg belongs at the binding, after
-/// the decision is already made.
+/// Express per-OS behaviour as a pure function of this type, never as a
+/// `#[cfg(target_os)]` decision — that puts the decision beyond the reach of the
+/// tests. The cfg belongs at the binding, after the decision is already made.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum HostOs {
     MacOs,
@@ -17,8 +11,7 @@ pub enum HostOs {
 }
 
 impl HostOs {
-    /// The one place the running platform is read. Everything downstream takes
-    /// it as an argument.
+    /// The one place the running platform is read; everything downstream takes it as an argument.
     pub const fn current() -> Self {
         #[cfg(target_os = "macos")]
         {

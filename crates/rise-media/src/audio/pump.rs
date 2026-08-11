@@ -1,18 +1,8 @@
 //! Decode, trim, resample, remap, apply gain, hand to the device.
 //!
-//! The whole audio path in one place, so the order of operations is written
-//! down once rather than being rediscovered:
-//!
-//!   decode → trim priming/padding → resample to the device rate →
-//!   map to the device's channel count → apply the volume ramp → ring
-//!
-//! Resampling BEFORE the channel map on purpose: the resampler keeps three
-//! frames of history per channel, and changing the channel count underneath it
-//! invalidates that history. Gain LAST, so a duck ramps the audio the user
-//! actually hears rather than something two conversions upstream of it.
-//!
-//! This runs on the decode thread. Nothing here may run in the device
-//! callback — see `ring.rs` for why that thread cannot allocate or block.
+//! Order matters: resampling precedes the channel map because the resampler
+//! keeps per-channel history, and gain comes last so a duck ramps what is
+//! actually heard. Runs on the decode thread, never in the device callback.
 
 use super::decoder::{AudioDecoder, DecodeError, Decoded};
 use super::fade::{OnComplete, VolumeRamp};
@@ -43,8 +33,6 @@ pub struct Pump {
     decoded: Vec<f32>,
     converted: Vec<f32>,
     mapped: Vec<f32>,
-    /// Frames produced for the device, which is what the gapless join and the
-    /// end-of-track handoff are counted in.
     frames_produced: u64,
     ended: bool,
 }
@@ -95,10 +83,8 @@ impl Pump {
         self.producer.filled()
     }
 
-    /// Millisecond position of the audio most recently pushed into the ring.
-    ///
-    /// Ahead of what the user is hearing by however much the ring holds; the
-    /// heard position comes from the sink's frame counter, not from this.
+    /// Millisecond position of the audio most recently pushed into the ring —
+    /// ahead of what is heard, which comes from the sink's frame counter.
     pub fn produced_millis(&self) -> u64 {
         self.frames_produced * 1000 / self.config.sample_rate as u64
     }
@@ -109,8 +95,7 @@ impl Pump {
             return Ok(PumpStep::EndOfStream);
         }
 
-        // Half the ring free before decoding again: refilling on every free
-        // sample turns the decode thread into a spin loop against the device.
+        // Wait for half the ring; refilling per free sample is a spin loop.
         if self.producer.free() < self.producer.capacity() / 2 {
             return Ok(PumpStep::Full);
         }
@@ -155,8 +140,7 @@ impl Pump {
         );
 
         if let Some(OnComplete::Pause) = self.ramp.apply(&mut self.mapped, self.config.channels) {
-            // The duck finished. The caller stops the device; the audio already
-            // in the ring is silent, so nothing is cut off mid-note.
+            // The duck finished; the caller stops the device, the ring is silent.
         }
 
         let written = self.producer.push(&self.mapped);
@@ -183,11 +167,8 @@ impl Pump {
 
 /// Fit `source_channels` of interleaved audio into `device_channels`.
 ///
-/// The two interesting cases are both common: a mono voice note on a stereo
-/// device, and a stereo track on a machine whose default device is a 6-channel
-/// interface. The rest is deliberately simple — a real downmix matrix for
-/// 5.1 to stereo is a product decision nobody has made, and taking the front
-/// pair is at least predictable.
+/// Mono fans out, everything-to-mono averages, and a wider source is truncated
+/// to the leading channels — there is no downmix matrix.
 pub fn map_channels(input: &[f32], source_channels: u16, device_channels: u16, out: &mut Vec<f32>) {
     let source = source_channels.max(1) as usize;
     let device = device_channels.max(1) as usize;
@@ -242,11 +223,7 @@ mod tests {
         )
     }
 
-    /// Play the whole track out.
-    ///
-    /// Only ever asks the ring for what it is holding: a real device callback
-    /// asks for a fixed block and a short read is an underrun, but a test that
-    /// over-asks would manufacture underruns that say nothing about the pump.
+    /// Asks the ring only for what it holds, so no underrun is manufactured.
     fn drain(pump: &mut Pump, consumer: &mut ring::Consumer) -> Vec<f32> {
         let mut collected = Vec::new();
 

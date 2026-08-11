@@ -1,0 +1,73 @@
+================================================================================
+rise-ui/image_ui — remote images, and the cache gpui does not ship
+================================================================================
+
+  image_ui.rs         ImageUi. Thin, on purpose.
+  image_budget.rs     the eviction policy, with no toolkit in it.
+  rise_image_cache.rs the gpui-facing half.
+
+WHY THIS EXISTS AT ALL
+
+  gpui's `img()` already fetches, decodes off the frame path, uploads to the
+  atlas and animates multi-frame sources. What it does not have is a BOUNDED
+  cache: the only implementation of its `ImageCache` trait is called
+  `RetainAllImageCache`, and the name is accurate. For an editor with a fixed set
+  of icons that is right. For a feed, where the set of images is whatever the
+  user has scrolled past, it is unbounded growth by construction.
+
+TWO CEILINGS, AND BOTH ARE LOAD-BEARING
+
+  Bytes alone lets six hundred 40pt avatars sit comfortably under the limit while
+  holding six hundred entries, each with a GPU texture behind it. Count alone
+  lets four full-resolution photographs cost more than the six hundred avatars
+  did. rise-media hit the first of these with sticker sequences and its own suite
+  caught it; this is the same failure with a different allocator.
+
+WHAT THE POLICY GUARANTEES, AND WHAT IT DOES NOT
+
+  Guaranteed, and tested: a five-thousand-image scroll converges rather than
+  growing; an in-flight load is never evicted out from under whoever asked for
+  it; an image larger than the whole budget is kept rather than thrashed; a
+  failed load is remembered so a broken URL is not refetched every frame.
+
+  NOT guaranteed: that a cache smaller than the viewport behaves well. Four
+  images visible at once in a cache of three means one is evicted while on
+  screen and the two take turns. That is the policy, not a bug in it, and the
+  answer is that ImageLimits::FEED is far larger than any viewport.
+
+WHAT IS DELIBERATELY MISSING
+
+  No disk cache. gpui's loader is memory-only, so a relaunch refetches. The
+  reference persists SELECTIVELY — `persistToDisk` is a per-call-site policy
+  keyed on whether the post is the user's own — and porting that needs a store,
+  not a component.
+
+  No downsampling to the target size. gpui decodes at native resolution, so a
+  4000px photograph in a 600px card costs its full decode. That is a real cost
+  against section 12.1 of the performance guide, written down here rather than
+  discovered later.
+
+THE HTTP CLIENT IS NOT HERE
+
+  It is `app/src/core/media_http.rs`, because a crate that opens sockets decides
+  nothing about layout. Without it every remote `img()` fails with "No HttpClient
+  available" — gpui's default — and the feed draws fallback boxes.
+
+A ROUNDED PARENT DOES NOT ROUND THE PICTURE
+
+  `Img::paint` hands the texture to the GPU as a sprite carrying ITS OWN
+  `style.corner_radii`, and the fragment shader rounds the sprite by that value
+  alone. A radius on the container never reaches it, and `overflow_hidden()`
+  cannot stand in: a gpui `ContentMask` is a bare rectangle. So an image with no
+  radius of its own is drawn as a hard rectangle exactly filling its rounded
+  parent, and squares it off from the inside — silently, with nothing in the log.
+
+  This is what made every avatar in the feed square while `AvatarUi` and its
+  letter placeholder both asked for a circle: the letter branch is only reached
+  when `logo` is empty, and the server renders letter avatars as PNGs too, so
+  nearly every face went down the image path. The radius now sits on the `Img`
+  in `AvatarUi::render`. Any other rounded picture needs the same.
+
+  gpui clamps a radius to half the shortest side, so `.rounded(size)` on a
+  size x size box is a circle. `rounded_full()` is only `px(9999.)` over that
+  same clamp — they are the same mechanism, so an oversized token is not a bug.

@@ -1,23 +1,10 @@
 //! The Rust half of the `RiseGlass` bridge: tier 1 of `docs/PLATFORM_GLASS.md`.
 //!
-//! `RiseGlass.swift` hosts one AppKit view per region below the transparent
-//! Metal layer. Everything this file decides — which backing a region gets,
-//! whether a batch is admitted at all, what a status code means — is a pure
-//! function tested on this machine for all three platforms. What crosses the ABI
-//! is only the result.
-//!
-//! One thing the version policy in [`crate::materials`] cannot answer alone: the
-//! view could fail to instantiate for a reason no version number predicts.
-//! [`probe_backing`] asks the Swift side what it can really host, and the answer
-//! caps the prediction — it can only ever lower it.
-//!
-//! It is NOT there to rescue a build made against an older SDK, and the earlier
-//! claim that it was has been measured and is false. `RiseGlass.swift` compiles
-//! clean against the 13.3, 14 and 15 SDKs, none of which declare
-//! `NSGlassEffectView`, and the 15-SDK build run on macOS 26.1 reports
-//! LiquidGlass — because `NSClassFromString` plus `#available` resolve against
-//! the RUNNING OS, not the one the app was built on. An old SDK is survivable
-//! precisely because nothing here ever names the class as a type.
+//! `RiseGlass.swift` hosts one AppKit view per region below the transparent Metal layer.
+//! [`probe_backing`] caps the version policy in [`crate::materials`] and can only ever
+//! lower it. Nothing here may name `NSGlassEffectView` as a type: the class is resolved
+//! by `NSClassFromString` plus `#available` against the RUNNING OS, which is what makes a
+//! build against an older SDK survivable.
 
 use std::ffi::c_void;
 #[cfg(test)]
@@ -31,12 +18,7 @@ use crate::materials::{
     RegionRect, macos_version, offered_backing, resolve,
 };
 
-// ---------------------------------------------------------------------------
-// The ABI. Mirrored in RiseGlass.swift; changing one without the other is a
-// silent miscompile, which is why every value below is asserted in a test that
-// calls the linked Swift.
-// ---------------------------------------------------------------------------
-
+// Mirrored in RiseGlass.swift: changing one side without the other is a silent miscompile.
 const OK: i32 = 0;
 const NOT_MAIN_THREAD: i32 = -1;
 const NO_HANDLE: i32 = -2;
@@ -83,9 +65,8 @@ pub const fn backing_code(backing: MaterialBacking) -> i32 {
     }
 }
 
-/// An unrecognised code is [`MaterialBacking::Painted`], for the same reason an
-/// unrecognised OS version is: falling *down* costs a flat panel, and guessing
-/// upward costs a blank rail.
+/// An unrecognised code is [`MaterialBacking::Painted`]: falling down costs a flat
+/// panel, guessing upward costs a blank rail.
 pub const fn backing_from_code(code: i32) -> MaterialBacking {
     match code {
         BACKING_LIQUID_GLASS => MaterialBacking::LiquidGlass,
@@ -121,15 +102,8 @@ fn check(code: i32) -> Result<(), GlassError> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Policy. Pure, and exercised for every host from this machine.
-// ---------------------------------------------------------------------------
-
-/// The best backing the whole surface can host: the version policy, lowered by
-/// what the AppKit side reports it can actually instantiate.
-///
-/// It can only ever lower. A probe that claimed glass on a machine whose version
-/// says otherwise would be believed by nothing.
+/// The best backing the whole surface can host: the version policy, lowered — never
+/// raised — by what the AppKit side reports it can actually instantiate.
 pub const fn surface_backing(
     host: HostOs,
     version: Option<MacOsVersion>,
@@ -150,13 +124,8 @@ pub const fn region_backing(
 
 /// A rectangle AppKit can be given a frame from.
 ///
-/// Every one of the four numbers is checked for finiteness, and none of them is
-/// covered by [`RegionRect::has_area`]. That comparison rejects a NaN extent
-/// because NaN fails every comparison — but `f32::INFINITY > 0.0` is true, so an
-/// infinite width sails through it and reaches AppKit as a view frame of
-/// undefined size. A NaN origin is the same class of hazard from the other side:
-/// the view has an undefined position rather than an invisible one, and AppKit
-/// does not complain about either.
+/// The finiteness checks are not redundant with [`RegionRect::has_area`]: `INFINITY > 0.0`
+/// is true, and a NaN origin is not an extent at all, so both reach AppKit undefined.
 pub fn is_hostable(bounds: &RegionRect) -> bool {
     bounds.has_area()
         && bounds.x.is_finite()
@@ -165,29 +134,15 @@ pub fn is_hostable(bounds: &RegionRect) -> bool {
         && bounds.height.is_finite()
 }
 
-// ---------------------------------------------------------------------------
-// Bindings. No decisions live below this line.
-// ---------------------------------------------------------------------------
-
 /// What the linked `RiseGlass` can instantiate on this machine, right now.
 ///
-/// Safe from any thread: it is a class lookup behind an availability guard and
-/// touches no AppKit state.
+/// Safe from any thread: a class lookup behind an availability guard, touching no AppKit state.
 pub fn probe_backing() -> MaterialBacking {
     backing_from_code(unsafe { rise_glass_probe_backing() })
 }
 
-/// The `NSVisualEffectMaterial` case `RiseGlass.swift` will configure a vibrancy
-/// region with, so the two halves of the bridge can be asserted equal instead of
-/// assumed equal.
-///
-/// Test-only, and that is the whole point: production never asks the Swift what
-/// it is going to do — the Rust names the case in `Material::vibrancy_material`
-/// and the Swift names it again on its own side. This is the probe that pins the
-/// two together, and nothing but the test has any business calling it.
-///
-/// Safe from any thread. The returned string is leaked once by the Swift side
-/// and lives for the process.
+/// The `NSVisualEffectMaterial` case `RiseGlass.swift` configures a vibrancy region with,
+/// so the drift test can assert the two halves equal. Test-only: production never asks.
 #[cfg(test)]
 pub fn vibrancy_material_name(material: Material) -> Option<&'static str> {
     let raw = unsafe { rise_glass_vibrancy_material_name(material_code(material)) };
@@ -197,12 +152,10 @@ pub fn vibrancy_material_name(material: Material) -> Option<&'static str> {
     unsafe { CStr::from_ptr(raw) }.to_str().ok()
 }
 
-/// Real `NSGlassEffectView` and `NSVisualEffectView` regions below the Metal
-/// layer.
+/// Real `NSGlassEffectView` and `NSVisualEffectView` regions below the Metal layer.
 ///
-/// Neither `Send` nor `Sync`, and not by accident: it owns AppKit views, and
-/// AppKit off the main thread is undefined behaviour. The raw handle makes that
-/// a property of the type rather than a rule in a comment.
+/// Deliberately neither `Send` nor `Sync`: it owns AppKit views, and AppKit off the
+/// main thread is undefined behaviour.
 pub struct MacGlassSurface {
     host: HostOs,
     version: Option<MacOsVersion>,
@@ -228,9 +181,7 @@ impl MacGlassSurface {
         }
     }
 
-    /// Attached on first use rather than at construction: the shell builds its
-    /// surface while it is deciding what to lay out, which is before the window
-    /// exists.
+    // Attached on first use: the shell builds its surface before the window exists.
     fn handle(&mut self) -> Option<NonNull<c_void>> {
         if self.handle.is_none() {
             self.handle = NonNull::new(unsafe { rise_glass_attach() });
@@ -251,19 +202,16 @@ impl GlassSurface for MacGlassSurface {
     }
 
     fn commit(&mut self, layout: &GlassLayout) -> Result<PlatformSupport, GlassError> {
-        // Before the host check, exactly as `InMemoryGlassSurface` does it: a
-        // batch that did not come from a newer layout pass is a bug on every
-        // platform, and gating it behind a native backing would mean it could
-        // only ever be caught on the one platform that has glass.
+        // Before the backing check, so a stale batch is caught on every platform, not
+        // only on the one that has glass.
         self.gate.admit(layout.generation())?;
 
         if self.backing.is_painted() {
             return Ok(PlatformSupport::Unsupported);
         }
 
-        // Whole batch, before the pass is opened, so that a refusal leaves the
-        // previous frame's views exactly where they were rather than half of
-        // this frame's.
+        // Whole batch validated before the pass is opened, so a refusal leaves the previous
+        // frame's views in place rather than half of this frame's.
         for region in layout.regions() {
             if !is_hostable(&region.bounds) {
                 return Err(GlassError::Refused(format!(
@@ -311,8 +259,7 @@ impl GlassSurface for MacGlassSurface {
             return PlatformSupport::Unsupported;
         }
 
-        // Never attached means nothing was ever hosted, so there is nothing left
-        // behind under the Metal layer and the request is already satisfied.
+        // Never attached means nothing was ever hosted: the request is already satisfied.
         let Some(handle) = self.handle else {
             return PlatformSupport::Performed;
         };
@@ -325,8 +272,8 @@ impl GlassSurface for MacGlassSurface {
     }
 }
 
-/// The container view outlives this value unless it is torn down explicitly:
-/// it belongs to the window's view tree, not to the handle.
+// The container view belongs to the window's view tree, so it outlives this value
+// unless it is torn down explicitly.
 impl Drop for MacGlassSurface {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
@@ -400,9 +347,6 @@ mod tests {
         }
     }
 
-    /// The version policy says LiquidGlass; the probe says the class did not
-    /// come back. The probe wins, and the app degrades to vibrancy rather than
-    /// asking for a view that is not there.
     #[test]
     fn the_probe_overrules_a_version_policy_that_predicted_glass() {
         let surface = MacGlassSurface::with_policy(
@@ -476,8 +420,7 @@ mod tests {
             RegionRect::new(0.0, 0.0, 0.0, 800.0),
             RegionRect::new(0.0, 0.0, 56.0, f32::NAN),
             RegionRect::new(0.0, 0.0, f32::NAN, 800.0),
-            // has_area() passes these: infinity IS greater than zero. Only the
-            // finiteness check stops them, which is why it is not redundant.
+            // has_area() passes these: infinity IS greater than zero.
             RegionRect::new(0.0, 0.0, f32::INFINITY, 800.0),
             RegionRect::new(0.0, 0.0, 56.0, f32::INFINITY),
         ] {
@@ -495,8 +438,7 @@ mod tests {
         );
         assert!(!surface.backing().is_painted());
 
-        // GlassLayout::push guards the size, not the origin, so this is the one
-        // undefined frame that can reach the platform layer.
+        // GlassLayout::push guards the size, not the origin, so this frame reaches the platform.
         let mut layout = GlassLayout::new(counter.bump());
         layout
             .push(GlassRegion::new(
@@ -519,8 +461,7 @@ mod tests {
         let first = counter.bump();
         let second = counter.bump();
 
-        // Painted policy, so the refusal is provably the gate and not a missing
-        // window: the contract has to be catchable on the developer's machine.
+        // Painted policy, so the refusal is provably the gate and not a missing window.
         let mut surface =
             MacGlassSurface::with_policy(HostOs::MacOs, None, MaterialBacking::LiquidGlass);
         assert_eq!(surface.backing(), MaterialBacking::Painted);
@@ -599,10 +540,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Below here the linked Swift actually runs.
-    // -----------------------------------------------------------------------
-
     #[test]
     fn the_linked_swift_configures_the_vibrancy_material_the_policy_names() {
         for material in Material::ALL {
@@ -637,11 +574,8 @@ mod tests {
     #[test]
     fn a_native_surface_with_no_window_refuses_instead_of_pretending() {
         if on_main_thread() {
-            // libtest usually hands a test a spawned thread, which is the arm
-            // worth asserting: the ABI must refuse before it touches AppKit.
-            // Run under --test-threads=1 the harness is the main thread, and
-            // reaching NSApplication from a process that never called
-            // NSApplicationMain is not something a test should provoke.
+            // Under --test-threads=1 this is the main thread, and reaching NSApplication
+            // from a process that never called NSApplicationMain is not worth provoking.
             eprintln!("skipped: this test ran on the main thread");
             return;
         }

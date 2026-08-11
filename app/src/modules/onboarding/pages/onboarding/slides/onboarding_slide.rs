@@ -1,10 +1,5 @@
 use crate::core::animations::Animation;
 
-/// One onboarding slide: an animation, a title and a description.
-///
-/// The four slides differ only in their animation and their two strings, so they
-/// are four values rather than four screens. The reference has four Swift files
-/// that each wrap one `LottieView`, and this is that data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct OnboardingSlide {
     pub index: usize,
@@ -13,7 +8,6 @@ pub struct OnboardingSlide {
     pub description_key: &'static str,
 }
 
-/// The reference's order, its strings and its animations.
 pub const SLIDES: [OnboardingSlide; 4] = [
     OnboardingSlide {
         index: 0,

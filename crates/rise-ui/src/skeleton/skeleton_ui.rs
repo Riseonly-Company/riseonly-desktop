@@ -6,11 +6,8 @@ use rise_theme::AppTheme;
 
 use crate::animation::{ShimmerBand, shimmer_animation, shimmer_band};
 
-/// The geometry a placeholder stands in for.
-///
-/// A skeleton whose shape does not match the real content is worse than none:
-/// the layout jumps when the data arrives, which is the symptom the reference
-/// spends section 6.2 of the performance guide preventing.
+/// The geometry a placeholder stands in for. It must match the real content, or
+/// the layout jumps when the data arrives.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SkeletonShape {
     /// A run of text. The height is a line height, not a guess.
@@ -28,11 +25,9 @@ pub enum SkeletonShape {
 pub struct SkeletonUi;
 
 impl SkeletonUi {
-    /// One container, one animation, however many shapes.
-    ///
-    /// The driver lives here and not on the shape because a list of twenty
-    /// placeholder rows must not schedule twenty independent animations: gpui
-    /// has no damage regions, so each one repaints the window.
+    /// One container, one animation, however many shapes. Never drive a shape
+    /// on its own: gpui has no damage regions, so each animation repaints the
+    /// whole window.
     pub fn group<E>(
         id: impl Into<ElementId>,
         build: impl Fn(ShimmerBand) -> E + 'static,
@@ -96,10 +91,8 @@ impl SkeletonUi {
         theme.bg._500
     }
 
-    /// Two halves rather than one gradient: `gpui::linear_gradient` carries
-    /// exactly two colour stops, so a band that fades in AND out cannot be one
-    /// element. Splitting it keeps the leading and trailing edges soft, which is
-    /// what makes a sweep read as light rather than as a moving rectangle.
+    /// Two halves: `gpui::linear_gradient` carries exactly two colour stops, so
+    /// a band that fades in AND out cannot be one element.
     fn band(theme: &AppTheme, band: ShimmerBand) -> Div {
         let highlight = Self::highlight(theme);
         let clear = rise_theme::alpha(highlight, 0.0);

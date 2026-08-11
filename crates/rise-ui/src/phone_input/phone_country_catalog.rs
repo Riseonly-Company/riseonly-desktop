@@ -1,26 +1,20 @@
 use std::sync::OnceLock;
 
-/// One country in the phone field's picker.
-///
-/// `calling_code` is digits only — no `+`. The server takes digits and prefixes
-/// the `+` itself (`canonicalize_account_phone` in user-service), and carrying a
-/// `+` around in the value is how a country code ends up in a number twice.
+/// One country in the phone field's picker. `calling_code` is digits only — no
+/// `+`, which the server prefixes itself.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PhoneCountry {
     pub region: String,
     pub calling_code: String,
     /// `XXX XXX XX XX` — where the digits of a NATIONAL number go. Empty when
-    /// the reference ships no pattern for that country.
+    /// the country has no pattern.
     pub format_pattern: String,
     pub english_name: String,
 }
 
 impl PhoneCountry {
-    /// The flag as the regional-indicator pair for the region code.
-    ///
-    /// The desktop draws flags from assets — `FlagUi` exists because Windows
-    /// ships no colour flag font — so this is for the accessibility label and a
-    /// fallback, not for the picker's artwork.
+    /// The regional-indicator pair for the region code, for accessibility labels
+    /// and fallback — the picker's artwork comes from `FlagUi`.
     pub fn flag_emoji(&self) -> String {
         self.region
             .chars()
@@ -54,9 +48,8 @@ impl PhoneCountry {
         let mut out = String::new();
         let mut next = digits.iter().peekable();
         for slot in self.format_pattern.chars() {
-            // A separator is only written when a digit is actually coming after
-            // it. Otherwise a half-typed number ends in a trailing space, and
-            // the caret sits one place past where the user is typing.
+            // A separator only when a digit follows, or a half-typed number ends
+            // in a trailing space and the caret sits past the typing.
             if next.peek().is_none() {
                 break;
             }
@@ -74,16 +67,13 @@ impl PhoneCountry {
     }
 }
 
-/// The countries the product knows, parsed from the shipped data file.
-///
-/// The same file the reference ships (`Assets/PhoneCountries.txt`), in the same
-/// format: `callingCode;region;pattern;englishName`.
+/// The countries the product knows, parsed from a shipped data file in
+/// `callingCode;region;pattern;englishName` format.
 pub struct PhoneCountryCatalog {
     countries: Vec<PhoneCountry>,
 }
 
-/// Installed once at startup from the bundled asset, because a crate that reads
-/// files decides where they live, and this one must not.
+/// Installed once at startup; this crate must not decide where the asset lives.
 static CATALOG: OnceLock<PhoneCountryCatalog> = OnceLock::new();
 
 pub fn install_countries(source: &str) {
@@ -105,8 +95,7 @@ impl PhoneCountryCatalog {
                 let pattern = columns.next()?.trim();
                 let name = columns.next()?.trim();
 
-                // The reference's own filter: two-letter regions, digits only,
-                // and `FT` is a placeholder row rather than a country.
+                // `FT` is a placeholder row rather than a country.
                 if calling_code.is_empty()
                     || !calling_code.chars().all(|c| c.is_ascii_digit())
                     || region.len() != 2
@@ -133,10 +122,8 @@ impl PhoneCountryCatalog {
         Self { countries }
     }
 
-    /// What the picker shows when the data file is missing.
-    ///
-    /// Two entries rather than none: a phone field with no countries cannot be
-    /// used at all, and these are the reference's own fallbacks.
+    /// What the picker shows when the data file is missing; a phone field with
+    /// no countries cannot be used at all.
     fn fallback() -> Vec<PhoneCountry> {
         vec![
             PhoneCountry {
@@ -160,15 +147,13 @@ impl PhoneCountryCatalog {
 
     pub fn by_region(&self, region: &str) -> Option<&PhoneCountry> {
         let region = region.to_ascii_uppercase();
-        self.countries.iter().find(|country| country.region == region)
+        self.countries
+            .iter()
+            .find(|country| country.region == region)
     }
 
-    /// The country the field opens on.
-    ///
-    /// The reference's order exactly: the device's own region, then Kazakhstan,
-    /// then the United States. Detection, not a hard-coded default — the machine
-    /// already knows where it is, and making somebody scroll to their own
-    /// country is the thing this replaces.
+    /// The country the field opens on: the device's own region, then Kazakhstan,
+    /// then the United States.
     pub fn default_country(&self, device_region: Option<&str>) -> &PhoneCountry {
         device_region
             .and_then(|region| self.by_region(region))
@@ -178,11 +163,8 @@ impl PhoneCountryCatalog {
             .expect("the catalogue is never empty")
     }
 
-    /// Which country a number in international form belongs to.
-    ///
-    /// Longest calling code wins, so `+1264` is Anguilla rather than the United
-    /// States. This is what lets somebody paste a whole number and have the
-    /// picker follow it instead of the code being added twice.
+    /// Which country a number in international form belongs to. The longest
+    /// calling code wins, so `+1264` is Anguilla rather than the United States.
     pub fn matching_international(&self, value: &str) -> Option<&PhoneCountry> {
         let trimmed = value.trim();
         if !trimmed.starts_with('+') && !trimmed.starts_with("00") {

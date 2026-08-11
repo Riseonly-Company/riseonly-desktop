@@ -1,10 +1,6 @@
 use std::ops::Range;
 
 /// One replacement, stored so it can be run in either direction.
-///
-/// `at + inserted.len()` is where the document sits after the edit and
-/// `at + removed.len()` is where it sat before, which is the whole reason both
-/// strings are kept rather than a diff.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Edit {
     pub at: usize,
@@ -64,9 +60,8 @@ impl EditHistory {
 
     /// Ends the current run without discarding it.
     ///
-    /// Anything that moves the caret without editing calls this — an arrow key,
-    /// a click, a selection change. Otherwise typing, clicking somewhere else
-    /// and typing again would undo as one step across a gap.
+    /// Anything that moves the caret without editing must call this, or an edit
+    /// either side of the gap coalesces into one step.
     pub fn break_coalescing(&mut self) {
         self.coalescing = false;
     }

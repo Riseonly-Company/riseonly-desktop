@@ -11,11 +11,6 @@ use serde_json::json;
 
 use super::*;
 
-/// A scripted gateway.
-///
-/// Every rule the repository owns — which failure rotates a token, which one
-/// ends the session, what two concurrent refreshes do — is unreachable against a
-/// real server, so the transport is the seam the tests drive.
 #[derive(Default)]
 struct ScriptedTransport {
     replies: Mutex<VecDeque<(String, Result<Value, WireError>)>>,
@@ -106,7 +101,7 @@ struct Fixture {
     credentials: Arc<AuthCredentialStore>,
     secrets: Arc<InMemorySecureStore>,
     directory: PathBuf,
-    _inbox: mpsc::Receiver<AuthCommand>,
+    inbox: mpsc::Receiver<AuthCommand>,
 }
 
 impl Fixture {
@@ -125,6 +120,7 @@ impl Fixture {
                 host: HostOs::MacOs,
                 locale: DeviceLocale::parse(&["ru-KZ"]),
                 now_ms: Arc::new(|| NOW_MS),
+                tag_check_debounce: std::time::Duration::ZERO,
             },
             presentation,
             commands,
@@ -136,7 +132,7 @@ impl Fixture {
             credentials,
             secrets,
             directory,
-            _inbox: inbox,
+            inbox,
         }
     }
 
@@ -159,6 +155,20 @@ impl Fixture {
 
     fn snapshot(&self) -> Arc<AuthSnapshot> {
         self.state.presentation.current()
+    }
+
+    fn pump(&mut self) {
+        while let Ok(command) = self.inbox.try_recv() {
+            match command {
+                AuthCommand::CheckTagNow { tag } => self.state.start_tag_check(tag),
+                AuthCommand::TagChecked {
+                    generation,
+                    tag,
+                    availability,
+                } => self.state.finish_tag_check(generation, tag, availability),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -450,7 +460,6 @@ async fn the_loser_of_two_concurrent_refreshes_never_reinstates_an_older_pair() 
     fixture.state.active = Some("u1".into());
     fixture.state.tokens = Some(original.clone());
 
-    // Somebody else already rotated while this refresh was in flight.
     let winner = tokens("winner-access", "winner-refresh");
     fixture
         .credentials
@@ -611,7 +620,7 @@ async fn a_locally_invalid_tag_is_refused_without_a_request() {
     let transport = ScriptedTransport::answering(vec![]);
     let mut fixture = Fixture::new("tag-invalid", transport);
 
-    fixture.state.start_tag_check("no".into());
+    fixture.state.schedule_tag_check("no".into());
 
     assert_eq!(
         fixture.snapshot().flow.tag_availability,
@@ -675,6 +684,20 @@ fn a_failed_availability_check_never_tells_somebody_their_tag_is_taken() {
     );
 }
 
+#[test]
+fn a_free_tag_is_available_even_though_the_reply_carries_an_empty_error() {
+    let free: rpc::CheckTagResponse = serde_json::from_value(serde_json::json!({
+        "success": true,
+        "available": true,
+        "exists": false,
+        "normalized_tag": "riseonly",
+        "error": "",
+    }))
+    .unwrap();
+
+    assert_eq!(tag_availability(&free), TagAvailability::Available);
+}
+
 #[tokio::test]
 async fn the_wire_user_id_comes_from_the_token_rather_than_the_stored_profile() {
     let transport = ScriptedTransport::answering(vec![]);
@@ -688,4 +711,106 @@ async fn the_wire_user_id_comes_from_the_token_rather_than_the_stored_profile() 
         Some("from-token"),
         "after a switch the profile can lag; the token is what the gateway authenticates"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_keystrokes_asks_the_server_once() {
+    let transport = ScriptedTransport::answering(vec![]);
+    let mut fixture = Fixture::new("tag-debounce", transport);
+    fixture.state.tag_debounce = rise_engine::Debouncer::new(std::time::Duration::from_millis(500));
+
+    for prefix in ["ris", "rise", "riseo", "riseon", "riseonl", "riseonly"] {
+        fixture.state.schedule_tag_check(prefix.into());
+        tokio::time::advance(std::time::Duration::from_millis(60)).await;
+    }
+
+    assert!(
+        fixture.transport.calls().is_empty(),
+        "nothing may be asked while the user is still typing"
+    );
+
+    tokio::time::advance(std::time::Duration::from_millis(600)).await;
+    tokio::task::yield_now().await;
+    fixture.pump();
+    tokio::task::yield_now().await;
+
+    assert_eq!(fixture.transport.calls().len(), 1);
+    assert!(
+        fixture.transport.calls()[0].contains("check-tag"),
+        "{:?}",
+        fixture.transport.calls()
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_tag_never_reaches_the_network_at_all() {
+    let transport = ScriptedTransport::answering(vec![]);
+    let mut fixture = Fixture::new("tag-malformed", transport);
+
+    for bad in ["ab", "тег", "_lead", "trail_", "do__uble"] {
+        fixture.state.schedule_tag_check(bad.into());
+    }
+    tokio::task::yield_now().await;
+
+    assert!(fixture.transport.calls().is_empty());
+    assert_eq!(
+        fixture.snapshot().flow.tag_availability,
+        TagAvailability::Invalid
+    );
+}
+
+#[tokio::test]
+async fn every_local_tag_refusal_names_the_rule_it_broke() {
+    let transport = ScriptedTransport::answering(vec![]);
+    let mut fixture = Fixture::new("tag-reasons", transport);
+
+    for (bad, expected) in [
+        ("ab", "tag_too_short"),
+        ("тег", "tag_invalid_characters"),
+        ("_lead", "auth_tag_edge_underscore"),
+        ("do__uble", "auth_tag_double_underscore"),
+    ] {
+        fixture.state.schedule_tag_check(bad.into());
+        assert_eq!(
+            fixture.snapshot().flow.tag_problem_key,
+            Some(expected),
+            "{bad}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_tag_typed_with_the_at_sign_is_accepted() {
+    let transport = ScriptedTransport::answering(vec![]);
+    let mut fixture = Fixture::new("tag-at-sign", transport);
+
+    fixture.state.schedule_tag_check("@riseonly".into());
+
+    assert_eq!(
+        fixture.snapshot().flow.tag_availability,
+        TagAvailability::Checking
+    );
+    assert_eq!(
+        fixture.snapshot().flow.checked_tag.as_deref(),
+        Some("riseonly")
+    );
+}
+
+#[tokio::test]
+async fn a_pasted_code_is_normalised_before_it_is_sent() {
+    let transport = ScriptedTransport::answering(vec![("auth.register", Ok(grant("u9")))]);
+    let mut fixture = Fixture::new("code-normalised", transport);
+
+    fixture
+        .state
+        .register(
+            "Name".into(),
+            "riseonly".into(),
+            "77075803272".into(),
+            "password12".into(),
+            " 1234 ".into(),
+        )
+        .await;
+
+    assert!(fixture.snapshot().is_authenticated);
 }

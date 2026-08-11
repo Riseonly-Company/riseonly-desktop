@@ -14,11 +14,8 @@ pub enum SecureStoreError {
 
 /// Where the database key and the session token live.
 ///
-/// Two separate concerns behind one trait: credentials that should survive a
-/// migration to a new machine, and the installation identity that must not. The
-/// reference draws the same line with two Keychain accessibility classes, and
-/// the distinction matters — copying an installation identity to a second
-/// machine makes two clients claim to be the same device.
+/// Credentials may migrate to a new machine; the installation identity must not —
+/// copying it makes two clients claim to be the same device. See [`SecretKey::is_machine_bound`].
 pub trait SecureStore: Send + Sync {
     fn set(&self, key: &SecretKey, value: &[u8]) -> Result<(), SecureStoreError>;
     fn get(&self, key: &SecretKey) -> Result<Option<Vec<u8>>, SecureStoreError>;
@@ -65,8 +62,8 @@ impl SecretKey {
         }
     }
 
-    /// The name the OS store sees. Namespaced by purpose so a database key and
-    /// a token for the same account cannot collide.
+    /// The name the OS store sees, namespaced by purpose so one account's key
+    /// and token cannot collide.
     pub fn entry_name(&self) -> String {
         let purpose = match self.purpose {
             SecretPurpose::DatabaseKey => "db",
@@ -85,9 +82,8 @@ pub const SERVICE_NAME: &str = "net.riseonly.desktop";
 
 /// Used by tests and by a Linux session with no secret service running.
 ///
-/// It is deliberately not a silent fallback: a caller that ends up here must
-/// decide whether to degrade or to refuse, because an in-memory store loses the
-/// database key on exit and the next launch cannot read its own cache.
+/// Not a silent fallback: this loses the database key on exit, so the next launch
+/// cannot read its own cache. A caller that lands here must choose to degrade or refuse.
 #[derive(Default)]
 pub struct InMemorySecureStore {
     entries: parking_lot::Mutex<std::collections::HashMap<String, Vec<u8>>>,

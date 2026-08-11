@@ -76,17 +76,11 @@ impl SessionServicesStore {
         self.snapshot.error_key
     }
 
-    /// Whether the server has ended the session this client is running on.
-    ///
-    /// Reported rather than acted on: signing out belongs to auth, and a session
-    /// store that could clear an account would be a second place account state
-    /// is owned.
     pub fn should_sign_out(&self) -> bool {
         self.snapshot.should_sign_out
     }
 }
 
-/// Where the session list lives for the life of the process.
 pub struct SessionStores {
     pub interactions: super::super::session_interactions::SessionInteractionsStore,
 }

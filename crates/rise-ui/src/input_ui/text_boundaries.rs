@@ -3,10 +3,6 @@ use std::ops::Range;
 const ZERO_WIDTH_JOINER: char = '\u{200D}';
 
 /// The nearest char boundary at or before `offset`, clamped to the string.
-///
-/// Every offset that crosses the boundary of this module — the public API, the
-/// IME handler, the element — passes through here first. Slicing a `String` off
-/// a char boundary panics, and Cyrillic, CJK and emoji are where that happens.
 pub fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
     let mut offset = offset.min(text.len());
     while !text.is_char_boundary(offset) {
@@ -69,9 +65,7 @@ pub fn previous_grapheme_boundary(text: &str, offset: usize) -> usize {
             continue;
         }
 
-        // A joiner sits *before* its right-hand base, so a base is only the head
-        // of its cluster once we have looked past it. Without this the walk
-        // stops inside a family emoji.
+        // A joiner sits *before* its right-hand base, so a base heads its cluster only once we look past it.
         if let Some((_, before_base)) = char_before(text, start)
             && before_base == ZERO_WIDTH_JOINER
         {
@@ -247,9 +241,7 @@ pub fn char_count(text: &str) -> usize {
 
 /// The byte offset that leaves at most `limit` chars in `text`.
 ///
-/// Chars, not graphemes and not bytes: `common::validation` on the backend
-/// counts `value.chars().count()`, and a client limit that counts anything else
-/// either rejects text the server would accept or accepts text it will reject.
+/// Chars, not graphemes and not bytes — the backend counts `chars().count()`.
 pub fn truncate_to_char_limit(text: &str, limit: usize) -> usize {
     text.char_indices()
         .nth(limit)
@@ -305,16 +297,7 @@ fn is_regional_indicator(character: char) -> bool {
     matches!(character as u32, 0x1F1E6..=0x1F1FF)
 }
 
-/// The approximation this module is honest about.
-///
-/// This is not UAX #29. It covers the combining marks a Latin, Cyrillic, Greek,
-/// Arabic, Hebrew, Devanagari or Thai string actually produces, variation
-/// selectors, emoji skin-tone modifiers, joined emoji sequences, flag pairs and
-/// CRLF. It does not implement Hangul syllable composition (L/V/T jamo compose
-/// into one cluster in UAX #29 and into several here), Indic conjunct clusters
-/// past the Devanagari range below, or prepend characters. Those degrade to a
-/// caret that steps through a syllable rather than over it — wrong, but never
-/// unsafe: every offset it returns is a char boundary.
+/// Not UAX #29: Hangul jamo and Indic conjuncts split into several clusters.
 fn is_extending(character: char) -> bool {
     matches!(
         character as u32,

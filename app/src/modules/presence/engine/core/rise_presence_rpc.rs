@@ -2,12 +2,6 @@ use rise_engine::MethodDescriptor;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Presence is the gateway's own service, not presence-service's.
-///
-/// presence-service has no client-facing RPC at all: the gateway sets a user
-/// online and offline from the socket's own lifecycle, and what a client can ask
-/// for is a SUBSCRIPTION to somebody else's state. So the descriptors below name
-/// `gateway`, which is also why they are the only methods in the app that do.
 pub const SUBSCRIBE: MethodDescriptor = MethodDescriptor::mutation("gateway", "presence_subscribe");
 pub const UNSUBSCRIBE: MethodDescriptor =
     MethodDescriptor::mutation("gateway", "presence_unsubscribe");
@@ -15,9 +9,7 @@ pub const SET_AWAY: MethodDescriptor = MethodDescriptor::mutation("gateway", "se
 pub const ENTER_CHAT: MethodDescriptor = MethodDescriptor::mutation("gateway", "enter_chat");
 pub const LEAVE_CHAT: MethodDescriptor = MethodDescriptor::mutation("gateway", "leave_chat");
 
-/// The push the gateway fans out when somebody's presence changes.
 pub const ONLINE_STATUS_EVENT: &str = "user_online_status_changed";
-/// The push that says which conversation somebody is looking at.
 pub const IN_CHAT_EVENT: &str = "in_chat_update";
 
 #[derive(Clone, Debug, Serialize)]
@@ -35,11 +27,6 @@ pub struct ChatPresenceRequest {
     pub chat_id: String,
 }
 
-/// One presence push, already normalised.
-///
-/// The two events do not agree on their key style — the gateway writes
-/// `user_id`, and the reference reads `userId` as well because an older build
-/// sent that — so the reading happens once, here.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct PresenceUpdate {
     pub user_id: String,
@@ -52,7 +39,6 @@ pub struct PresenceUpdate {
 pub fn decode_online_status(payload: &Value) -> Option<PresenceUpdate> {
     let user_id = string(payload, &["user_id", "userId"])?;
 
-    // `status: "online"` is the older shape; `is_online` is the current one.
     let is_online = payload
         .get("is_online")
         .and_then(Value::as_bool)
@@ -69,9 +55,6 @@ pub fn decode_online_status(payload: &Value) -> Option<PresenceUpdate> {
         is_online: Some(is_online),
         last_seen_ms: number(payload, &["last_seen", "lastSeen"]),
         in_chat_id: None,
-        // Going offline clears the conversation somebody was in: leaving it
-        // behind leaves a green "in this chat" dot on a user who has closed the
-        // app.
         clears_in_chat: !is_online,
     })
 }
@@ -100,8 +83,6 @@ fn string(payload: &Value, keys: &[&str]) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// `last_seen` is epoch milliseconds on every backend hop, and arrives as a
-/// number or as a string depending on which one produced it.
 fn number(payload: &Value, keys: &[&str]) -> Option<i64> {
     keys.iter().find_map(|key| {
         payload.get(*key).and_then(|value| {

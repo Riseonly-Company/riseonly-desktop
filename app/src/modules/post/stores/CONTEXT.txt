@@ -1,0 +1,31 @@
+================================================================================
+modules/post/stores — the triad
+================================================================================
+
+  post_actions/       thin command facade, keyed by PostScope so one store
+                      serves the feed and every profile's tabs. Dispatches to the domain. No state.
+  post_services/      cheap selectors over the immutable snapshot. Every method
+                      is a borrow: nothing here decodes, sorts or maps.
+  post_interactions/  the only thing a view calls.
+
+STORE_ARCHITECTURE.md section 2 forbids repositories, transport, endpoint
+catalogues and realtime reducers in here, and none are present. The engine is
+reached only through the domain handle the actions store holds.
+
+Store files carry ZERO comments — no file headers, no doc comments, no section
+markers, no inline notes (STORE_ARCHITECTURE.md section 17, and the COMMENTS
+section of the root CONTEXT.txt). Anything worth saying is said here instead.
+
+WHY THE SERVICES STORE EMITS EVENTS
+
+  `PostUiEvent::OpenComments` and `OpenProfile` are not navigation this module
+  can perform. On a phone both are a push onto one stack; on the desktop
+  comments open the extra column and a profile lands in a different pane, and
+  neither is reachable from inside a feature module. So the module announces the
+  intent and the shell decides where it goes — which is what keeps `RootRoute`
+  free of feature types.
+
+  The emitter is on the SERVICES store rather than the interactions store for a
+  mechanical reason: events need an entity, and the interactions store is a plain
+  value in this codebase. The canon allows it — "ServicesStore ... may hand an
+  event to the existing ownership router".

@@ -1,11 +1,8 @@
-use crate::core::animations::Animation;
-use crate::modules::auth::shared::auth_validation::{self, Field, FieldProblem};
+use rise_ui::phone_input::{PhoneCountryCatalog, PhoneNumberEntry, countries};
 
-/// One step of the sign-in / sign-up flow.
-///
-/// The reference's `AuthStepFlow.Step`, in its order. A single stack for both
-/// paths, because the first step is the same one: the phone number decides
-/// whether the next screen asks for a password or starts a registration.
+use crate::core::animations::Animation;
+use crate::modules::auth::shared::auth_validation;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AuthStep {
     Phone,
@@ -17,10 +14,6 @@ pub enum AuthStep {
     VerificationCode,
 }
 
-/// What the tag field has been told about the name the user is typing.
-///
-/// Carried into `animation` because the mascot reacts to it — the reference
-/// switches between three poses on this one value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum TagMood {
     #[default]
@@ -65,8 +58,6 @@ impl AuthStep {
         }
     }
 
-    /// The mascot's pose. The reference's `animationName`, including the three
-    /// the tag step switches between as availability comes back.
     pub fn animation(self, tag: TagMood) -> &'static str {
         match self {
             Self::Phone => Animation::HELLO,
@@ -83,7 +74,6 @@ impl AuthStep {
         }
     }
 
-    /// What the primary button says. `None` means the generic "next".
     pub fn action_key(self) -> Option<&'static str> {
         match self {
             Self::LoginPassword => Some("signin"),
@@ -102,11 +92,6 @@ impl AuthStep {
         )
     }
 
-    /// Where this step sits in the progress bar, and how many segments it has.
-    ///
-    /// Signing in is two steps and registering is six, so the bar has to be
-    /// asked about both — a fixed six would show a login as one third done and
-    /// then finish.
     pub fn progress(self, registering: bool) -> (usize, usize) {
         let total = if registering { 6 } else { 2 };
         let index = match self {
@@ -120,11 +105,6 @@ impl AuthStep {
         (index.min(total - 1), total)
     }
 
-    /// The step behind this one, or `None` at the root.
-    ///
-    /// Registration walks back through the whole stack rather than to the phone
-    /// step: somebody who mistyped their tag has already entered a name, and
-    /// throwing it away is not what the reference does.
     pub fn previous(self) -> Option<Self> {
         match self {
             Self::Phone => None,
@@ -137,11 +117,9 @@ impl AuthStep {
     }
 }
 
-/// Everything the flow has collected so far.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AuthStepForm {
-    pub calling_code: String,
-    pub phone: String,
+    pub phone: PhoneNumberEntry,
     pub login_password: String,
     pub name: String,
     pub tag: String,
@@ -151,13 +129,25 @@ pub struct AuthStepForm {
 }
 
 impl AuthStepForm {
+    pub fn detected(catalog: &PhoneCountryCatalog, device_region: Option<&str>) -> Self {
+        Self {
+            phone: PhoneNumberEntry::detected(catalog, device_region),
+            login_password: String::new(),
+            name: String::new(),
+            tag: String::new(),
+            registration_password: String::new(),
+            repeated_password: String::new(),
+            code: String::new(),
+        }
+    }
+
     pub fn composed_phone(&self) -> String {
-        auth_validation::compose_phone(&self.calling_code, &self.phone)
+        self.phone.wire_value()
     }
 
     pub fn value_for(&self, step: AuthStep) -> &str {
         match step {
-            AuthStep::Phone => &self.phone,
+            AuthStep::Phone => self.phone.national(),
             AuthStep::LoginPassword => &self.login_password,
             AuthStep::RegistrationName => &self.name,
             AuthStep::RegistrationTag => &self.tag,
@@ -169,7 +159,9 @@ impl AuthStepForm {
 
     pub fn set(&mut self, step: AuthStep, value: String) {
         match step {
-            AuthStep::Phone => self.phone = value,
+            AuthStep::Phone => {
+                self.phone.accept_typed(&value, countries());
+            }
             AuthStep::LoginPassword => self.login_password = value,
             AuthStep::RegistrationName => self.name = value,
             AuthStep::RegistrationTag => self.tag = value,
@@ -199,51 +191,38 @@ impl StepValidation {
     }
 }
 
-/// Whether the step the user is on can be left.
-///
-/// Pure, and separate from the store, because it is the one rule the whole flow
-/// turns on and the server checks almost none of it.
 pub fn validate(step: AuthStep, form: &AuthStepForm) -> StepValidation {
-    let problem = |field: Field, result: Result<(), FieldProblem>| match result {
-        Ok(()) => StepValidation::Valid,
-        Err(problem) => StepValidation::Invalid(problem.message_key(field)),
+    let judged = |outcome: Result<String, rise_validate::Violation>| match outcome {
+        Ok(_) => StepValidation::Valid,
+        Err(violation) => StepValidation::Invalid(auth_validation::message_key(&violation)),
     };
 
     match step {
-        AuthStep::Phone => problem(
-            Field::Phone,
-            auth_validation::validate_phone(&form.composed_phone()),
-        ),
-        // Sign-in deliberately does NOT check the length: auth-service does not
-        // either (`validates.md` marks it `[HOLE]`), and refusing a password the
-        // server would accept locks out anybody whose account predates the rule.
+        AuthStep::Phone => judged(auth_validation::PHONE.check(&form.composed_phone())),
         AuthStep::LoginPassword => {
-            if form.login_password.is_empty() {
-                StepValidation::Invalid(FieldProblem::Empty.message_key(Field::Password))
-            } else {
-                StepValidation::Valid
-            }
+            judged(auth_validation::LOGIN_PASSWORD.check(&form.login_password))
         }
-        AuthStep::RegistrationName => {
-            problem(Field::Name, auth_validation::validate_name(&form.name))
+        AuthStep::RegistrationName => judged(auth_validation::NAME.check(&form.name)),
+        AuthStep::RegistrationTag => judged(auth_validation::TAG.check(&form.tag)),
+        AuthStep::RegistrationPassword => {
+            judged(auth_validation::PASSWORD.check(&form.registration_password))
         }
-        AuthStep::RegistrationTag => problem(Field::Tag, auth_validation::validate_tag(&form.tag)),
-        AuthStep::RegistrationPassword => problem(
-            Field::Password,
-            auth_validation::validate_password(&form.registration_password),
-        ),
         AuthStep::RegistrationPasswordConfirmation => {
-            if !auth_validation::passwords_match(
+            if form.repeated_password.is_empty() {
+                return StepValidation::Invalid("auth_password_required");
+            }
+            if rise_validate::confirm(
+                &auth_validation::PASSWORD,
                 &form.registration_password,
                 &form.repeated_password,
-            ) {
+            )
+            .is_err()
+            {
                 return StepValidation::Invalid("auth_password_mismatch");
             }
             StepValidation::Valid
         }
-        AuthStep::VerificationCode => {
-            problem(Field::Code, auth_validation::validate_code(&form.code))
-        }
+        AuthStep::VerificationCode => judged(auth_validation::CODE.check(&form.code)),
     }
 }
 
@@ -251,17 +230,25 @@ pub fn validate(step: AuthStep, form: &AuthStepForm) -> StepValidation {
 mod tests {
     use super::*;
 
+    fn catalog() -> PhoneCountryCatalog {
+        PhoneCountryCatalog::parse(
+            "7;KZ;XXX XXX XX XX;Kazakhstan\n1;US;XXX XXX XXXX;United States\n",
+        )
+    }
+
     fn form() -> AuthStepForm {
-        AuthStepForm {
-            calling_code: "7".into(),
-            phone: "9991234567".into(),
+        let catalog = catalog();
+        let mut form = AuthStepForm {
+            phone: PhoneNumberEntry::detected(&catalog, Some("KZ")),
             login_password: "password".into(),
             name: "Name".into(),
             tag: "riseonly".into(),
             registration_password: "password".into(),
             repeated_password: "password".into(),
             code: "1234".into(),
-        }
+        };
+        form.phone.accept_typed("7075803272", &catalog);
+        form
     }
 
     const EVERY_STEP: [AuthStep; 7] = [
@@ -404,12 +391,29 @@ mod tests {
 
     #[test]
     fn a_value_written_to_a_step_reads_back_from_it() {
-        let mut form = AuthStepForm::default();
+        let mut form = form();
         for step in EVERY_STEP {
+            if step == AuthStep::Phone {
+                continue;
+            }
             form.set(step, format!("{step:?}"));
         }
         for step in EVERY_STEP {
+            if step == AuthStep::Phone {
+                continue;
+            }
             assert_eq!(form.value_for(step), format!("{step:?}"));
         }
+    }
+
+    #[test]
+    fn a_phone_typed_in_full_reaches_the_wire_without_a_doubled_country_code() {
+        let catalog = catalog();
+        let mut form = form();
+
+        form.phone.accept_typed("77075803272", &catalog);
+
+        assert_eq!(form.composed_phone(), "77075803272");
+        assert!(validate(AuthStep::Phone, &form).is_valid());
     }
 }

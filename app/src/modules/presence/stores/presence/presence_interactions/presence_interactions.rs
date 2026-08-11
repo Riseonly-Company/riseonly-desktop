@@ -3,11 +3,6 @@ use gpui::{App, Entity};
 use super::super::presence_actions::PresenceActionsStore;
 use super::super::presence_services::PresenceServicesStore;
 
-/// The only thing a view may call.
-///
-/// `owner` is a screen's identity, not a user's: one screen owns one desired
-/// set, and two screens showing the same person share the subscription rather
-/// than each opening their own.
 #[derive(Clone)]
 pub struct PresenceInteractionsStore {
     actions: PresenceActionsStore,
@@ -31,11 +26,6 @@ impl PresenceInteractionsStore {
         });
     }
 
-    /// Tells the server which conversation is on screen.
-    ///
-    /// This is what the other participant's "in this chat" marker is built from,
-    /// and it is also what the gateway uses to suppress a push for a message the
-    /// reader is already looking at.
     pub fn enter_chat(&self, chat_id: &str) {
         self.actions.enter_chat_action(chat_id.to_owned());
     }

@@ -8,16 +8,8 @@ pub use rise_platform::materials::{Material, MaterialBacking};
 
 /// What a material looks like when nothing native is drawing it.
 ///
-/// Tier 2 of `docs/PLATFORM_GLASS.md`: macOS 13 through 25, and Linux and
-/// Windows always. A translucent fill, a hairline border and a soft inner
-/// highlight, so the surface reads as a deliberate flat design rather than a
-/// broken attempt at glass.
-///
-/// The alpha matters even where the window behind is opaque. With
-/// `WindowMaterial::Blurred` granted the fill sits over a real system material;
-/// without it the same fill sits over `bg._000` and simply reads as a lifted
-/// panel. One set of numbers covers both, which is why there is no second
-/// "opaque window" variant to keep in sync.
+/// One set of numbers covers both windows: with `WindowMaterial::Blurred` the
+/// fill sits over a system material, without it over `bg._000`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct PaintedMaterial {
     pub fill: Hsla,
@@ -29,26 +21,20 @@ pub struct PaintedMaterial {
 /// The painted form of every [`Material`], resolved for one appearance and one
 /// density.
 ///
-/// A component never reads this directly and never asks for glass. It asks for a
-/// [`Material`]; `rise-platform` decides whether that material is an AppKit view
-/// or paint, and only the painted branch reaches these tokens.
+/// A component asks for a [`Material`]; `rise-platform` decides whether it is an
+/// AppKit view or paint, and only the painted branch reaches these tokens.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct MaterialTokens {
     pub chrome: PaintedMaterial,
     pub panel: PaintedMaterial,
     pub overlay: PaintedMaterial,
-    /// What dims the window behind a modal overlay.
-    ///
-    /// Not a [`PaintedMaterial`]: a scrim has no border, no highlight and no
-    /// radius, and it is never a native material — an AppKit view behind a hole
-    /// in the Metal layer cannot darken what gpui drew on top of it.
+    /// What dims the window behind a modal overlay. Never a native material.
     pub scrim: Hsla,
 }
 
 impl MaterialTokens {
-    /// Chrome and panel span a window edge, so they are square: rounding a
-    /// surface that runs into the window corner leaves a wedge of desktop
-    /// showing through. Only the overlay floats, and only the overlay is round.
+    /// Chrome and panel span a window edge and are square; only the overlay
+    /// floats, and only the overlay is rounded.
     pub fn new(palette: &ThemePalette, appearance: Appearance, density: Density) -> Self {
         let highlight = match appearance {
             Appearance::Dark => hsla(0.0, 0.0, 1.0, 0.05),

@@ -1,11 +1,8 @@
 use gpui::Pixels;
 use rise_theme::ShellMetrics;
 
-/// Which column a screen asks to live in.
-///
-/// A screen declares its slot; it never decides how many columns exist. That
-/// keeps every module ignorant of window width, which is what lets the shell
-/// collapse to a phone-shaped stack without touching a single feature.
+/// Which column a screen asks to live in. A screen declares its slot and never
+/// how many columns exist, so no module needs to know the window width.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PaneSlot {
     Primary,
@@ -51,14 +48,8 @@ impl PaneLayout {
 
     /// Which stacks a drawn column may take its screen from, topmost first.
     ///
-    /// Narrowing the window must never move a screen into another slot's stack.
-    /// If it did, widening the window again could not put it back, and the user
-    /// would watch a conversation they opened in the second column reappear in
-    /// the sidebar. So the stacks stay put and the COLUMNS merge instead: a
-    /// two-column window draws the aside's screen in the content column when the
-    /// aside has one, and a collapsed window draws whichever stack is furthest
-    /// right. Every projection here is reversible, which is what makes a resize
-    /// from 400px to 2560px and back lossless.
+    /// Narrowing merges COLUMNS and never moves a screen between stacks, so every
+    /// projection is reversible and a resize out and back is lossless.
     pub fn slots_for_column(self, column: usize) -> &'static [PaneSlot] {
         match (self, column) {
             (Self::ThreeColumn, 0) => &[PaneSlot::Primary],
@@ -87,9 +78,8 @@ impl Default for PanePolicy {
 }
 
 impl PanePolicy {
-    /// The column widths are design tokens and live in `rise-theme`, so density
-    /// reaches them. Repeating the numbers here would let a comfortable-density
-    /// window compute its thresholds from compact-density columns.
+    /// Derives the policy from the theme's column widths, so a density change
+    /// moves the thresholds with it. Never hard-code these numbers.
     pub fn from_shell_metrics(metrics: ShellMetrics) -> Self {
         Self {
             sidebar_width: metrics.sidebar_width,
@@ -117,9 +107,8 @@ impl PanePolicy {
         }
     }
 
-    /// Resolves the layout while resisting a flip that a few pixels of drag
-    /// would otherwise cause. A window resized across a boundary should settle,
-    /// not strobe between one and two columns.
+    /// Resolves the layout with hysteresis, so a few pixels of drag across a
+    /// boundary cannot strobe the column count. Growing takes effect at once.
     pub fn layout_for_resize(&self, width: Pixels, current: PaneLayout) -> PaneLayout {
         let next = self.layout_for(width);
         if next == current {

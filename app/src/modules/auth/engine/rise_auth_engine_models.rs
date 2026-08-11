@@ -2,10 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use super::core::rise_auth_rpc::AuthUserDto;
 
-/// The three parts of a session, kept together because two of them are useless.
-///
-/// Never `Clone`d into a log or a trace: `rise_auth_debug_trace` takes the
-/// fingerprint, never the value.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct StoredTokens {
     pub access: String,
@@ -21,11 +17,6 @@ impl StoredTokens {
     }
 }
 
-/// What a signed-in account looks like to the rest of the app.
-///
-/// A projection of `AuthUserDto` rather than the DTO itself: the wire shape has
-/// forty optional fields and three ways to spell an avatar, and a screen that
-/// read it directly would encode the gateway's quirks into every row.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct AuthUser {
     pub id: String,
@@ -47,9 +38,6 @@ impl From<AuthUserDto> for AuthUser {
             id: dto.id,
             name: dto.name.unwrap_or_default(),
             tag: dto.tag.unwrap_or_default(),
-            // `more.logo` is the fallback the reference uses, and it is not
-            // cosmetic: registration fills logo and leaves avatar_url null, so a
-            // client that only read avatar_url shows every new account blank.
             avatar_url: dto.avatar_url.or(more.logo),
             cover_image_url: dto.cover_image_url,
             description: more.description,
@@ -90,11 +78,6 @@ impl From<&PersistedAccount> for AccountSummary {
     }
 }
 
-/// How many accounts fit on one installation.
-///
-/// The reference's numbers, and they are a product rule rather than a technical
-/// one — each account is a separate database and a separate socket identity, so
-/// nothing here would break at eleven.
 pub struct AccountLimitPolicy;
 
 impl AccountLimitPolicy {
@@ -114,11 +97,6 @@ impl AccountLimitPolicy {
     }
 }
 
-/// Current account first, then the rest by how recently they were used.
-///
-/// Ties break on the id so the switcher never reorders itself between two
-/// renders — two accounts added in the same millisecond is rare and a list that
-/// shuffles under the pointer is not.
 pub fn ordered_accounts(
     accounts: &[PersistedAccount],
     active: Option<&str>,
@@ -145,10 +123,6 @@ pub fn ordered_accounts(
     current
 }
 
-/// Why the account state was torn down.
-///
-/// Carried through so a trace can tell a user's own sign-out from a session the
-/// server revoked, which are the same code path and very different bugs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResetReason {
     UserLogout,

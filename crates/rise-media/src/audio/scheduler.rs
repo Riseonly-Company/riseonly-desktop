@@ -1,39 +1,13 @@
 //! Which tracks have a decoder open, and when the next one gets one.
-//!
-//! The audio counterpart of `video/feed_scheduler.rs`, and it exists for the
-//! same reason: something has to own the decision, or every screen that can
-//! start playback invents its own answer.
-//!
-//! WHY THE NEXT TRACK OPENS EARLY
-//!
-//! A gapless join has to hand the device the first frame of the next track in
-//! the same buffer as the last frame of the current one. Opening a decoder,
-//! probing the container and decoding the first packets takes tens of
-//! milliseconds off a warm disk cache and far longer off a cold one, so a
-//! decoder opened when the current track ends is a decoder that is late. It
-//! opens with a lead instead — and not before, because a preloaded decoder is
-//! memory held for audio nobody has asked for.
-//!
-//! Pure. It takes the queue and the remaining time as input, which is what lets
-//! a whole album be scheduled in a test with no decoder and no clock.
 
-/// A track's identity. A stable server id, never a queue index: the queue is
-/// reordered by shuffle and by the user dragging rows, and an index makes both
-/// of those tear down the decoder that is currently playing.
+/// A track's identity: a stable server id, never a queue index — shuffle and
+/// drag-reorder would otherwise tear down the decoder that is playing.
 pub type TrackId = u64;
 
 /// How far before the end of a track its successor is opened.
-///
-/// Two seconds covers opening a container, probing it and filling the ring on
-/// a machine that is also doing something else. Longer holds a second decoder
-/// open for no benefit; shorter and the join is the gap it exists to remove.
 pub const PRELOAD_LEAD_MILLIS: u64 = 2_000;
 
 /// Decoders alive at once: the one playing and the one about to.
-///
-/// Unlike video, there is no scrolling feed of audio — the user has one pair of
-/// ears — so this is a much smaller number than `MAX_LIVE_DECODERS` and needs
-/// no eviction policy beyond "close what is not current or next".
 pub const MAX_LIVE_DECODERS: usize = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -51,10 +25,7 @@ pub enum Transition {
     Close(TrackId),
 }
 
-/// What the queue says should happen next.
-///
-/// Repeat and shuffle are the music store's business; by the time it reaches
-/// here it is just "this one, then that one". `next` is `None` at the end of a
+/// What the queue says should happen next. `next` is `None` at the end of a
 /// queue with repeat off.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Upcoming {
@@ -115,14 +86,8 @@ impl PlaybackScheduler {
     /// Reconcile against the queue.
     ///
     /// `remaining_millis` is how much of the current track is left, or `None`
-    /// when it is not known yet — a stream whose container did not state a
-    /// length. Not knowing means the successor is not preloaded, because
-    /// "unknown" would otherwise read as "about to end" and hold a decoder open
-    /// for the whole track.
-    ///
-    /// Closes are emitted before opens, for the same reason the video
-    /// scheduler does it: the decoder budget is small, and needing both at once
-    /// fails on exactly the transition where failing is most visible.
+    /// when the container did not state a length; unknown preloads nothing.
+    /// Closes are emitted before opens.
     pub fn reconcile(&mut self, upcoming: &Upcoming, remaining_millis: Option<u64>) -> Plan {
         let mut plan = Plan::default();
 
@@ -166,8 +131,7 @@ impl PlaybackScheduler {
         plan
     }
 
-    /// Release everything. Leaving the player, switching account, closing the
-    /// window.
+    /// Release every decoder.
     pub fn close_all(&mut self) -> Plan {
         let mut plan = Plan::default();
 
@@ -316,8 +280,7 @@ mod tests {
         let mut scheduler = PlaybackScheduler::new();
         scheduler.reconcile(&upcoming(100, Some(101)), Some(180_000));
 
-        // The user drags rows around; the stable ids of what is playing and
-        // what is next are unchanged.
+        // Rows moved, but the ids of current and next did not.
         let plan = scheduler.reconcile(&upcoming(100, Some(101)), Some(179_000));
 
         assert!(plan.transitions.is_empty());

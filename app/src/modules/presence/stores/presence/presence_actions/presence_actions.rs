@@ -13,11 +13,6 @@ impl PresenceActionsStore {
         Self { wire }
     }
 
-    /// Sends only what changed.
-    ///
-    /// An empty side is not sent at all: the gateway answers a subscription with
-    /// nothing, so an empty call is a round trip that buys the app no
-    /// information and spends a rate-limit slot.
     pub fn apply_subscription_delta_action(&self, delta: SubscriptionDelta) {
         if !delta.subscribe.is_empty() {
             self.wire.subscribe(delta.subscribe);

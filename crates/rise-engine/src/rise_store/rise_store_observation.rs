@@ -21,10 +21,8 @@ pub enum ObserveError {
 
 /// Broadcasts which materialized views moved, never what changed inside them.
 ///
-/// A subscriber that falls behind is told so explicitly rather than silently
-/// losing notifications: a dropped revision is a snapshot that never refreshes,
-/// which looks like a bug in the feature and is impossible to trace back here.
-/// On overflow the correct response is to re-read the view, not to retry.
+/// A subscriber that falls behind gets [`ObserveError::Overflow`] instead of a
+/// silent drop; the correct response is to re-read the view, not to retry.
 #[derive(Clone)]
 pub struct RevisionBus {
     sender: broadcast::Sender<RevisionChange>,
@@ -37,7 +35,6 @@ impl RevisionBus {
     }
 
     pub fn publish(&self, view_key: impl Into<String>, revision: i64) {
-        // A send with no subscribers is not a failure; nothing is observing yet.
         let _ = self.sender.send(RevisionChange {
             view_key: view_key.into(),
             revision,
@@ -175,7 +172,6 @@ mod tests {
         }
         assert!(subscription.next().await.is_err());
 
-        // After re-reading the store, the subscription keeps working.
         let change = subscription.next().await.unwrap();
         assert!(change.revision > 0);
     }

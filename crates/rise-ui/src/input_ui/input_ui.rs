@@ -12,9 +12,8 @@ use crate::input_ui::shaped_input::{ShapeKey, ShapedInput};
 
 /// The text surface of an input: caret, selection, marked text and nothing else.
 ///
-/// The chrome around it — background, border, radius, key context, actions — is
-/// [`InputUiState`]'s own `Render`, so a caller writes `div().child(state)` and
-/// never has to assemble the two halves correctly.
+/// The chrome around it is [`InputUiState`]'s own `Render`, so a caller writes
+/// `div().child(state)` rather than assembling the two halves.
 pub struct InputUi {
     state: Entity<InputUiState>,
 }
@@ -310,9 +309,7 @@ impl Element for InputUi {
             });
         });
 
-        // Registered on the window, not on a hitbox: a drag that leaves the
-        // element must keep selecting, and a hitbox-filtered listener stops at
-        // the border.
+        // On the window, not the hitbox: a drag that leaves the element must keep selecting.
         let state = self.state.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
             if phase != DispatchPhase::Bubble {

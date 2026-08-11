@@ -1,6 +1,7 @@
 pub mod rise_engine;
 pub mod rise_store;
 pub mod rise_sync;
+pub mod rise_task;
 pub mod rise_upload;
 pub mod rise_wire;
 
@@ -20,6 +21,7 @@ pub use rise_sync::rise_sync::{
     ClaimError, DurableOperation, DurableState, FlushReason, PushBatch, PushBatchLimits,
     retry_delay_ms,
 };
+pub use rise_task::rise_debounce::Debouncer;
 pub use rise_upload::rise_upload_progress::{
     UploadId, UploadProgress, UploadProgressHub, UploadState,
 };
@@ -29,5 +31,6 @@ pub use rise_wire::rise_http::{
 pub use rise_wire::rise_wire::{FrameSender, PushEvent, RiseWire, WireError};
 pub use rise_wire::rise_wire_contracts::{
     MethodDescriptor, RemoteError, ReplayPolicy, RequestEnvelope, RequestMetadata, ResponseStatus,
+    remote_message,
 };
 pub use rise_wire::rise_wire_frame_decoder::{IncomingFrame, decode_frame};

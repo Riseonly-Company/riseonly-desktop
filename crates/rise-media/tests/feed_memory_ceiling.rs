@@ -1,17 +1,5 @@
-//! The Phase 4 gate: scroll a synthetic feed and assert the memory ceiling.
-//!
-//! WHY THIS TEST EXISTS
-//!
-//! A community report documents gpui's memory for six static images falling
-//! from 300 MB to 12 MB once CPU-side bytes stopped being retained after the
-//! GPU upload. A video feed multiplies that by frame rate, stream count and
-//! sticker count, and the failure is invisible in a frame trace: the app stays
-//! smooth right up until it does not.
-//!
-//! So the ceiling is asserted two ways. The ledger assertion is exact and runs
-//! everywhere. The RSS assertion is coarse, runs only where a process's
-//! resident size can be read, and exists to catch the case the ledger cannot
-//! see — an allocation nobody told the ledger about.
+//! Scroll a synthetic feed and assert the memory ceiling, twice over: exactly
+//! against the ledger, and coarsely against RSS where the OS reports it.
 
 use rise_media::texture::external_texture::{
     BudgetTracker, FRAMES_IN_FLIGHT, ImportPlan, StreamTexture, TextureBudget,
@@ -37,8 +25,7 @@ fn viewport_at(position: u64) -> Viewport {
     )
 }
 
-/// Drives the scheduler's plan against real `StreamTexture` allocations, which
-/// is what makes the ledger reflect something rather than itself.
+/// Drives the scheduler's plan against real `StreamTexture` allocations.
 struct SyntheticFeed {
     scheduler: FeedScheduler,
     textures: HashMap<StreamId, StreamTexture>,
@@ -61,9 +48,7 @@ impl SyntheticFeed {
     fn scroll_to(&mut self, position: u64) {
         let plan = self.scheduler.reconcile(&viewport_at(position));
 
-        // Closes first, exactly as the plan orders them. Applying opens first
-        // would hold both allocations and is the transition the ceiling is
-        // most likely to be crossed on.
+        // Closes first, as the plan orders them; opens first would hold both.
         for id in plan.closes() {
             self.textures.remove(&id);
         }
@@ -205,12 +190,7 @@ fn the_scheduler_and_the_allocations_never_disagree() {
     }
 }
 
-/// Resident set size in bytes, where the OS will tell us cheaply.
-///
-/// `ps` rather than a mach or procfs binding: this is a coarse sanity check,
-/// not a measurement, and pulling an OS crate into a test for it would be a
-/// worse trade. Returns None where it cannot be read, and the test then says so
-/// rather than passing silently.
+/// Resident set size in bytes, or `None` where the OS will not report it.
 fn resident_bytes() -> Option<u64> {
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return None;
@@ -246,9 +226,7 @@ fn the_process_itself_does_not_grow_across_a_long_scroll() {
     let after = resident_bytes().expect("rss was readable a moment ago");
     let growth = after.saturating_sub(before);
 
-    // Generous on purpose. This catches a leak proportional to feed length —
-    // hundreds of megabytes — not allocator noise, and a tight bound here would
-    // be a flaky test rather than a stronger guarantee.
+    // Generous: this catches a leak proportional to feed length, not allocator noise.
     const ALLOWED_GROWTH: u64 = 64 * 1024 * 1024;
 
     assert!(

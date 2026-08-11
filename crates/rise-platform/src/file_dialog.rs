@@ -1,13 +1,8 @@
 //! Native open and save dialogs, and the file-type filtering gpui does not do.
 //!
-//! `PathPromptOptions` has four fields and none of them is a filter, and no
-//! backend adds one: the macOS panel is created without `allowedContentTypes`,
-//! the Windows one without `SetFileTypes`, the Linux portal request without
-//! filters. A caller asking for "images only" therefore gets a picker showing
-//! everything, and the restriction has to be applied to the paths that come
-//! back. That is what `FileFilter` is for, and why a pick carries its rejects
-//! instead of quietly discarding them: a user who selected five files and got
-//! three needs to be told which two, and why.
+//! No backend hangs allowed types on the panel, so a request for "images only" still shows
+//! the user everything and the filter is applied to the paths that come back. A pick
+//! therefore carries its rejects rather than discarding them silently.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -27,9 +22,8 @@ pub enum FileDialogError {
 
 /// Extensions a request will accept, matched against what the dialog returns.
 ///
-/// An empty extension list means "anything", which is not the same as an empty
-/// selection: `FileFilter::any()` accepts a file with no extension at all,
-/// while every named filter rejects it.
+/// An empty extension list means "anything": [`FileFilter::any`] accepts a file with
+/// no extension at all, while every named filter rejects it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FileFilter {
     label: String,
@@ -37,9 +31,8 @@ pub struct FileFilter {
 }
 
 impl FileFilter {
-    /// Entries are normalised, so `".PNG"`, `"PNG"` and `"png"` are one filter.
-    /// An entry may itself contain a dot (`"tar.gz"`), which then has to match
-    /// as a whole suffix.
+    /// Entries are normalised, so `".PNG"`, `"PNG"` and `"png"` are one filter. An entry
+    /// may itself contain a dot (`"tar.gz"`), which then has to match as a whole suffix.
     pub fn new<E: AsRef<str>>(
         label: impl Into<String>,
         extensions: impl IntoIterator<Item = E>,
@@ -71,7 +64,6 @@ impl FileFilter {
         }
     }
 
-    /// The set the reference's `MediaPickerItem.guessKind` calls an image.
     pub fn images() -> Self {
         Self::new(
             "Images",
@@ -79,19 +71,15 @@ impl FileFilter {
         )
     }
 
-    /// The set the reference's `MediaPickerItem.guessKind` calls a video.
     pub fn video() -> Self {
         Self::new("Video", ["mp4", "mov", "m4v", "qt", "webm"])
     }
 
-    /// What the studio's track upload offers, plus the containers
-    /// `MusicPlaybackDiskCache` sniffs when a track arrives without one.
     pub fn audio() -> Self {
         Self::new("Audio", ["mp3", "m4a", "aac", "flac", "ogg", "wav"])
     }
 
-    /// The reference's `MediaPickerMediaKind.all`: images and video together,
-    /// which is narrower than "any file".
+    /// Images and video together, which is narrower than "any file".
     pub fn media() -> Self {
         let mut extensions = Self::images().extensions;
         extensions.extend(Self::video().extensions);
@@ -114,18 +102,14 @@ impl FileFilter {
         self.extensions.is_empty()
     }
 
-    /// The extension used to complete a save name the user left bare: the
-    /// first one listed.
+    /// The extension used to complete a save name the user left bare: the first one listed.
     pub fn default_extension(&self) -> Option<&str> {
         self.extensions.first().map(String::as_str)
     }
 
-    /// Matching is on the final dot-separated suffix of the file name, so a
-    /// `gz` filter takes `archive.tar.gz` while a `png` filter refuses
-    /// `photo.png.exe`. A name that is a leading dot and a word — `.gitignore`
-    /// — counts as having no extension, the same reading `Path::extension`
-    /// gives it. A name that is not valid UTF-8 cannot be matched and is
-    /// refused rather than let through.
+    /// Matches the final dot-separated suffix, so `gz` takes `archive.tar.gz` while `png`
+    /// refuses `photo.png.exe`. A leading-dot name (`.gitignore`) has no extension, as
+    /// `Path::extension` reads it, and a name that is not valid UTF-8 is refused.
     pub fn accepts(&self, path: &Path) -> bool {
         if self.accepts_everything() {
             return true;
@@ -141,8 +125,7 @@ impl FileFilter {
             .any(|extension| ends_with_extension(&name, extension))
     }
 
-    /// Input order is preserved in both halves, so a caller can name the
-    /// offending files in the order the user selected them.
+    /// Input order is preserved in both halves.
     pub fn partition(&self, paths: impl IntoIterator<Item = PathBuf>) -> FilteredSelection {
         let mut selection = FilteredSelection::default();
 
@@ -157,12 +140,10 @@ impl FileFilter {
         selection
     }
 
-    /// Save panels are opened without allowed types on every backend, so a
-    /// user who types `holiday` gets back exactly `holiday` and writes a file
-    /// nothing will open. Completing the name here is the only place that is
-    /// caught. A name that already satisfies the filter keeps its own spelling
-    /// and case; one that does not gains the default extension rather than
-    /// losing what the user typed.
+    /// Appends [`Self::default_extension`] to a name the filter rejects.
+    ///
+    /// A name that already satisfies the filter keeps its own spelling and case; one that
+    /// does not gains the extension rather than losing what the user typed.
     pub fn complete_extension(&self, path: PathBuf) -> PathBuf {
         if self.accepts(&path) {
             return path;
@@ -185,8 +166,7 @@ impl FileFilter {
 }
 
 fn ends_with_extension(name: &str, extension: &str) -> bool {
-    // The + 1 is the dot, and demanding a strictly longer name is what stops
-    // `.gz` from reading as a gz file whose stem happens to be empty.
+    // Strictly longer (the +1 is the dot) so `.gz` is not read as a gz file with an empty stem.
     name.len() > extension.len() + 1
         && name.ends_with(extension)
         && name.as_bytes()[name.len() - extension.len() - 1] == b'.'
@@ -230,12 +210,8 @@ impl SelectionTarget {
 
     /// What this target becomes once the host's dialog is taken into account.
     ///
-    /// Asking for both and getting a folder picker is the bad outcome. gpui's
-    /// Windows backend turns `directories` into `FOS_PICKFOLDERS` and never
-    /// reads `files`; its Linux backend passes the same flag as the portal's
-    /// `directory` option and titles the dialog "Open Folder". So where the two
-    /// cannot coexist we drop to files, which is the half a caller wanting an
-    /// attachment actually needs.
+    /// `FilesOrDirectories` drops to `Files` off macOS, where asking for directories sets
+    /// `FOS_PICKFOLDERS` (or the portal's `directory`) and hides every file.
     pub fn resolve(self, host: HostOs) -> Self {
         match self {
             Self::FilesOrDirectories if !supports_mixed_selection(host) => Self::Files,
@@ -244,11 +220,8 @@ impl SelectionTarget {
     }
 }
 
-/// Whether one dialog can offer files and directories at once.
-///
-/// This mirrors gpui's own `can_select_mixed_files_and_dirs`, which answers
-/// true only on macOS, where the open panel has independent `canChooseFiles`
-/// and `canChooseDirectories` flags.
+/// Whether one dialog can offer files and directories at once. True only on macOS,
+/// whose open panel has independent `canChooseFiles` and `canChooseDirectories` flags.
 pub fn supports_mixed_selection(host: HostOs) -> bool {
     match host {
         HostOs::MacOs => true,
@@ -258,10 +231,8 @@ pub fn supports_mixed_selection(host: HostOs) -> bool {
 
 /// Whether the host's dialog can hide the files a filter excludes.
 ///
-/// Unsupported everywhere, and not because the platforms cannot: all three
-/// have the capability and `PathPromptOptions` has no field that reaches it. A
-/// screen that wants the user to see only images has to say so in its own
-/// wording, because the picker will not.
+/// Unsupported everywhere: a screen that wants the user to see only images has to say
+/// so in its own wording, because the picker will not.
 pub fn dialog_enforces_filter(host: HostOs) -> PlatformSupport {
     match host {
         HostOs::MacOs | HostOs::Windows | HostOs::Linux => PlatformSupport::Unsupported,
@@ -270,9 +241,8 @@ pub fn dialog_enforces_filter(host: HostOs) -> PlatformSupport {
 
 /// What to ask the system picker for.
 ///
-/// The fields are private because a directory request must not carry a file
-/// filter: a directory has no extension, so any named filter would reject
-/// every folder the user chose.
+/// Built through the constructors so a directory request cannot carry a named filter:
+/// a directory has no extension, so the filter would reject every folder chosen.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct OpenRequest {
     target: SelectionTarget,
@@ -314,9 +284,7 @@ impl OpenRequest {
         self
     }
 
-    /// The label on the confirm button, not a window title: macOS sets it with
-    /// `setPrompt:`, Windows with `SetOkButtonLabel`, Linux as the portal's
-    /// accept label.
+    /// The label on the confirm button, not a window title.
     pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.prompt = Some(prompt.into());
         self
@@ -372,11 +340,8 @@ impl SaveRequest {
     }
 }
 
-/// The three ways an open dialog ends.
-///
-/// A caller has to handle all three: a failure is not a cancel, and saying
-/// nothing to the user because the dialog never opened is the outcome this
-/// enum exists to make impossible to reach by accident.
+/// The three ways an open dialog ends. A failure is not a cancel: a dialog that never
+/// opened still owes the user a message.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Selection {
     Picked(FilteredSelection),
@@ -385,14 +350,8 @@ pub enum Selection {
 }
 
 impl Selection {
-    /// `None` and an empty list both mean cancel. The backends disagree about
-    /// which they send — gpui's Windows path returns `Ok(None)` when the dialog
-    /// reports zero items, while its macOS path builds a list and can end up
-    /// with an empty one when no URL converts to a path — and that difference
-    /// is not something a caller should have to know.
-    ///
-    /// A selection in which every path fails the filter is still a pick, so the
-    /// caller can say what was wrong with it.
+    /// `None` and an empty list both mean cancel — the backends disagree about which
+    /// they send. A selection in which every path fails the filter is still a pick.
     pub fn from_paths(paths: Option<Vec<PathBuf>>, filter: &FileFilter) -> Self {
         match paths {
             None => Self::Cancelled,
@@ -438,12 +397,9 @@ impl SaveOutcome {
 
 /// Opens the picker and resolves once the user is done with it.
 ///
-/// The dialog is raised here and the future only waits for the answer, so the
-/// future borrows nothing: `&App` cannot cross an await point, and a caller
-/// that had to hold one would not be able to hand this to a spawned task.
-///
-/// The filter never reaches the panel — see the module doc — so the user can
-/// select anything at all, and the result is partitioned afterwards.
+/// The dialog is raised before the future is built, so the future borrows nothing and can
+/// be handed to a spawned task. The filter never reaches the panel: the result is
+/// partitioned afterwards.
 pub fn open(app: &gpui::App, request: &OpenRequest) -> impl Future<Output = Selection> + use<> {
     let options = request.prompt_options(HostOs::current());
     let receiver = app.prompt_for_paths(options);
@@ -460,9 +416,8 @@ pub fn open(app: &gpui::App, request: &OpenRequest) -> impl Future<Output = Sele
 
 /// Opens the save panel and resolves once the user is done with it.
 ///
-/// The chosen path is completed against the filter, because no backend hangs
-/// allowed types on the panel and a name typed without an extension comes back
-/// exactly as typed.
+/// The chosen path is completed against the filter: a name typed without an extension
+/// comes back from every backend exactly as typed.
 pub fn save(app: &gpui::App, request: &SaveRequest) -> impl Future<Output = SaveOutcome> + use<> {
     let suggested = request.suggested_name.as_deref();
     let receiver = app.prompt_for_new_path(&request.directory, suggested);

@@ -1,29 +1,14 @@
 //! The handoff between the decode thread and the audio callback.
 //!
-//! THE CONSTRAINT NOTHING ELSE IN THIS CRATE HAS
-//!
-//! The audio callback runs on a real-time thread owned by the OS. It may not
-//! allocate, may not take a lock, and may not block — not because it is slow to
-//! do so, but because the thread that owns the lock is a normal-priority thread
-//! that can be descheduled while holding it, and the callback then misses its
-//! deadline. A missed deadline is an audible click, every time.
-//!
-//! So the queue between decode and playback is a single-producer,
-//! single-consumer ring with atomic indices and no lock anywhere. It is the
-//! audio equivalent of "no disk reads on the GPUI thread", and it is the reason
-//! this is hand-written rather than a `Mutex<VecDeque>`.
-//!
-//! An underrun is counted rather than hidden: silence is what the user hears,
-//! and a counter is what tells us the decode thread is not keeping up.
+//! Single-producer, single-consumer and lock-free: the callback runs on an OS
+//! real-time thread and may not allocate, lock or block.
 
 use std::cell::UnsafeCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 struct Shared {
-    /// Only the producer writes `[write, write + n)`; only the consumer reads
-    /// `[read, read + n)`. The atomics below are what makes those two ranges
-    /// provably disjoint.
+    /// Only the producer writes `[write, write + n)`; only the consumer reads `[read, read + n)`.
     buffer: UnsafeCell<Box<[f32]>>,
     mask: usize,
     write: AtomicUsize,
@@ -32,9 +17,7 @@ struct Shared {
     overruns: AtomicU64,
 }
 
-// SAFETY: the only mutable access to `buffer` is through the producer and
-// consumer halves, which cannot be cloned and which touch disjoint index
-// ranges published through the release/acquire pairs below.
+// SAFETY: the un-cloneable producer and consumer halves touch disjoint index ranges, published through the release/acquire pairs below.
 unsafe impl Send for Shared {}
 unsafe impl Sync for Shared {}
 
@@ -49,9 +32,6 @@ pub struct Consumer {
 }
 
 /// Create a ring holding `capacity_samples`, rounded up to a power of two.
-///
-/// Powers of two so the index wrap is a mask rather than a modulo. A modulo on
-/// the callback path is not the cost that matters; the branchless wrap is.
 pub fn ring(capacity_samples: usize) -> (Producer, Consumer) {
     let capacity = capacity_samples.max(2).next_power_of_two();
 
@@ -97,9 +77,7 @@ impl Producer {
         self.capacity() - self.filled()
     }
 
-    /// Samples the producer tried to write into a full ring. Non-zero means
-    /// the decode thread is ahead, which is harmless, but a growing count with
-    /// underruns beside it means the two are fighting.
+    /// Samples the producer tried to write into a full ring.
     pub fn overruns(&self) -> u64 {
         self.shared.overruns.load(Ordering::Relaxed)
     }
@@ -118,9 +96,7 @@ impl Producer {
                 .fetch_add((samples.len() - count) as u64, Ordering::Relaxed);
         }
 
-        // SAFETY: `count` slots starting at `write` are outside the consumer's
-        // `[read, write)` range, so nothing else touches them until the store
-        // below publishes them.
+        // SAFETY: the `count` slots at `write` are outside the consumer's `[read, write)` range until the store below publishes them.
         let buffer = unsafe { &mut *self.shared.buffer.get() };
         for (offset, sample) in samples[..count].iter().enumerate() {
             buffer[write.wrapping_add(offset) & self.shared.mask] = *sample;
@@ -142,18 +118,12 @@ impl Consumer {
         self.shared.filled()
     }
 
-    /// Samples the device asked for and did not get. Every one of them is a
-    /// sample of silence the user heard.
+    /// Samples the device asked for and did not get — silence the user heard.
     pub fn underruns(&self) -> u64 {
         self.shared.underruns.load(Ordering::Relaxed)
     }
 
     /// Fill `out` completely, padding with silence if the ring runs dry.
-    ///
-    /// Silence rather than a short read because a device callback has to write
-    /// every sample it was asked for; leaving the tail untouched plays whatever
-    /// the previous callback left there, which is a much louder artefact than
-    /// a gap.
     pub fn pop_or_silence(&mut self, out: &mut [f32]) -> usize {
         let read = self.shared.read.load(Ordering::Relaxed);
         let write = self.shared.write.load(Ordering::Acquire);
@@ -161,9 +131,7 @@ impl Consumer {
         let available = write.wrapping_sub(read);
         let count = out.len().min(available);
 
-        // SAFETY: `count` slots starting at `read` were published by the
-        // producer's release store and are not written again until the store
-        // below frees them.
+        // SAFETY: the `count` slots at `read` were published by the producer's release store and are not rewritten until the store below frees them.
         let buffer = unsafe { &*self.shared.buffer.get() };
         for (offset, slot) in out[..count].iter_mut().enumerate() {
             *slot = buffer[read.wrapping_add(offset) & self.shared.mask];
@@ -183,8 +151,8 @@ impl Consumer {
         count
     }
 
-    /// Throw away everything buffered. What a seek does: the ring holds audio
-    /// from before the jump, and playing it after the seek is the click.
+    /// Throw away everything buffered — what a seek does, since the ring holds
+    /// audio from before the jump.
     pub fn clear(&mut self) {
         let write = self.shared.write.load(Ordering::Acquire);
         self.shared.read.store(write, Ordering::Release);
@@ -303,9 +271,7 @@ mod tests {
 
         let mut received = Vec::with_capacity(TOTAL);
         while received.len() < TOTAL {
-            // Only read a full block once one is there, so an underrun's
-            // silence never enters the comparison and the test is about
-            // ordering rather than about timing.
+            // Wait for a full block so the test is about ordering, not timing.
             if consumer.filled() < BLOCK {
                 std::thread::yield_now();
                 continue;

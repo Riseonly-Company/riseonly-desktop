@@ -1,0 +1,40 @@
+================================================================================
+modules/user/components — the header and the tabs
+================================================================================
+
+  profile_top/      ProfileTop, ported from ProfileTop.swift.
+  profile_content/  ProfileContentTab and the goal and plan rows.
+
+ONE HANDLER, NOT THREE
+
+  Same rule as the post card: one `ProfileTopAction` enum and one closure, so a
+  second call site does not re-declare a list of callbacks.
+
+WHAT THE HEADER DRAWS AND WHAT IT DOES NOT
+
+  Banner, avatar, name with its badges, tag, bio, the four-segment stats bar,
+  the Rise pills on your own profile, and the follow button on someone else's.
+
+  The reference also puts a message button, a share button, an edit pencil, a
+  story ring with its composer, highlights, and a featured track up here. None of
+  their destinations exist yet, and a button that does nothing is worse than an
+  absent one — the stats segments are drawn as text rather than buttons for the
+  same reason.
+
+THE STATIC GLASS IS DELIBERATE, IN BOTH PROJECTS
+
+  ProfileTop.swift replaced its live glass with painted fills and strokes,
+  because the whole subtree moves while the header collapses and a material
+  recomposites every frame. The port keeps that decision: these surfaces are
+  `bg._200` with a border, never `GlassPanel`. The materials belong to chrome
+  that stays still.
+
+  Same reason the premium badge is drawn rather than animated (BadgeUi says so):
+  gpui has no damage regions, so anything looping repaints the window.
+
+THE AVATAR HANGS, IT DOES NOT OVERLAP
+
+  A negative top margin on the identity row pulls it up over the banner by
+  `avatar_hang`. The reference offsets the row inside a ZStack and pads the
+  container by the same amount; the effect is identical and the layout has one
+  pass instead of two.

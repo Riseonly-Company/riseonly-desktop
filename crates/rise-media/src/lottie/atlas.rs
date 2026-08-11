@@ -1,43 +1,20 @@
-//! One texture for hundreds of stickers.
+//! One texture for hundreds of stickers: they live in shared pages and a player
+//! owns a rectangle inside one, written into rather than reallocated.
 //!
-//! THE PROBLEM THIS SOLVES
-//!
-//! A sticker is 32 to 256 pixels square. Giving each one its own texture means
-//! an emoji picker allocates several hundred GPU objects, rebinds once per
-//! sticker per frame, and — because a sticker appears and disappears with the
-//! scroll — allocates and frees them continuously. That is the per-frame
-//! allocation pattern the whole media layer exists to avoid, at a different
-//! scale from video.
-//!
-//! So stickers live in shared pages and a player owns a rectangle inside one.
-//! Frames are written into that rectangle; nothing is allocated between a
-//! sticker appearing and disappearing.
-//!
-//! WHY A GRID AND NOT A PACKER
-//!
-//! Every tile is square and comes from a small set of sizes, so a shelf or
-//! skyline packer would solve a problem this workload does not have while
-//! adding fragmentation, which is the failure mode that eventually shows up as
-//! "the picker stops drawing after ten minutes". A bucketed grid is O(1) to
-//! allocate, O(1) to free, and cannot fragment.
+//! A bucketed grid rather than a shelf or skyline packer — every tile is square
+//! and from a small set of sizes, so a grid is O(1) both ways and cannot
+//! fragment.
 
 use std::collections::HashMap;
 
 use super::super::texture::external_texture::{BudgetError, BudgetTracker};
 use super::raster_policy::{MAXIMUM_DIMENSION, MINIMUM_DIMENSION};
 
-/// Tile sizes are rounded up to a multiple of this.
-///
-/// Without it, every distinct point size on every distinct monitor scale is its
-/// own page: 148, 150 and 152 would be three atlases holding one sticker each.
-/// The cost is at most 31 wasted pixels per side.
+/// Tile sizes are rounded up to a multiple of this, so 148, 150 and 152 share
+/// one page instead of taking three. Costs at most 31 pixels per side.
 pub const TILE_GRANULARITY: u32 = 32;
 
-/// Side of every atlas page, in pixels.
-///
-/// 1024² BGRA is 4 MiB, which is one comfortable allocation and divides evenly
-/// for the common tile sizes. Larger pages waste more on the last partial row
-/// of tiles; smaller ones stop being worth the sharing.
+/// Side of every atlas page, in pixels. 1024² BGRA is 4 MiB.
 pub const PAGE_SIDE: u32 = 1024;
 
 pub const fn page_bytes() -> u64 {
@@ -57,7 +34,7 @@ pub const fn tiles_per_row(tile: u32) -> u32 {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AtlasError {
     /// A new page would cross the process-wide GPU memory ceiling. The caller
-    /// releases an offscreen sticker rather than the atlas silently growing.
+    /// releases an offscreen sticker; the atlas never grows past it.
     Budget(BudgetError),
 }
 
@@ -93,8 +70,6 @@ impl Tile {
 
 #[derive(Debug)]
 struct Page {
-    /// One bit would do, but the free list makes allocation O(1) rather than a
-    /// scan, and a picker allocates on every scroll tick.
     free: Vec<u32>,
     live: u32,
 }
@@ -110,11 +85,8 @@ impl Page {
     }
 }
 
-/// The process's sticker texture memory.
-///
-/// Shares the video path's ledger on purpose: a feed playing three videos and a
-/// chat showing forty stickers are competing for the same GPU memory, and two
-/// independent ceilings add up to a number nobody chose.
+/// The process's sticker texture memory. Priced into the video path's ledger,
+/// so stickers and streams compete for one ceiling rather than two.
 #[derive(Debug)]
 pub struct TextureAtlas {
     pages: HashMap<u32, Vec<Page>>,
@@ -176,12 +148,9 @@ impl TextureAtlas {
         })
     }
 
-    /// Hand a tile back.
-    ///
-    /// An emptied page is kept rather than freed. A picker scrolled up and down
-    /// empties and refills the same page continuously, and returning its memory
-    /// on every pass would trade a bounded allocation for a permanent churn.
-    /// `shrink` is where the memory actually goes back.
+    /// Hand a tile back. An emptied page is kept rather than freed, so a picker
+    /// scrolled up and down does not churn allocations; `shrink` is where the
+    /// memory actually goes back.
     pub fn release(&mut self, tile: Tile) {
         let Some(pages) = self.pages.get_mut(&tile.tile_side) else {
             return;
@@ -197,15 +166,11 @@ impl TextureAtlas {
         page.live = page.live.saturating_sub(1);
     }
 
-    /// Release every page that holds nothing, keeping one per tile size.
+    /// Release every page that holds nothing, keeping one per tile size warm.
     ///
-    /// Called when the sticker surface leaves the screen entirely, on account
-    /// switch, and under memory pressure. Keeping one page per size means the
-    /// next chat opened does not pay for a fresh allocation.
-    ///
-    /// Only trailing empty pages are released: a tile's index is its page's
-    /// position, so removing from the middle would silently repoint every live
-    /// tile above it at someone else's memory.
+    /// Only TRAILING empty pages are released: a tile names its page by index,
+    /// so removing from the middle would silently repoint every live tile above
+    /// it at someone else's memory.
     pub fn shrink(&mut self) {
         for pages in self.pages.values_mut() {
             while pages.len() > 1 && pages.last().is_some_and(|page| page.live == 0) {

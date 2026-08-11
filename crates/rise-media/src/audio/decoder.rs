@@ -1,13 +1,4 @@
 //! Audio decode, and the choice of who trims the encoder's padding.
-//!
-//! The decoder itself is symphonia — pure Rust, MPL-2.0, no C parsing
-//! attacker-supplied bytes and, more to the point, no FFmpeg on the critical
-//! path of the music player. That was a deliberate call in PHASES.txt: video
-//! carries an LGPL FFmpeg because there is no alternative, and audio does not
-//! have to.
-//!
-//! Everything here that makes a DECISION is pure and always compiled. The
-//! binding to symphonia is `symphonia_backend.rs`.
 
 use super::codec::{Container, Unsupported};
 use super::format::StreamFormat;
@@ -23,8 +14,7 @@ pub enum DecodeError {
     Malformed(String),
     /// The file has no audio track at all — a video-only MP4, usually.
     NoAudioTrack,
-    /// The stream describes a rate or channel count outside what the pipeline
-    /// accepts.
+    /// A rate or channel count outside what the pipeline accepts.
     ImplausibleFormat,
     Io(String),
 }
@@ -37,18 +27,12 @@ pub enum Decoded {
     EndOfStream,
 }
 
-/// Who removes the priming and padding frames.
-///
-/// Getting this wrong in either direction is audible: nobody trimming leaves
-/// the gap between album tracks, and both trimming cuts real audio out of the
-/// start of every track.
+/// Who removes the priming and padding frames. Exactly one party may.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TrimOwner {
-    /// symphonia reads the LAME/Xing tag itself when gapless support is
-    /// enabled, and Vorbis and FLAC carry their own sample-accurate lengths.
+    /// symphonia reads the LAME/Xing tag; Vorbis and FLAC carry their own lengths.
     Decoder,
-    /// The iTunes `iTunSMPB` atom in an MP4. symphonia does not read it, and
-    /// `file-service`'s extraction job writes exactly this container.
+    /// The iTunes `iTunSMPB` atom in an MP4, which symphonia does not read.
     Us,
     /// Uncompressed, so there is nothing to trim.
     Nobody,
@@ -58,8 +42,8 @@ pub enum TrimOwner {
 pub struct DecoderPlan {
     pub container: Container,
     pub trim: TrimOwner,
-    /// Whether to ask symphonia for its own gapless handling. Only ever true
-    /// where `trim` is `Decoder`, or the two would both cut.
+    /// Ask symphonia for its own gapless handling. Only ever true where `trim`
+    /// is `Decoder`, or the two would both cut.
     pub decoder_gapless: bool,
 }
 

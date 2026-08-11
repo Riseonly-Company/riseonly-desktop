@@ -1,13 +1,4 @@
-//! The binding to symphonia.
-//!
-//! Everything above this file works in interleaved f32 frames and knows nothing
-//! about packets, codec parameters or sample formats. That is the whole job
-//! here: turn a byte buffer into frames, and turn symphonia's per-codec buffer
-//! zoo into one representation.
-//!
-//! Not behind a feature, unlike the FFmpeg backend, because symphonia is pure
-//! Rust with no system dependency and no vendored prefix — there is nothing for
-//! a feature to protect a build from.
+//! The binding to symphonia: a byte buffer in, interleaved f32 frames out.
 
 use std::io::Cursor;
 
@@ -33,18 +24,11 @@ pub struct SymphoniaDecoder {
     duration_millis: Option<u64>,
     plan: DecoderPlan,
     trim: Trim,
-    /// Reused across packets. Allocating one per packet is an allocation every
-    /// 20 ms per stream, which is the shape of cost this crate exists to avoid.
     buffer: Option<SampleBuffer<f32>>,
 }
 
 impl SymphoniaDecoder {
-    /// Open a fully downloaded track.
-    ///
-    /// Takes the bytes rather than a path because the reference plays from its
-    /// own disk cache, never from the network directly, and because a seek on
-    /// a buffer cannot fail halfway through a track the way a seek on a partial
-    /// download can.
+    /// Open a fully downloaded track. A partial download is not seekable.
     pub fn open(bytes: Vec<u8>) -> Result<Self, DecodeError> {
         let container = codec::sniff(&bytes).ok_or(DecodeError::Unrecognised)?;
         let plan = DecoderPlan::for_container(container);
@@ -114,8 +98,7 @@ impl SymphoniaDecoder {
         self.plan
     }
 
-    /// The priming and padding this decoder will not remove itself. The pump
-    /// feeds it to a `Trimmer`.
+    /// The priming and padding this decoder will not remove itself.
     pub fn trim(&self) -> Trim {
         self.trim
     }
@@ -148,10 +131,7 @@ impl AudioDecoder for SymphoniaDecoder {
 
             let decoded = match self.decoder.decode(&packet) {
                 Ok(decoded) => decoded,
-                // A recoverable stream error is one corrupt packet, not a
-                // broken file. Skipping it is what every media player does;
-                // failing the track would turn one bad frame into a track the
-                // user cannot play at all.
+                // One corrupt packet is skipped, not fatal to the whole track.
                 Err(SymphoniaError::DecodeError(_)) => continue,
                 Err(SymphoniaError::ResetRequired) => {
                     self.decoder.reset();
@@ -204,10 +184,8 @@ impl AudioDecoder for SymphoniaDecoder {
     }
 }
 
-/// Read whatever gapless information the container carries.
-///
-/// Only the MP4 path does any work: everywhere else the decoder owns the trim
-/// and reading the tag ourselves would invite double-trimming.
+/// Only the MP4 path does work; elsewhere the decoder owns the trim and reading
+/// the tag ourselves would double-trim.
 fn read_trim(bytes: &[u8], container: Container) -> Option<Trim> {
     if !container.needs_our_gapless_trim() {
         return None;
@@ -217,8 +195,7 @@ fn read_trim(bytes: &[u8], container: Container) -> Option<Trim> {
 }
 
 /// symphonia reports "no decoder registered" the same way for a codec we chose
-/// not to build in as for a corrupt one. Reporting Opus as malformed would send
-/// whoever hits it looking for a broken file that is not broken.
+/// not to build in as for a corrupt one.
 fn refusal_or(error: DecodeError, container: Container) -> DecodeError {
     let refused = match container {
         Container::Ogg => Some(codec::AudioCodec::Opus),
@@ -252,8 +229,7 @@ fn map_format_error(error: FormatError) -> DecodeError {
 pub(crate) mod tests {
     use super::*;
 
-    /// A real 16-bit PCM WAV file, built here so the suite needs no fixture on
-    /// disk and the test proves an actual decode rather than a mocked one.
+    /// A real 16-bit PCM WAV file, so the suite needs no fixture on disk.
     pub(crate) fn wav(sample_rate: u32, channels: u16, frames: usize) -> Vec<u8> {
         let data_bytes = frames * channels as usize * 2;
         let mut file = Vec::with_capacity(44 + data_bytes);
@@ -367,8 +343,7 @@ pub(crate) mod tests {
         let mut file = wav(44_100, 2, 1_000);
         file.truncate(60);
 
-        // Either the probe rejects it or the first decode hits the end; both
-        // are fine, neither may crash.
+        // Probe rejection or a short decode are both fine; a crash is not.
         if let Ok(mut decoder) = SymphoniaDecoder::open(file) {
             let mut out = Vec::new();
             let _ = decoder.decode(&mut out);

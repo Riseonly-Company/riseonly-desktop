@@ -1,0 +1,29 @@
+================================================================================
+modules/post/components — the card
+================================================================================
+
+  post/post.rs           PostCard, ported from Post.swift's `feedRow: true` arm.
+  post/post_skeleton.rs  its placeholder, from PostSkeleton.swift.
+
+ONE HANDLER, NOT EIGHT
+
+  A card offers eight affordances. Eight `Rc<dyn Fn>` fields would mean every
+  call site re-declares the same list, so instead there is one `PostAction` enum
+  and one closure taking `(action, row_id)`. The screen matches on it.
+
+NO CLOCK IN HERE
+
+  `now_ms` is a parameter. Fifty rows each asking the system what time it is
+  would be fifty syscalls on the frame path, and rows drawn microseconds apart
+  would disagree about "now".
+
+THE IMAGE HEIGHT IS DECIDED BEFORE THE BYTES ARRIVE
+
+  From `image_sizes`, which the proto guarantees is positionally aligned with
+  `images` and uses width=0 && height=0 as its "not probed" sentinel. Measuring
+  the bitmap instead would resize the row after the scroll had passed it —
+  section 6.2 of the performance guide.
+
+  Only the FIRST image is drawn today. The dots under a multi-image post are
+  honest about the count and static about the position; paging needs the media
+  viewer, which is a Phase 4 element that has never been rendered.

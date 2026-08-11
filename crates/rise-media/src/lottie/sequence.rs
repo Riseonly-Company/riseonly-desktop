@@ -1,22 +1,5 @@
-//! One animation, rasterised once and replayed forever after.
-//!
-//! THE PROBLEM THIS SOLVES
-//!
-//! The obvious implementation re-rasterises every frame on every loop
-//! iteration, for the life of the view. A looping sticker only ever shows
-//! `frame_count` distinct images, so that is the same vector composite done
-//! thousands of times for the same result. With a picker grid of them it is the
-//! whole CPU.
-//!
-//! So each frame is rasterised once, LZ4'd, and replayed from the compressed
-//! set. Sticker art is flat fill over large transparent regions and compresses
-//! by roughly an order of magnitude, which is what makes keeping every visible
-//! sticker animating affordable rather than something to ration.
-//!
-//! Ported from `RiseLottieFrameSequence`. The reference compresses with LZFSE,
-//! which is Apple-only; LZ4 is the portable equivalent at this ratio and is
-//! faster to decode, which matters because decode happens once per sticker per
-//! presentation and rasterisation does not.
+//! One animation, rasterised once and replayed forever after: every frame is
+//! rasterised a single time, LZ4'd, and replayed from the compressed set.
 
 use std::sync::Arc;
 
@@ -27,15 +10,9 @@ use super::raster_policy::{self, SequenceKey};
 /// A rasterised frame, ready to be written into a texture.
 ///
 /// Premultiplied ARGB packed one pixel per `u32` — what rlottie writes, and on
-/// every target this ships to (all little-endian) that is BGRA in memory order,
-/// which is what the atlas samples. There is no second CPU-side copy kept after
-/// the GPU upload; that retention is the documented difference between 300 MB
-/// and 12 MB.
-///
-/// Stored as `u32` rather than bytes so the buffer handed to a C rasteriser is
-/// four-byte aligned by construction. A `Vec<u8>` is allocated with alignment
-/// one, and the allocator returning something better in practice is not the
-/// same as the pointer being valid to write `u32`s through.
+/// every (little-endian) target this ships to, BGRA in memory order. Stored as
+/// `u32` so the buffer handed to a C rasteriser is four-byte aligned by
+/// construction, which a `Vec<u8>` does not guarantee.
 #[derive(PartialEq, Eq, Debug)]
 pub struct DecodedFrame {
     pub dimension: u32,
@@ -47,8 +24,7 @@ impl DecodedFrame {
         &self.pixels
     }
 
-    /// The same frame as bytes, for upload. Widening alignment is always sound
-    /// in this direction; the reverse is what the `u32` storage exists to avoid.
+    /// The same frame as bytes, for upload.
     pub fn bytes(&self) -> &[u8] {
         as_bytes(&self.pixels)
     }
@@ -57,15 +33,11 @@ impl DecodedFrame {
         self.pixels.len() as u64 * 4
     }
 
-    /// Whether anything was actually painted.
+    /// Whether anything was actually painted, sampled every sixteenth pixel.
     ///
-    /// rlottie renders an empty frame rather than failing when an animation
-    /// uses a feature it does not implement — text layers, expressions,
-    /// embedded assets it cannot load. A caller needs to tell that apart from
-    /// a legitimately blank first frame, so it samples the alpha channel.
-    ///
-    /// Every sixteenth pixel is enough to tell a painted frame from an empty
-    /// one without walking the whole surface.
+    /// rlottie renders an EMPTY frame rather than failing when an animation
+    /// uses a feature it does not implement, so a caller needs this to tell
+    /// "will never draw" from a legitimately blank frame.
     pub fn has_visible_pixels(&self) -> bool {
         self.pixels
             .iter()
@@ -75,28 +47,21 @@ impl DecodedFrame {
 }
 
 fn as_bytes(pixels: &[u32]) -> &[u8] {
-    // SAFETY: u8 has alignment 1 and every bit pattern is valid, so any
-    // initialised [u32] is a valid [u8] of four times the length.
+    // SAFETY: u8 has alignment 1 and every bit pattern is valid, so an initialised [u32] is a valid [u8] of 4x the length.
     unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), pixels.len() * 4) }
 }
 
 fn as_bytes_mut(pixels: &mut [u32]) -> &mut [u8] {
     let len = pixels.len() * 4;
-    // SAFETY: as above, and the borrow is exclusive for the lifetime of the
-    // result, so no aliasing u32 view exists while it is held.
+    // SAFETY: as above, and the exclusive borrow means no aliasing u32 view exists while the result is held.
     unsafe { std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<u8>(), len) }
 }
 
 /// The vector rasteriser behind a sequence.
 ///
-/// A trait rather than a direct rlottie call for two reasons: the whole sticker
-/// system is testable with a synthetic implementation and no C++, and ThorVG
-/// can replace rlottie without touching anything above this line.
-///
-/// `render` takes `&mut self` because rlottie's animation handle carries
-/// per-render state; the exclusion is real, and the sequence holds it behind a
-/// lock rather than a channel because what is needed here is exclusion, not
-/// ordering — frames are independent and any order produces the same cache.
+/// `render` takes `&mut self` because an animation handle carries per-render
+/// state; a sequence serialises calls behind a lock. Frames are independent, so
+/// any order produces the same cache.
 pub trait LottieRasterizer: Send {
     fn frame_count(&self) -> usize;
     fn frame_rate(&self) -> f64;
@@ -106,27 +71,19 @@ pub trait LottieRasterizer: Send {
 }
 
 /// Bounds a sequence refuses to accept from a rasteriser.
-///
-/// Both are the reference's. A 2400-frame animation at 30 presentations a
-/// second is eighty seconds of sticker, and a source claiming 500 fps is
-/// telling us its header is wrong.
 pub const MAXIMUM_FRAMES: usize = 2400;
 pub const MAXIMUM_SOURCE_FRAME_RATE: f64 = 120.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SequenceError {
-    /// The rasteriser opened but describes an animation outside the bounds
-    /// above. Treated as a bad file, not as a bug.
+    /// The animation is outside the bounds above. A bad file, not a bug.
     ImplausibleTimeline,
 }
 
 /// Decoded frames shared across every player, with its own byte budget.
 ///
-/// Kept separate from the compressed store so the two budgets are independent:
-/// this one can be evicted freely because refilling it is an LZ4 decode, not a
-/// rasterisation. That asymmetry is the reason the reference has two caches and
-/// not one, and it is what makes memory pressure cost a decode instead of
-/// freezing every sticker on screen.
+/// Kept separate from the compressed store because refilling this one costs an
+/// LZ4 decode rather than a rasterisation, so it can be evicted freely.
 #[derive(Debug)]
 pub struct DecodedFrameCache {
     ceiling_bytes: u64,
@@ -215,11 +172,8 @@ impl DecodedFrameCache {
         }
     }
 
-    /// The first response to memory pressure.
-    ///
-    /// Nothing stops animating and no rlottie work is repeated — unlike
-    /// dropping the compressed set, which would put every visible sticker back
-    /// through a full rasterisation.
+    /// The first response to memory pressure: nothing stops animating and no
+    /// rasterisation is repeated, unlike dropping the compressed set.
     pub fn clear(&self) {
         let mut state = self.state.lock();
         state.entries.clear();
@@ -336,19 +290,14 @@ impl FrameSequence {
         index % self.frame_count
     }
 
-    /// Non-blocking read of an already decoded frame.
-    ///
-    /// Safe to call from the display tick: it touches neither the rasteriser
-    /// nor the compressed store, so a tick can never be blocked behind a
-    /// rasterisation happening on a worker.
+    /// Non-blocking read of an already decoded frame. Safe on the display tick:
+    /// it touches neither the rasteriser nor the compressed store.
     pub fn cached_frame(&self, index: usize) -> Option<Arc<DecodedFrame>> {
         self.decoded.get(&self.key, self.wrap(index))
     }
 
     /// Produce a frame: decoded-cache hit, else LZ4 decode, else rasterise.
-    ///
-    /// Blocking, and meant to be called from a raster worker rather than from
-    /// the GPUI thread.
+    /// Blocking — call it from a raster worker, never from the GPUI thread.
     pub fn frame(&self, index: usize) -> Option<Arc<DecodedFrame>> {
         let wrapped = self.wrap(index);
 
@@ -365,8 +314,6 @@ impl FrameSequence {
         };
 
         let decoded = match compressed {
-            // Replay: no rasteriser involvement at all, so a warm sticker costs
-            // an LZ4 decode rather than a full vector composite.
             Some(bytes) => Arc::new(self.decompress(&bytes)?),
             None => {
                 let (frame, bytes) = self.rasterize_compressing(wrapped)?;
@@ -379,12 +326,9 @@ impl FrameSequence {
         Some(decoded)
     }
 
-    /// Index of the first sampled frame that actually paints something.
-    ///
-    /// `None` means the animation uses features the rasteriser cannot render
-    /// and comes out empty, which the caller uses to fall back to a static
-    /// poster rather than showing a hole. Rendered frames stay cached, so the
-    /// probe is not wasted work.
+    /// Index of the first sampled frame that actually paints something. `None`
+    /// means the animation comes out empty and the caller should show a poster
+    /// instead. Probed frames stay cached.
     pub fn first_visible_frame(&self) -> Option<usize> {
         let last = self.frame_count.saturating_sub(1);
         let mut probed = Vec::new();
@@ -405,11 +349,9 @@ impl FrameSequence {
         None
     }
 
-    /// Release everything and refuse further work.
-    ///
-    /// Called by the cache when a sequence is evicted. The rasteriser is
-    /// dropped here rather than in `Drop` so eviction frees the C++ animation
-    /// immediately instead of whenever the last `Arc` happens to go.
+    /// Release everything and refuse further work. Explicit rather than `Drop`
+    /// so eviction frees the C++ animation immediately, not when the last
+    /// `Arc` happens to go.
     pub fn teardown(&self) {
         {
             let mut state = self.state.lock();
@@ -474,9 +416,6 @@ pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A rasteriser that paints a solid colour derived from the frame index and
-    /// counts how often it was asked to. The count is the assertion the whole
-    /// design exists for.
     pub(crate) struct CountingRasterizer {
         pub frames: usize,
         pub rate: f64,

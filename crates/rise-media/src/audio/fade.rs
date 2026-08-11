@@ -1,21 +1,12 @@
 //! Volume ramps, and the duck that a manual resume has to be able to cancel.
 //!
-//! Ported from `ROMusicFilePlayer`'s fade methods. Three of them exist because
-//! the product ducks music under other audio — a voice message, a video in the
-//! feed, a call — and the fourth exists because of a race the reference
-//! documents in a comment: the duck schedules a pause for when the ramp
-//! finishes, and if the user hits play in the meantime, that pending pause must
-//! not land. `restore_full_volume` is what cancels it.
-//!
-//! Applied per FRAME, not per sample. Ramping per sample walks the gain between
-//! the left and right channel of the same instant, which is a moving stereo
-//! image rather than a volume change.
+//! Applied per frame, not per sample: ramping per sample walks the gain between
+//! the two channels of one instant and moves the stereo image.
 
 /// What the mixer should do once the ramp reaches its target.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OnComplete {
-    /// Stop the device. The duck's whole purpose: silence first, then pause, so
-    /// the transition is not a cut.
+    /// Stop the device — silence first, then pause, so it is not a cut.
     Pause,
 }
 
@@ -81,11 +72,8 @@ impl VolumeRamp {
         self.set(1.0, over_frames);
     }
 
-    /// Back to full immediately, cancelling any pending pause.
-    ///
-    /// This is the cancellation the reference needs: without it, a user who
-    /// presses play during a duck gets full volume and then, a fraction of a
-    /// second later, a pause from the ramp that was already in flight.
+    /// Back to full immediately, cancelling any pending pause — what a manual
+    /// resume during a duck must call.
     pub fn restore_full_volume(&mut self) {
         self.current = 1.0;
         self.target = 1.0;

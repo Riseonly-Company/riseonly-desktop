@@ -1,22 +1,7 @@
 //! Removing the silence the encoder added, so an album plays as one piece.
 //!
-//! WHY THIS IS OURS AND NOT THE DECODER'S
-//!
-//! Every lossy codec has a start-up transient. MP3 and AAC both begin with a
-//! block of samples that are an artefact of the encoder priming its filterbank,
-//! and both pad the end to a whole frame. Play the file back verbatim and you
-//! get a fraction of a second of silence between two tracks that were recorded
-//! as one continuous take. On a live album, a DJ set, or anything with a
-//! crossfade written into the master, that gap is the defect users report.
-//!
-//! symphonia reads the LAME tag and handles this itself for MP3. It does NOT
-//! for AAC in an MP4, and `file-service`'s audio extraction job produces
-//! exactly that (`-c:a aac`, muxed to `.m4a`). So the iTunes `iTunSMPB` atom is
-//! ours to parse, and this file is what PHASES.txt means by "if the catalogue
-//! is AAC, iTunSMPB/edit-list trimming is yours".
-//!
-//! Everything here is pure byte arithmetic over a buffer. No decoder, no
-//! device, no allocation.
+//! symphonia already applies the MP3 LAME tag itself; the AAC `iTunSMPB` atom
+//! is ours to parse.
 
 /// How much of a decoded stream is real audio.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -39,10 +24,7 @@ impl Trim {
     }
 }
 
-/// Applies a `Trim` to a stream of decoded blocks.
-///
-/// Stateful because the priming can span several decoded blocks and the end
-/// cut almost never lands on a block boundary.
+/// Applies a `Trim` to a stream of decoded blocks, in order.
 #[derive(Clone, Copy, Debug)]
 pub struct Trimmer {
     trim: Trim,
@@ -108,10 +90,6 @@ impl Trimmer {
     }
 
     /// Restart the trim from a seek.
-    ///
-    /// Seeking past the priming means there is nothing left to skip; seeking
-    /// back to the beginning means there is. Getting this wrong is a click at
-    /// the start of every track the user scrubs.
     pub fn seek_to(&mut self, frame: u64) {
         self.skipped = self.trim.start_frames.min(frame);
         self.emitted = frame.saturating_sub(self.trim.start_frames);
@@ -119,10 +97,6 @@ impl Trimmer {
 }
 
 /// The iTunes gapless atom, as written by iTunes, afconvert and FFmpeg.
-///
-/// The value is a run of space-separated hex fields; only the first four
-/// matter: a zero, the encoder delay, the padding, and the original frame
-/// count as a sixteen-digit number.
 pub fn parse_itunsmpb(value: &str) -> Option<Trim> {
     let mut fields = value.split_ascii_whitespace();
 
@@ -143,16 +117,10 @@ pub fn parse_itunsmpb(value: &str) -> Option<Trim> {
 
 /// Find the `iTunSMPB` value in an MP4's metadata.
 ///
-/// The atom is a free-form `----` entry: a `mean`, a `name` holding the string
-/// `iTunSMPB`, and a `data` atom holding the value. Rather than walking the
-/// whole box tree to reach `moov/udta/meta/ilst`, this locates the name and
-/// reads the `data` atom that follows it, which is the only structure the
-/// format allows there. Every read is bounds-checked; the input is a file off
-/// the network.
+/// Every read is bounds-checked: the input is an untrusted file off the network.
 pub fn find_itunsmpb(bytes: &[u8]) -> Option<&str> {
     const NAME: &[u8] = b"iTunSMPB";
-    /// The `data` atom follows the `name` atom immediately, so anything beyond
-    /// a few dozen bytes means this is not the structure we think it is.
+    /// The `data` atom follows the `name` atom immediately.
     const SEARCH_WINDOW: usize = 64;
 
     let name_at = bytes
@@ -177,10 +145,6 @@ pub fn find_itunsmpb(bytes: &[u8]) -> Option<&str> {
 }
 
 /// Frames one MPEG audio frame carries, from the four-byte frame header.
-///
-/// MPEG-1 Layer III is 1152; MPEG-2 and the unofficial 2.5 halve it. Using the
-/// wrong one makes the computed track length wrong by a factor of two, which
-/// then cuts the last half of the track off as if it were padding.
 pub fn mpeg_frames_per_packet(header: [u8; 4]) -> Option<u64> {
     if header[0] != 0xFF || (header[1] & 0xE0) != 0xE0 {
         return None;
@@ -199,15 +163,8 @@ pub fn mpeg_frames_per_packet(header: [u8; 4]) -> Option<u64> {
 }
 
 /// The LAME/Xing tag an MP3 encoder writes into its first frame.
-///
-/// symphonia reads this itself, so nothing in the player calls this on the
-/// MP3 path. It exists because the same numbers are what a trace needs to
-/// explain a gap, and because a decoder that stops reading it would otherwise
-/// fail silently.
 pub fn parse_lame_tag(head: &[u8]) -> Option<Trim> {
-    /// The Xing header's maximum size: tag, flags, frame count, byte count,
-    /// hundred-entry table of contents, quality. LAME always writes all of
-    /// them, so its own extension begins at a fixed offset.
+    /// LAME always writes every Xing field, so its extension begins at a fixed offset.
     const LAME_OFFSET: usize = 120;
     const DELAY_OFFSET: usize = 21;
     const SEARCH_WINDOW: usize = 2048;
@@ -247,9 +204,7 @@ pub fn parse_lame_tag(head: &[u8]) -> Option<Trim> {
     })
 }
 
-/// Both fields are twelve bits, so anything can be read out of arbitrary bytes.
-/// Real encoder delays are a few hundred to about three thousand frames; a
-/// value near the ceiling means the bytes were not a LAME tag.
+/// Both fields are twelve bits, so a value near the ceiling means the bytes were not a tag.
 fn is_plausible(delay: u64, padding: u64) -> bool {
     delay <= 3_000 && padding <= 6_000
 }
@@ -413,8 +368,6 @@ mod tests {
         }
     }
 
-    /// A minimal `----` free-form atom: name atom, then a data atom holding the
-    /// value, laid out the way an MP4 muxer writes it.
     fn itunsmpb_atom(value: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&[0, 0, 0, 16]);
@@ -479,7 +432,6 @@ mod tests {
         assert_eq!(mpeg_frames_per_packet([0xFF, 0xFD, 0x90, 0x00]), None);
     }
 
-    /// One MPEG-1 Layer III frame carrying an Info tag with a LAME extension.
     fn info_tag_frame(delay: u16, padding: u16, packets: u32) -> Vec<u8> {
         let mut frame = vec![0u8; 1024];
         frame[0..4].copy_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
@@ -527,8 +479,7 @@ mod tests {
 
     #[test]
     fn two_tracks_trimmed_and_joined_lose_no_frames_and_add_no_silence() {
-        // The whole point, stated as arithmetic: an album split into two files
-        // must play back as exactly the frames that were in the master.
+        // An album split into two files plays back as exactly the master's frames.
         let first = Trim {
             start_frames: 1105,
             valid_frames: Some(44_100 * 3),

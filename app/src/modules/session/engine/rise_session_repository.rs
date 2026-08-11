@@ -8,7 +8,6 @@ use tokio::sync::{mpsc, watch};
 use super::core::rise_session_rpc as rpc;
 use super::rise_session_engine_models::{SessionEntry, normalize};
 
-/// How many rows a page asks for. The reference's twenty.
 const PAGE_SIZE: u32 = 20;
 
 pub trait SessionTransport: Send + Sync {
@@ -46,11 +45,7 @@ impl SessionTransport for LiveSessionTransport {
     }
 }
 
-/// Who the requests are made as.
-///
-/// Supplied per call rather than held, because the account can change under a
-/// long-lived repository and a request stamped with the previous user's id is
-/// one the gateway will refuse — or, worse, answer.
+// Carried per call: the account can change under a long-lived repository.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SessionIdentity {
     pub user_id: String,
@@ -66,9 +61,6 @@ pub struct SessionSnapshot {
     pub has_more: bool,
     pub cursor: Option<String>,
     pub error_key: Option<&'static str>,
-    /// Set once, when the server says this client ended its own session. The
-    /// shell reads it and signs out; the repository does not, because signing
-    /// out is auth's job.
     pub should_sign_out: bool,
     pub did_load: bool,
 }
@@ -141,7 +133,6 @@ struct SessionState {
     publisher: watch::Sender<Arc<SessionSnapshot>>,
     revision: u64,
     rows: Vec<SessionEntry>,
-    /// What to restore if an optimistic removal is refused.
     previous: Option<Vec<SessionEntry>>,
     is_loading: bool,
     is_mutating: bool,
@@ -203,8 +194,6 @@ impl SessionState {
                 self.has_more = page.has_more;
                 self.did_load = true;
             }
-            // A failed refresh never clears a page that is already on screen:
-            // the cache stays visible and the error is shown beside it.
             Err(key) => self.error_key = Some(key),
         }
 
@@ -213,8 +202,6 @@ impl SessionState {
     }
 
     async fn load_more(&mut self, identity: SessionIdentity) {
-        // One in-flight edge request, and never one past the end. Without both,
-        // a list that reaches its bottom asks for the same page forever.
         if self.is_loading || !self.has_more {
             return;
         }
@@ -242,8 +229,6 @@ impl SessionState {
                 self.cursor = page.cursor;
                 self.has_more = page.has_more;
             }
-            // An error on a later page must not block the edge forever: the
-            // cursor is kept, so scrolling again retries.
             Err(key) => self.error_key = Some(key),
         }
 
@@ -267,7 +252,7 @@ impl SessionState {
 
         let response: rpc::GetUserSessionsResponse =
             serde_json::from_value(payload).unwrap_or_default();
-        if response.error.is_some() {
+        if rise_engine::remote_message(response.error.as_deref()).is_some() {
             return Err("settings_sessions_title");
         }
 
@@ -292,8 +277,6 @@ impl SessionState {
             return;
         }
 
-        // Optimistic, with the previous list kept for the rollback. The row goes
-        // as soon as it is pressed; if the server refuses, it comes back.
         self.previous = Some(self.rows.clone());
         self.rows = match (&session_id, is_all) {
             (_, true) => self
@@ -327,7 +310,7 @@ impl SessionState {
                 let response: rpc::DeleteUserSessionsResponse =
                     serde_json::from_value(payload).unwrap_or_default();
 
-                if response.error.is_some() {
+                if rise_engine::remote_message(response.error.as_deref()).is_some() {
                     self.rollback();
                 } else {
                     if response.should_logout == Some(true) {

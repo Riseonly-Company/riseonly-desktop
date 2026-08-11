@@ -12,19 +12,12 @@ use crate::core::animations;
 
 use super::slides::onboarding_slide::SLIDES;
 
-/// The first screen, and the only one that runs before there is an account.
 pub struct Onboarding {
     current: usize,
-    /// One player per slide, built once. Rebuilding on every slide change would
-    /// re-rasterise a whole timeline for a swipe the user can make four times in
-    /// two seconds.
     animations: HashMap<&'static str, Entity<LottieView>>,
 }
 
 pub enum OnboardingEvent {
-    /// Skip and "get started" are the same intent in the reference: both leave
-    /// onboarding for sign-up. Kept as one event so the shell has one thing to
-    /// route rather than two that must not diverge.
     Finished,
 }
 
@@ -35,10 +28,6 @@ impl Onboarding {
         let side = rise_ui::theme(cx as &App).auth.slide_art_size;
         let scale = window.scale_factor();
 
-        // Every slide's animation starts loading at once. Four of them, one
-        // visible at a time, and the ones behind are what the user reaches in
-        // the next second — waiting until they are on screen would show an empty
-        // square for as long as a raster takes.
         let animations = SLIDES
             .iter()
             .map(|slide| {
@@ -76,12 +65,6 @@ impl Onboarding {
         cx.emit(OnboardingEvent::Finished);
     }
 
-    /// The dots under the slide.
-    ///
-    /// The current one is a pill rather than a dot, which is the reference's
-    /// treatment. It does not animate between the two: on gpui a permanently
-    /// running transition costs compositor work that never shows up in a frame
-    /// trace, and this one would run on the screen the user sees first.
     fn pagination(&self, theme: &AppTheme) -> impl IntoElement {
         let metrics = theme.auth;
 
@@ -185,12 +168,13 @@ impl Render for Onboarding {
                     .cursor_pointer()
                     .on_click(cx.listener(|view, _: &ClickEvent, _, cx| view.advance(cx)))
                     .child(
-                        // The same height as a form field, from the same token:
-                        // the primary action is never a different size from the
-                        // control above it.
                         ButtonUi::sized(&theme, ButtonTone::Primary, metrics.field_height)
                             .w_full()
-                            .child(tr(if self.is_last() { "get_started" } else { "next" })),
+                            .child(tr(if self.is_last() {
+                                "get_started"
+                            } else {
+                                "next"
+                            })),
                     ),
             )
     }

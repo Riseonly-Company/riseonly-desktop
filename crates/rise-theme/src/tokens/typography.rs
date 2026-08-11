@@ -4,20 +4,12 @@ use crate::tokens::density::Density;
 
 /// The family the product ships, and therefore the only family that measures the
 /// same on all three platforms.
-///
-/// The reference draws with the system font, which is the one thing a desktop
-/// port cannot copy: CoreText, cosmic-text and DirectWrite each resolve a system
-/// family differently, and on Linux `system-ui` is not a family name at all, so
-/// every measured layout would move between hosts.
 pub const FONT_FAMILY: &str = "Inter";
 
 /// Every weight the bundle actually contains.
 ///
-/// [`Typography::font`] snaps a requested weight to the nearest entry here. That
-/// snap is the point of the constant: asking gpui for a weight with no shipped
-/// face makes the text stack synthesise or substitute one, and the substitute is
-/// a different family on each OS — which is the failure this crate exists to
-/// prevent.
+/// [`Typography::font`] snaps a requested weight to the nearest entry here; a
+/// weight with no shipped face is substituted per-OS by the text stack.
 pub const SHIPPED_WEIGHTS: [FontWeight; 6] = [
     FontWeight::LIGHT,
     FontWeight::NORMAL,
@@ -37,15 +29,8 @@ pub struct TextStyleToken {
 
 /// Text tokens for one density.
 ///
-/// The reference has no typography layer: it writes `.system(size: 14, weight:
-/// .semibold)` at 908 call sites across 17 distinct sizes and 6 weights. Naming
-/// all of those would invent a design system the reference does not have, and
-/// leaving them at the call site would leave a length outside the theme, where
-/// density can never reach it.
-///
-/// So both exist. [`Typography::style`] takes the reference's own numbers and is
-/// the only sanctioned way a port writes one down; the named steps cover the
-/// pairs the reference uses most, so ordinary new code never spells a number.
+/// Prefer the named steps; [`Typography::style`] is the only sanctioned way to
+/// write a size down, because it applies density and pins the family.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Typography {
     density: Density,
@@ -53,9 +38,6 @@ pub struct Typography {
 }
 
 impl Typography {
-    /// 1.3 rather than a per-size table: the reference lets the system derive
-    /// line height from the size, and one ratio reproduces that without
-    /// inventing seventeen more numbers.
     const LINE_HEIGHT_RATIO: f32 = 1.3;
 
     pub fn new(density: Density) -> Self {
@@ -69,12 +51,7 @@ impl Typography {
         self.family.clone()
     }
 
-    /// The reference's own size and weight, scaled for this density.
-    ///
-    /// `size_pt` is a design value carried over from `riseonly-ios`, not a magic
-    /// number: passing it through here is what applies the density multiplier
-    /// and pins the family, which is exactly what a bare `px()` at a call site
-    /// would skip.
+    /// A design size in points and a weight, scaled for this density.
     pub fn style(&self, size_pt: f32, weight: FontWeight) -> TextStyleToken {
         let size = self.density.scale(size_pt);
 
@@ -143,8 +120,7 @@ impl Typography {
     }
 
     /// The heading a full-window screen opens with — onboarding and the sign-in
-    /// wizard. The reference's `px: 32` and `px: 27` bold; one step apart on the
-    /// ramp because a desktop window is not held at arm's length.
+    /// wizard.
     pub fn display(&self) -> TextStyleToken {
         self.style(32.0, FontWeight::BOLD)
     }

@@ -10,11 +10,8 @@ pub enum DeepLinkError {
     Empty,
 }
 
-/// A link the OS handed us, parsed but not yet routed.
-///
-/// Parsing is separate from routing on purpose: this crate must not know what a
-/// chat is. It produces a target and parameters; the app decides what screen
-/// that means.
+/// A link the OS handed us, parsed but not yet routed: it carries a target and
+/// parameters, and the app decides what screen that means.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DeepLink {
     pub target: String,
@@ -26,9 +23,8 @@ impl DeepLink {
     /// Accepts `riseonly://chat/42?message=7` and, for links shared as web URLs,
     /// `https://riseonly.net/chat/42`.
     ///
-    /// The scheme check is not cosmetic: dev, staging and production each own a
-    /// scheme, and without the check a staging build installed beside
-    /// production would swallow production links.
+    /// `expected_scheme` and `web_host` are per-environment: without them a staging
+    /// build installed beside production would swallow production links.
     pub fn parse(raw: &str, expected_scheme: &str, web_host: &str) -> Result<Self, DeepLinkError> {
         let raw = raw.trim();
         let (scheme, rest) = raw.split_once("://").ok_or(DeepLinkError::Malformed)?;
@@ -37,8 +33,8 @@ impl DeepLink {
             return Err(DeepLinkError::Malformed);
         }
 
-        // Schemes are case-insensitive per RFC 3986, and the OS does hand over
-        // upper-case ones — a Windows registry handler is a common source.
+        // Schemes are case-insensitive per RFC 3986, and a Windows registry
+        // handler does hand over upper-case ones.
         let lowered = scheme.to_ascii_lowercase();
         let path = match lowered.as_str() {
             s if s.eq_ignore_ascii_case(expected_scheme) => rest,
@@ -97,11 +93,8 @@ fn decode(raw: &str) -> String {
 
     while index < bytes.len() {
         match bytes[index] {
-            // Sliced as BYTES, never as `&str`. `%` followed by a multi-byte
-            // character puts the end of a `&str` slice inside that character
-            // and panics — and this input is an argv entry from a link the user
-            // clicked in someone else's app, so a panic here is a crash the app
-            // did not choose.
+            // Sliced as BYTES, never as `&str`: `%` before a multi-byte character puts a
+            // `&str` slice boundary inside that character and panics on attacker-shaped argv.
             b'%' if index + 2 < bytes.len() => {
                 match std::str::from_utf8(&bytes[index + 1..index + 3])
                     .ok()
@@ -137,9 +130,7 @@ mod tests {
 
     #[test]
     fn a_percent_in_front_of_a_multi_byte_character_does_not_panic() {
-        // Every one of these ends a two-byte hex window inside a character, and
-        // a `&str` slice there is an immediate panic. The link arrives as argv
-        // from another application, so the app must survive it.
+        // Each of these ends the two-byte hex window inside a character.
         for raw in [
             "riseonly://chat/%aé",
             "riseonly://chat/%zд",

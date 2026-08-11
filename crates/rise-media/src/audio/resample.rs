@@ -1,34 +1,12 @@
 //! Playing a 44.1 kHz file on a device that only runs at 48 kHz.
 //!
-//! WHY THIS EXISTS AT ALL
-//!
-//! On macOS a CoreAudio device will usually open at the file's own rate and
-//! nothing here runs. On Windows, WASAPI in shared mode is fixed at whatever
-//! the user set in the sound control panel — 48 kHz on almost every machine —
-//! and a 44.1 kHz MP3 played through it verbatim comes out 8.8% sharp and 8.8%
-//! fast. That is not a subtle artefact; it is the whole catalogue in the wrong
-//! key.
-//!
-//! WHAT THIS IS AND IS NOT
-//!
-//! Catmull-Rom interpolation over four points. It is well behaved for the
-//! ratios that actually occur (44.1↔48, 22.05→48) and it is a hundred lines
-//! with no dependency. It is NOT a mastering-grade sample-rate converter: a
-//! windowed-sinc polyphase filter has lower aliasing in the top octave. If a
-//! measurement ever shows that mattering, `rubato` is the replacement and this
-//! file is the seam it drops into.
-//!
-//! Pure and deterministic, so it is tested on a Mac even though the platform
-//! that needs it is the one nobody here can run.
+//! Catmull-Rom interpolation over four points — well behaved for the ratios
+//! that occur, but not a mastering-grade sample-rate converter.
 
 use super::format::StreamFormat;
 
-/// Frames of history kept between blocks.
-///
-/// Cubic interpolation at position `p` reads `floor(p) - 1` through
-/// `floor(p) + 2`, so three input frames have to survive into the next call or
-/// every block boundary is a discontinuity — an audible tick at whatever rate
-/// the decoder happens to hand over blocks.
+/// Frames of history kept between blocks: cubic interpolation at `p` reads
+/// `floor(p) - 1` through `floor(p) + 2`, so three must survive the block.
 const HISTORY_FRAMES: usize = 3;
 
 #[derive(Debug)]
@@ -55,8 +33,7 @@ impl Resampler {
         }
     }
 
-    /// Whether the rates match, in which case the caller skips this entirely
-    /// rather than paying for an interpolation that changes nothing.
+    /// Whether the rates match, in which case the caller skips this entirely.
     pub fn is_identity(&self) -> bool {
         (self.step - 1.0).abs() < f64::EPSILON
     }
@@ -65,8 +42,8 @@ impl Resampler {
         self.step
     }
 
-    /// Drop the history. Called on a seek: the three frames from before the
-    /// jump would otherwise be interpolated into the first frames after it.
+    /// Drop the history — required on a seek, or pre-jump frames blend into
+    /// the first frames after it.
     pub fn reset(&mut self) {
         self.history.fill(0.0);
         self.position = HISTORY_FRAMES as f64;
@@ -120,8 +97,7 @@ impl Resampler {
         self.history.extend_from_slice(&self.work[tail..]);
         self.history.resize(HISTORY_FRAMES * self.channels, 0.0);
 
-        // The read position moves with the window: everything before the kept
-        // history has been consumed.
+        // The read position moves with the window; everything before it is consumed.
         self.position -= (frames - kept) as f64;
         self.position = self.position.max(1.0);
     }
@@ -230,8 +206,7 @@ mod tests {
         let input = sine(44_100, 440.0, 4096, 1);
         let mut out = Vec::new();
 
-        // Deliberately uneven blocks: a decoder hands over whatever a packet
-        // happened to contain, never a round number.
+        // Uneven blocks: a decoder hands over whatever a packet contained.
         let mut offset = 0;
         for size in [37, 1153, 512, 71, 2048, 275] {
             let end = (offset + size).min(input.len());

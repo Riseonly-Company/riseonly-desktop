@@ -1,0 +1,100 @@
+================================================================================
+rise-widgets/modal_ui — EVERY modal in the product
+================================================================================
+
+READ FIRST
+  ../../../../CONTEXT.txt              workspace rules, boundaries, commands
+  ../../CONTEXT.txt                    what rise-widgets owns
+  ../overlay/CONTEXT.txt               why nothing may leave the window
+  ../country_menu/CONTEXT.txt          why a floating surface is never GlassPanel
+
+THE RULE
+
+  ANYTHING THAT FLOATS OVER THE PAGE IS A `ModalUi`.
+
+  A dialog, a confirmation, a picker, a hand-off to another app, an error the
+  user has to acknowledge. If it dims the page behind it, it is this component.
+
+  A hand-rolled `div().absolute().inset_0().bg(scrim)` is a bug even when it
+  looks right, and it looked right three separate times before this existed:
+  the country picker, the sign-in refusal and the Telegram hand-off each grew
+  their own, and each got a DIFFERENT subset of the four things below correct.
+  That is not carelessness — it is what happens when a component is a pattern
+  instead of a type.
+
+WHAT THIS DIRECTORY OWNS
+
+  modal_frame.rs   `ModalWidth`, `ModalFrame`, `resolve_frame()`. Pure
+                   arithmetic over gpui geometry: no elements, no theme lookup,
+                   no window, no App. It is the only place that decides how big
+                   a modal is.
+
+  modal_ui.rs      `ModalUi`, `ModalAction`, `ModalDismiss`, the Esc binding.
+                   It only paints.
+
+THE FOUR THINGS A MODAL HAS TO GET RIGHT
+
+  1. IT IS OPAQUE. Never `GlassPanel`. A native material is an AppKit view BELOW
+     the Metal layer, so everything gpui has already drawn stays on top of it —
+     correct for a rail, which has nothing behind it, and fatal for a dialog,
+     which has the whole page behind it. The page shows straight through and
+     both become unreadable. This is not a preference; it is how the compositor
+     is layered.
+
+  2. IT OCCLUDES. gpui reports every hitbox under the pointer unless one blocks
+     it. Without `.occlude()` a click on a button INSIDE the modal also lands on
+     the dismiss scrim, and the modal closes before the button fires. The
+     symptom is a button that "sometimes does nothing".
+
+  3. IT FITS. `resolve_frame` bounds the width by the viewport and the height by
+     `theme.modal.max_height_fraction`. A dialog taller than its window has no
+     outside to click, and clicking outside is the one dismissal every modal
+     offers.
+
+  4. ESC WORKS, and means the same as clicking outside. It needs
+     `.track_focus(..)`: the action is dispatched up the FOCUS chain, so a modal
+     nothing focuses never sees the key.
+
+THE INVARIANT THAT DECIDES CORRECTNESS
+
+  `resolve_frame` is TOTAL, in `overlay::place`'s sense. Every input — a
+  viewport of zero, of NaN, of infinity, a `Fixed` wider than the display, a
+  negative margin — returns a positive, drawable frame and never panics. That
+  is not defensive programming: gpui reports a zero viewport for at least one
+  frame while a window is being created, and a live resize hands over whatever
+  is in flight.
+
+CHOOSING THE KNOBS
+
+  width      Name the CONTENT, not a number. `Small` is a sentence and two
+             buttons; `Medium` is a form or an explanation with an action;
+             `Large` is a picker with a search field. `Fixed` exists for a modal
+             that must match a column it is about — pass that column's token,
+             never a literal.
+
+  dismiss    `Anywhere` is the default and is right for almost everything.
+             `Explicit` is for a question that must be ANSWERED — a destructive
+             confirmation, a step the flow cannot continue past — where
+             dismissing by accident and dismissing on purpose would look
+             identical and mean different things.
+
+             Note the third case, which is neither: the Telegram hand-off has
+             NO cancel. Dismissing it means the same as its second button, so it
+             stays `Anywhere` and its `on_dismiss` does the same work the button
+             does. Copy that shape when "close" is a legitimate answer rather
+             than a refusal to answer.
+
+  actions    Footer buttons, primary first. Zero is legal: a modal that is only
+             content still gets the scrim, the ceiling and the occlusion, which
+             are exactly the parts a hand-rolled one forgets.
+
+WHAT IT MUST NEVER DO
+
+  Take a literal size. `check-design-tokens.py` fails the build, and rightly:
+  a modal that hard-codes 460 is a modal that ignores density.
+
+  Hold state. `ModalUi` is a builder that renders; whether the modal is OPEN is
+  the caller's business, exactly as `ContextMenuState` emits rather than decides.
+
+  Escape the window. gpui has no native popups off Wayland — see
+  ../overlay/CONTEXT.txt. Everything is a child of this window.

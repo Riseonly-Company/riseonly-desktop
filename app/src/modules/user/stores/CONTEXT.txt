@@ -1,0 +1,40 @@
+================================================================================
+modules/user/stores — the triad
+================================================================================
+
+  user/user_actions/       thin command facade. Dispatches to the domain. No
+                           state.
+  user/user_services/      cheap selectors over the immutable snapshot. Every
+                           method is a borrow: nothing here decodes, sorts or
+                           maps.
+  user/user_interactions/  the only thing a view calls.
+
+The extra `user/` level is the reference's own: modules/user/stores/user/
+user-actions/user-actions.swift, because this module has a second domain
+(subscription) and a third (user-locale) beside it. modules/post has no such
+level and neither does the port — the layout follows the reference file by file,
+not a rule applied uniformly.
+
+Store files carry ZERO comments — no file headers, no doc comments, no section
+markers, no inline notes (STORE_ARCHITECTURE.md section 17, and the COMMENTS
+section of the root CONTEXT.txt). Anything worth saying is said here instead.
+
+THE GUARD ON A FOLLOW IS IN THE INTERACTIONS STORE, THE TRANSACTION IS NOT
+
+  `toggle_follow` refuses your own profile and refuses a second toggle while one
+  is in flight, which is validation and a guard — section 7's list exactly. The
+  optimistic write, the debounce and the rollback are in the repository, because
+  they are a transaction over server state and section 5 forbids optimistic
+  state in the actions store.
+
+  The debounce sits one layer lower than the canon puts it for the reason the
+  root CONTEXT.txt gives: stores run on the GPUI thread and rise-engine may never
+  see gpui, so the actor is the only place with a runtime.
+
+NO UI EVENTS HERE YET
+
+  modules/post's services store emits OpenComments / OpenProfile because the
+  shell routes them. This module emits nothing: settings, the relationship lists,
+  create-post and direct chat have no destination to route to, and an event
+  nobody consumes is an API that lies about what the screen can do. Add the
+  emitter with the screen that answers it.

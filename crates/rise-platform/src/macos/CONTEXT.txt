@@ -16,7 +16,9 @@ WHY THIS DIRECTORY EXISTS AT ALL
 
   This directory is for the seams whose macOS body is not a handful of message
   sends: something with its own build step, its own bookkeeping, or its own
-  source language. Today that is exactly one, `glass/`.
+  source language. Today those are `glass/` and `window_corner.rs`; the latter
+  owns the raw NSView/NSWindow/CAMetalLayer bridge and the window-shadow
+  refresh.
 
   Adding a directory here is a claim that the binding is too large to sit under
   the policy that drives it. Two files and a build script is the bar. A seam that

@@ -1,9 +1,6 @@
 //! A click on an overlay's own content must reach it, not the scrim behind it.
-//!
-//! Every other test in this crate drives the state machine directly, which
-//! cannot see this: the defect is entirely in the element tree, where gpui's hit
-//! test reports EVERY hitbox under the pointer and the window-filling scrim is
-//! one of them. So this one goes through a real window and a real click.
+//! gpui's hit test reports every hitbox under the pointer, so this goes through
+//! a real window and a real click.
 
 use std::cell::Cell;
 use std::rc::Rc;

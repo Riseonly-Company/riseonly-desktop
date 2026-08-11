@@ -43,9 +43,8 @@ impl fmt::Display for ScopeId {
 
 /// Captured identity of the work that started an async operation.
 ///
-/// The ABA case is the reason every field is checked rather than just the
-/// scope: screen A closes, B opens, A opens again, and a result from the first
-/// A would otherwise look valid because the scope matches again.
+/// Account, epoch, scope and generation are all checked, so a scope that closes
+/// and reopens (ABA) does not revive a result from the earlier one.
 #[derive(Clone, Debug)]
 pub struct StaleGuard {
     account: AccountId,

@@ -1,14 +1,4 @@
-//! Runtime string catalogue.
-//!
-//! Two things changed from the reference's original two-language
-//! implementation, and both were bugs rather than preferences:
-//!
-//! * the fallback used to be Russian, so a key missing from `en.json` surfaced
-//!   as Russian text to an English speaker. The chain is now
-//!   `chosen -> base language of a regional variant -> en`.
-//! * plural selection hardcoded Russian rules, so every other language with a
-//!   non-trivial plural system rendered the wrong form. Selection now follows
-//!   the CLDR family declared for the language in `app_language_catalog`.
+//! Runtime string catalogue: lookup chain `chosen -> base of a regional variant -> en`.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -24,9 +14,7 @@ pub type Dictionary = HashMap<String, String>;
 
 pub const LOCALE_FILE_PREFIX: &str = "locale-";
 
-/// Where parsed locales come from. The crate never decides: a bundled build
-/// points at `Riseonly.app/Contents/Resources/assets/locales`, a dev run points
-/// at the repository's `assets/locales`, and tests point at a fixture.
+/// Where parsed locales come from; the caller installs the directory or fixture.
 pub trait LocaleSource: Send + Sync {
     fn load(&self, code: &str) -> Option<Dictionary>;
 }
@@ -57,9 +45,7 @@ impl LocaleSource for DirectoryLocaleSource {
     }
 }
 
-/// Renders every key as itself. What the process answers with before a real
-/// source is installed, so a caller that translates during startup gets a key
-/// rather than a panic.
+/// Renders every key as itself: what a translate call gets before a source is installed.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EmptyLocaleSource;
 
@@ -69,8 +55,7 @@ impl LocaleSource for EmptyLocaleSource {
     }
 }
 
-/// Parsed dictionaries are cached: switching language rebuilds the scene and
-/// would otherwise re-read and re-parse the same ~150 KB of JSON per locale.
+/// A locale source plus a cache of parsed dictionaries, one per language code.
 pub struct Catalogue {
     source: Arc<dyn LocaleSource>,
     cache: RwLock<HashMap<String, Arc<Dictionary>>>,
@@ -107,21 +92,16 @@ impl Catalogue {
         loaded
     }
 
-    /// Warm a language's dictionaries. Parsing a locale on the launch or switch
-    /// path costs a frame, so callers run this off the UI thread ahead of the
-    /// switch and the eventual `reload` becomes a map lookup rather than disk
-    /// I/O plus a parse.
+    /// Warm a language's dictionaries off the UI thread so the later `load` is a
+    /// map lookup rather than disk I/O plus a parse.
     pub fn prewarm(&self, code: &str) {
         for entry in lookup_chain(code) {
             let _ = self.dictionary(entry);
         }
     }
 
-    /// The reference matches `code` against the catalogue exactly and falls
-    /// back to English when that misses, because its own store normalises
-    /// first. Nothing enforces that here and the tag can arrive from a server
-    /// field or three different OS APIs, so the tag is normalised: `ru_RU` must
-    /// not silently render the whole app in English.
+    /// Load a language. The tag is normalised first, so `ru_RU` resolves to `ru`;
+    /// an unrecognised tag falls back to [`BASE_LANGUAGE`].
     pub fn load(&self, code: &str) -> I18n {
         let resolved = normalize(code)
             .and_then(language)
@@ -169,8 +149,7 @@ impl I18n {
             .map(String::as_str)
     }
 
-    /// A key nothing in the chain defines renders as itself. Never as another
-    /// language's copy.
+    /// A key nothing in the chain defines renders as itself, never as another language's copy.
     pub fn translate<'a>(&'a self, key: &'a str) -> &'a str {
         self.lookup(key).unwrap_or(key)
     }
@@ -189,10 +168,8 @@ impl I18n {
         self.plural.category(n)
     }
 
-    /// Resolve a counted key, falling back to `other` when this language does
-    /// not define the exact category. Every catalogue defines `other` for the
-    /// families that need one, so a counted string normally renders as real
-    /// copy rather than a raw key.
+    /// Resolve a counted key, falling back to the `_other` suffix when this
+    /// language does not define the exact category.
     pub fn plural_template(&self, key: &str, n: i64) -> String {
         let exact = format!("{key}_{}", self.plural_variant(n).as_str());
         if let Some(value) = self.lookup(&exact) {
@@ -210,9 +187,7 @@ impl I18n {
         format_printf(&self.plural_template(key, n), &[arg])
     }
 
-    /// The `chat_thread_title_*` shape: plural-suffixed keys whose values are in
-    /// the braced dialect. `String(format:)` cannot substitute those, which is
-    /// why the reference bypasses its own plural helper for that family.
+    /// For plural-suffixed keys whose values use the braced dialect (`chat_thread_title_*`).
     pub fn translate_plural_named(&self, key: &str, n: i64, args: &[(&str, &str)]) -> String {
         format_named(&self.plural_template(key, n), args)
     }
@@ -277,22 +252,10 @@ struct Spec {
     end: usize,
 }
 
-/// The largest field width or precision a specifier may name.
-///
-/// The longest single string across the 41 shipped catalogues is 299 characters,
-/// so 1024 is well past anything a translation genuinely pads to, while keeping
-/// what one specifier can allocate bounded — a typo of `%2000000000d` would
-/// otherwise ask for a two-gigabyte fill, and `%.1000000f` panics inside `format!`
-/// outright, since Rust caps float precision at `u16::MAX`.
+/// Caps what one specifier can allocate; `format!` also panics past `u16::MAX` float precision.
 const MAX_FIELD_WIDTH: usize = 1024;
 
-/// `%[index$][flags][width][.precision][length]conversion`.
-///
-/// Returns `None` for anything that is not a specifier this catalogue can
-/// contain, which the caller emits verbatim. The catalogue is translated by
-/// humans in 41 languages; a stray `%` must degrade, not panic. A width or
-/// precision beyond [`MAX_FIELD_WIDTH`] is treated as exactly that kind of
-/// typo and degrades the same way.
+/// Parses `%[index$][flags][width][.precision]conversion`; `None` means emit verbatim.
 fn parse_spec(bytes: &[u8], start: usize) -> Option<Spec> {
     let mut at = start + 1;
     if at >= bytes.len() {
@@ -450,10 +413,9 @@ fn pad(body: String, spec: &Spec) -> String {
 
 /// printf-style substitution.
 ///
-/// Positional and `%n$` indexed specifiers, `%@ %s %d %f` and a literal `%%`.
-/// A malformed specifier and a missing argument both degrade to the specifier
-/// text itself: 41 human-translated locales will eventually contain both, and
-/// neither may take the process down.
+/// Positional and `%n$` indexed specifiers, `%@ %s %d %f` and a literal `%%`. A
+/// malformed specifier or a missing argument degrades to the specifier text
+/// itself rather than panicking.
 pub fn format_printf(template: &str, args: &[FormatArg<'_>]) -> String {
     let bytes = template.as_bytes();
     let mut out = String::with_capacity(template.len() + 16);
@@ -504,10 +466,7 @@ pub fn format_printf(template: &str, args: &[FormatArg<'_>]) -> String {
 /// Braced substitution: `{name}` from a key-value list.
 ///
 /// One pass, so a substituted value that itself contains braces is never
-/// re-substituted — the reference's chained `replacingOccurrences` calls can do
-/// exactly that when a user-supplied name contains `{count}`. An unknown
-/// placeholder is left intact, which is what keeps documentation copy like
-/// `/bot<TOKEN>/{method}` readable.
+/// re-substituted. An unknown placeholder is left intact.
 pub fn format_named(template: &str, args: &[(&str, &str)]) -> String {
     let bytes = template.as_bytes();
     let mut out = String::with_capacity(template.len() + 16);
@@ -577,8 +536,7 @@ pub fn reload(code: &str) {
     runtime().write().expect("i18n runtime poisoned").active = loaded;
 }
 
-/// Warm a language ahead of a switch. Synchronous on purpose: this crate owns
-/// no threads, so the caller decides which one pays the parse.
+/// Warm a language ahead of a switch. Synchronous: the caller picks the thread that pays the parse.
 pub fn prewarm(code: &str) {
     let catalogue = Arc::clone(&runtime().read().expect("i18n runtime poisoned").catalogue);
     catalogue.prewarm(code);
@@ -885,9 +843,7 @@ mod tests {
         assert_eq!(format_printf("[%05d]", &[FormatArg::Int(42)]), "[00042]");
     }
 
-    /// A translator typo is the realistic source of these. Before the cap,
-    /// `%1000000d` really did return a one-million-character String and
-    /// `%.1000000f` panicked inside `format!`.
+    /// Before the cap, `%1000000d` returned a one-million-char String and `%.1000000f` panicked.
     #[test]
     fn printf_degrades_on_a_width_no_string_could_need() {
         assert_eq!(
@@ -1043,8 +999,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// The process-wide runtime is single global state; one test owns it so the
-    /// suite cannot race with itself.
+    /// The process-wide runtime is global state; one test owns it so the suite cannot race.
     #[test]
     fn the_process_runtime_installs_switches_and_prewarms() {
         assert_eq!(tr("hello"), "hello", "no source installed yet");

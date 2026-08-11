@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Pixels, Render, Styled, Window,
-    div,
+    App, AppContext, Context, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Render, SharedString, Styled, Window, div,
 };
 use image::{Delay, Frame, RgbaImage};
 use smallvec::SmallVec;
@@ -13,45 +13,47 @@ use super::sequence::{DecodedFrameCache, FrameSequence, LottieRasterizer};
 
 /// A Lottie animation on screen.
 ///
-/// One `RenderImage` per animation, never one per frame. gpui advances the frame
-/// index of a multi-frame image itself and uploads each frame into the atlas
-/// under ONE image id, so the whole animation is one live texture set — which is
-/// the rule `PERFORMANCE_GUIDE.md` states as "one persistent texture per stream"
-/// and the difference between the documented 300 MB case and 12 MB.
-///
-/// It also means gpui owns the timing, so the animation honours Reduce Motion
-/// without this file knowing what that is.
+/// One `RenderImage` per animation, never one per frame: gpui advances the
+/// frame index itself under ONE image id, so the whole animation is a single
+/// live texture set and gpui owns the timing — Reduce Motion and inactive
+/// windows are honoured without this file knowing what either is.
 pub struct LottieView {
     image: Option<Arc<gpui::RenderImage>>,
     side: Pixels,
-    /// Set when rasterisation produced nothing a user would see. rlottie
-    /// renders an EMPTY frame rather than failing when an animation uses a
-    /// feature it does not implement, so a caller has to be able to tell "not
-    /// loaded yet" from "this will never draw" and put something else there.
+    key: SharedString,
     is_blank: bool,
 }
 
-/// What a caller has to supply. Kept as data so the loading policy — which
-/// thread, which cache, which budget — belongs to the app rather than to the
-/// element.
+/// What a caller has to supply. Data rather than behaviour, so the loading
+/// policy stays with the app.
 pub struct LottieRequest {
     pub json: Vec<u8>,
     pub cache_key: String,
     pub side: Pixels,
     pub scale_factor: f32,
-    /// How much decoded frame data this animation may hold. The element
-    /// rasterises its whole timeline up front, so this is a real ceiling rather
-    /// than a hint.
+    /// How much decoded frame data this animation may hold. The whole timeline
+    /// is rasterised up front, so this is a ceiling rather than a hint.
     pub budget_bytes: u64,
 }
 
 impl LottieView {
-    pub fn empty(side: Pixels) -> Self {
+    pub fn empty(key: impl Into<SharedString>, side: Pixels) -> Self {
         Self {
             image: None,
             side,
+            key: key.into(),
             is_blank: false,
         }
+    }
+
+    /// The id the animation frame is drawn under, and the whole reason it moves.
+    ///
+    /// gpui's `Img` only animates a multi-frame image when the element carries
+    /// an `ElementId`, because it keeps the frame index in element state.
+    /// Without an id the index stays 0 and nothing even repaints; with one,
+    /// autoplay and looping come for free. Every animation needs its own id.
+    pub fn element_id(&self) -> ElementId {
+        ElementId::Name(self.key.clone())
     }
 
     pub fn is_ready(&self) -> bool {
@@ -68,12 +70,9 @@ impl LottieView {
         cx.notify();
     }
 
-    /// Rasterises a whole animation into one animatable image.
-    ///
-    /// Blocking and CPU-bound: it belongs on a background executor, never on the
-    /// GPUI thread. The frame set is strided down from the source rate by
-    /// `raster_policy::presentation_stride`, so a 60 fps source costs half the
-    /// frames of a naive port at a cadence nobody can see the difference in.
+    /// Rasterises a whole animation into one animatable image, strided down to
+    /// `raster_policy`'s cadence. Blocking and CPU-bound: it belongs on a
+    /// background executor, never on the GPUI thread.
     pub fn rasterize(
         request: &LottieRequest,
         open: impl FnOnce(&[u8], &str) -> Option<Box<dyn LottieRasterizer>>,
@@ -87,8 +86,7 @@ impl LottieView {
         let cache = Arc::new(DecodedFrameCache::new(request.budget_bytes));
         let sequence = FrameSequence::open(key, rasterizer, cache).ok()?;
 
-        // An animation that never paints anything is reported as such rather
-        // than drawn as a hole.
+        // An animation that never paints anything is refused, not drawn as a hole.
         sequence.first_visible_frame()?;
 
         let stride = sequence.presentation_stride().max(1);
@@ -99,8 +97,11 @@ impl LottieView {
         let mut index = 0usize;
         while index < sequence.frame_count() {
             let decoded = sequence.frame(index)?;
-            let buffer =
-                RgbaImage::from_raw(decoded.dimension, decoded.dimension, decoded.bytes().to_vec())?;
+            let buffer = RgbaImage::from_raw(
+                decoded.dimension,
+                decoded.dimension,
+                decoded.bytes().to_vec(),
+            )?;
             frames.push(Frame::from_parts(buffer, 0, 0, delay));
             index += stride;
         }
@@ -113,10 +114,7 @@ impl LottieView {
     }
 }
 
-/// How long each SAMPLED frame is shown.
-///
-/// The stride drops frames, so the delay has to grow by the same factor or the
-/// animation plays back faster than it was authored.
+// The delay grows with the stride, or the animation plays faster than authored.
 fn frame_delay(source_frame_rate: f64, stride: usize) -> Delay {
     let seconds = stride as f64 / source_frame_rate;
     Delay::from_saturating_duration(Duration::from_secs_f64(seconds.clamp(0.001, 1.0)))
@@ -127,36 +125,38 @@ impl Render for LottieView {
         let mut container = div().w(self.side).h(self.side).flex_none();
 
         if let Some(image) = self.image.clone() {
-            container = container.child(gpui::img(image).w(self.side).h(self.side));
+            container = container.child(
+                gpui::img(image)
+                    // Not decoration: an unidentified `img` never animates. See `element_id`.
+                    .id(self.element_id())
+                    .w(self.side)
+                    .h(self.side),
+            );
         }
 
         container
     }
 }
 
-/// Builds the view and fills it in when the raster finishes.
-///
-/// The entity exists immediately with nothing in it, so the screen lays out at
-/// its final geometry from the first frame — the layout does not jump when the
-/// animation arrives, which is the same rule the skeletons follow.
+/// Builds the view and fills it in when the raster finishes. The entity exists
+/// immediately at its final geometry, so the layout does not jump when the
+/// animation arrives.
 pub fn spawn_lottie(
     request: LottieRequest,
     open: impl FnOnce(&[u8], &str) -> Option<Box<dyn LottieRasterizer>> + Send + 'static,
     cx: &mut App,
 ) -> Entity<LottieView> {
     let side = request.side;
-    let view = cx.new(|_| LottieView::empty(side));
+    let key = request.cache_key.clone();
+    let view = cx.new(|_| LottieView::empty(key, side));
 
     let handle = view.clone();
     cx.spawn(async move |cx| {
-        // Rasterising a whole timeline is CPU-bound work measured in tens of
-        // milliseconds. On the GPUI thread that is a dropped frame at best; the
-        // background executor is where it belongs, and the result comes back as
-        // one short commit.
         let image = cx
             .background_spawn(async move { LottieView::rasterize(&request, open) })
             .await;
-        let _ = handle.update(cx, |view, cx| view.set_image(image, cx));
+        // A screen closed mid-raster drops the view; that is normal, not an error.
+        handle.update(cx, |view, cx| view.set_image(image, cx));
     })
     .detach();
 
@@ -166,11 +166,28 @@ pub fn spawn_lottie(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::px;
+
+    // Drop the id and gpui freezes the picture on frame 0, with nothing logged anywhere.
+    #[test]
+    fn a_view_is_identified_or_it_will_never_animate() {
+        let view = LottieView::empty("red_panda/hello", px(168.0));
+        assert_eq!(
+            view.element_id(),
+            gpui::ElementId::Name("red_panda/hello".into())
+        );
+    }
+
+    // Shared element state would let one animation drive the other's frame index.
+    #[test]
+    fn two_animations_never_share_an_identity() {
+        let hello = LottieView::empty("red_panda/hello", px(168.0));
+        let party = LottieView::empty("party", px(168.0));
+        assert_ne!(hello.element_id(), party.element_id());
+    }
 
     #[test]
     fn a_strided_animation_keeps_its_authored_duration() {
-        // 60 fps sampled every other frame is 30 fps, so each sampled frame has
-        // to be shown twice as long or the animation runs at double speed.
         let one_to_one = frame_delay(60.0, 1);
         let strided = frame_delay(60.0, 2);
 
@@ -178,10 +195,9 @@ mod tests {
             Duration::from(strided) > Duration::from(one_to_one),
             "dropping frames without lengthening the delay speeds the animation up"
         );
-        // Compared as a ratio rather than in whole milliseconds: 1/60 s is
-        // 16.67 ms, and asserting 2 x 16 == 33 fails on the rounding rather
-        // than on the behaviour.
-        let ratio = Duration::from(strided).as_secs_f64() / Duration::from(one_to_one).as_secs_f64();
+        // A ratio, not milliseconds: 2 x 16.67 ms rounds to 33 and would fail on rounding.
+        let ratio =
+            Duration::from(strided).as_secs_f64() / Duration::from(one_to_one).as_secs_f64();
         assert!(
             (ratio - 2.0).abs() < 0.01,
             "a stride of 2 must double the per-frame delay; got {ratio}"
@@ -192,7 +208,10 @@ mod tests {
     fn an_implausible_frame_rate_cannot_produce_a_zero_or_endless_delay() {
         for rate in [0.0001, 1.0, 240.0, f64::MAX] {
             let delay = Duration::from(frame_delay(rate, 1));
-            assert!(delay >= Duration::from_millis(1), "{rate} produced {delay:?}");
+            assert!(
+                delay >= Duration::from_millis(1),
+                "{rate} produced {delay:?}"
+            );
             assert!(delay <= Duration::from_secs(1), "{rate} produced {delay:?}");
         }
     }

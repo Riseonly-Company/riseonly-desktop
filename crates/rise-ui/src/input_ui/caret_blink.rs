@@ -3,17 +3,13 @@ use std::time::Duration;
 pub const BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How long the caret stays solid after the last edit.
-///
-/// A caret that blinks through a burst of typing reads as a dropped frame, so
-/// every mutation interrupts the cycle and only this much silence restarts it.
 pub const PAUSE_AFTER_EDIT: Duration = Duration::from_millis(500);
 
 /// The blink cycle, with no timer in it.
 ///
-/// Every scheduled wake-up carries the epoch it was scheduled under. Anything
-/// that disturbs the cycle bumps the epoch, so a timer that was already in
-/// flight resolves into a no-op instead of racing the new one. That is the whole
-/// mechanism; the state itself is testable without a window.
+/// Every scheduled wake-up carries the epoch it was scheduled under; anything
+/// that disturbs the cycle bumps the epoch, so a timer already in flight
+/// resolves into a no-op.
 #[derive(Clone, Copy, Debug)]
 pub struct CaretBlink {
     visible: bool,

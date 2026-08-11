@@ -1,36 +1,14 @@
 //! Deciding whether to update, proving the bytes are the ones that were
 //! promised, and knowing what "install" means on each OS.
 //!
-//! This seam does not fetch anything. Every byte this product moves goes through
-//! rise-engine, and a platform crate that opened its own HTTP client would be a
-//! second transport with its own timeouts, proxy handling and TLS story. The
-//! caller downloads; this file decides, verifies and plans. The side effect is
-//! that the whole of the interesting part is a pure function of values and is
-//! tested without a network, a server, or a second machine.
+//! This seam does not fetch anything: the caller downloads, this file decides,
+//! verifies and plans.
 //!
-//! Three things here are not obvious and cost a release each if rediscovered
-//! late:
-//!
-//! - **A checksum is not a signature.** The sha256 in the manifest travels in
-//!   the same document as the URL it describes, so whoever can rewrite one can
-//!   rewrite the other. It proves the download was not corrupted; it proves
-//!   nothing about who wrote it. That is why [`apply_permission`] refuses to
-//!   install in a production build until Phase 8 ships a signed feed, and why
-//!   that refusal is a value rather than a comment.
-//! - **Windows cannot replace its own image.** The OS holds a lock on the
-//!   running executable, so the swap has to be performed by a separate process
-//!   that outlives it — see [`InstallMethod::HelperProcess`]. At the pinned gpui
-//!   rev `path_for_auxiliary_executable` is `bail!("not yet implemented")` on
-//!   the Windows backend, so [`helper_beside_executable`] is not a fallback, it
-//!   is the path that will actually resolve there.
-//! - **On Linux the plan follows the install shape, not the OS.** An AppImage
-//!   replaces itself; a deb or rpm must not be touched, because the package
-//!   manager owns those files and overwriting them leaves its database
-//!   describing a version that is no longer on disk.
-//!
-//! Only the macOS binding has ever run. Every decision above it is a pure
-//! function of [`HostOs`] and [`InstallShape`], and the tests exercise all three
-//! hosts and both Linux shapes on this Mac.
+//! A checksum is not a signature — it travels in the same document as the URL it
+//! describes — so [`apply_permission`] refuses a production install from an
+//! unsigned feed. Windows cannot replace its own running image, hence
+//! [`InstallMethod::HelperProcess`]. On Linux the plan follows the install shape
+//! rather than the OS, because a deb or rpm must not be touched.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -43,10 +21,6 @@ use thiserror::Error;
 
 use crate::gpui_shim::PlatformSupport;
 use crate::host_os::HostOs;
-
-// ---------------------------------------------------------------------------
-// Version
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VersionError {
@@ -62,10 +36,8 @@ pub enum VersionError {
 
 /// Three numbers, ordered by the first that differs.
 ///
-/// The field order *is* the ordering — `derive(Ord)` compares them in
-/// declaration order — so reordering these fields silently reverses release
-/// precedence. Comparing as text instead would put `1.9.0` after `1.10.0`,
-/// which is the single most common way an updater strands its users.
+/// The field order *is* the ordering: `derive(Ord)` compares them in declaration
+/// order, so reordering them silently reverses release precedence.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Version {
     pub major: u32,
@@ -85,15 +57,8 @@ impl Version {
     /// Accepts one to three numeric components, and a leading `v` because
     /// release tags carry one.
     ///
-    /// A missing component is zero: `1.2` and `1.2.0` are the same release. The
-    /// alternative — treating the shorter form as older — offers an update whose
-    /// version equals the installed one, and the user is then invited to install
-    /// the same build after every restart, forever.
-    ///
-    /// A pre-release suffix (`1.2.3-beta`) is refused rather than truncated. The
-    /// channel is a field of the manifest, not a decoration on the version, and
-    /// a suffix silently dropped would make a beta compare equal to the release
-    /// it precedes.
+    /// A missing component is zero: `1.2` and `1.2.0` are the same release. A
+    /// pre-release suffix (`1.2.3-beta`) is refused rather than truncated.
     pub fn parse(raw: &str) -> Result<Self, VersionError> {
         let trimmed = raw.trim();
         let text = trimmed.strip_prefix(['v', 'V']).unwrap_or(trimmed);
@@ -114,12 +79,8 @@ impl Version {
         Ok(Self::new(components[0], components[1], components[2]))
     }
 
-    /// The version this binary was compiled as.
-    ///
-    /// Every crate in the workspace shares one version, so this is the
-    /// application's version and not merely this crate's. If that ever stops
-    /// being true, the caller has to pass its own instead — a mismatch here does
-    /// not fail, it quietly compares the wrong number.
+    /// The version this binary was compiled as. Every crate in the workspace
+    /// shares one version, so this is the application's version too.
     pub fn of_this_build() -> Result<Self, VersionError> {
         Self::parse(env!("CARGO_PKG_VERSION"))
     }
@@ -161,14 +122,8 @@ impl<'de> Deserialize<'de> for Version {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Channels
-// ---------------------------------------------------------------------------
-
-/// Which builds an install is willing to receive.
-///
-/// Defaults to stable: a client that cannot read its own setting must never
-/// wake up on the beta channel.
+/// Which builds an install is willing to receive. Defaults to stable: a client
+/// that cannot read its own setting must never wake up on beta.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum ReleaseChannel {
     #[default]
@@ -193,8 +148,6 @@ impl ReleaseChannel {
     }
 
     /// Beta takes both and picks whichever is newer; stable takes only stable.
-    /// The asymmetry is the whole point of having channels — a stable install
-    /// that could be handed a beta build has no channel at all.
     pub const fn accepts(self, offered: Self) -> bool {
         !matches!((self, offered), (Self::Stable, Self::Beta))
     }
@@ -208,10 +161,8 @@ impl fmt::Display for ReleaseChannel {
 
 /// A channel exactly as the feed spelled it.
 ///
-/// Unknown values are carried rather than rejected. If a third channel is ever
-/// published and an installed client refuses to parse the whole feed because of
-/// it, that client can never update again — the fix would have to arrive through
-/// the mechanism it just broke. An unrecognised channel is simply not for us.
+/// Unknown values are carried rather than rejected: a client that refuses to
+/// parse the feed can never update again. An unrecognised channel is not for us.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ChannelTag(String);
@@ -235,10 +186,6 @@ impl From<ReleaseChannel> for ChannelTag {
         Self(channel.as_str().to_owned())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Targets
-// ---------------------------------------------------------------------------
 
 /// The CPU an artifact was built for. A feed publishes per architecture, so the
 /// OS alone does not identify a download.
@@ -264,8 +211,7 @@ impl Arch {
         }
     }
 
-    /// `None` on a CPU this product publishes nothing for. Guessing here would
-    /// hand a 32-bit or RISC-V build somebody else's binary.
+    /// `None` on a CPU this product publishes nothing for.
     pub const fn current() -> Option<Self> {
         #[cfg(target_arch = "x86_64")]
         {
@@ -322,10 +268,6 @@ const fn host_key(host: HostOs) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The manifest
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ManifestError {
     #[error("the feed is not a manifest: {0}")]
@@ -338,8 +280,7 @@ pub enum ManifestError {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Artifact {
     pub url: String,
-    /// Declared length. Checked before the hash, so a truncated download is
-    /// rejected without hashing a few hundred megabytes to learn the same thing.
+    /// Declared length. Checked before the hash.
     pub size: u64,
     /// Lower- or upper-case hex. Required: see [`UpdateManifest::parse`].
     pub sha256: String,
@@ -352,8 +293,7 @@ pub struct Release {
     pub channel: ChannelTag,
     #[serde(default)]
     pub notes_url: Option<String>,
-    /// Keyed by [`Target::key`]. Unknown keys are inert — a feed that starts
-    /// publishing `linux-riscv64` must not disturb anyone who cannot use it.
+    /// Keyed by [`Target::key`]. Unknown keys are inert.
     #[serde(default)]
     pub artifacts: BTreeMap<String, Artifact>,
 }
@@ -365,19 +305,10 @@ pub struct UpdateManifest {
 }
 
 impl UpdateManifest {
-    /// Unknown fields and unknown channels are tolerated, because a future feed
-    /// must not brick today's clients. A missing or malformed `sha256` is not:
-    /// that is a publishing mistake in our own feed, and an artifact nobody can
-    /// verify is worse than no artifact at all — it would be installed on trust
-    /// alone. Failing the whole document is how that mistake gets noticed before
-    /// it reaches anyone.
+    /// Unknown fields and unknown channels are tolerated; a missing or malformed
+    /// `sha256` fails the whole document.
     pub fn parse(json: &str) -> Result<Self, ManifestError> {
-        // serde will happily build a struct out of a JSON *sequence*, filling
-        // absent trailing fields from `default`. That makes a bare `[]` parse as
-        // an empty manifest, and — far worse — makes a feed published as an
-        // array of releases read as "no updates available" instead of failing.
-        // A manifest is an object; anything else is a publishing mistake and
-        // must be loud.
+        // serde builds a struct from a JSON *sequence* too, so `[]` would read as empty.
         let document: serde_json::Value = serde_json::from_str(json)
             .map_err(|error| ManifestError::Malformed(error.to_string()))?;
 
@@ -413,10 +344,6 @@ fn is_sha256_hex(raw: &str) -> bool {
     raw.len() == 64 && raw.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-// ---------------------------------------------------------------------------
-// The decision
-// ---------------------------------------------------------------------------
-
 /// A build this install may take, with everything needed to fetch and check it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AvailableUpdate {
@@ -428,20 +355,16 @@ pub struct AvailableUpdate {
     pub notes_url: Option<String>,
 }
 
-/// Why there is nothing to install. Each of these is a different sentence in a
-/// settings screen, which is why they are not collapsed into one.
+/// Why there is nothing to install; each is a different sentence in the UI.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum UpToDateReason {
     NothingNewer,
-    /// A newer build exists but on a channel this install does not accept. The
-    /// setting that would let the user have it is the useful thing to offer.
+    /// A newer build exists but on a channel this install does not accept.
     NewerBuildOnAnotherChannel {
         version: Version,
         channel: ReleaseChannel,
     },
-    /// This build is newer than anything in the feed — a local build, or a feed
-    /// that was rolled back. Never an update, because an "update" here means
-    /// installing an older build over a newer one.
+    /// This build is newer than anything in the feed. Never an update.
     AheadOfFeed {
         newest: Version,
     },
@@ -453,8 +376,7 @@ pub enum UpToDateReason {
 pub enum UnsupportedReason {
     /// This build runs on a CPU nothing is published for.
     UnknownArchitecture,
-    /// A newer build exists and does not include this platform. The user's
-    /// machine has stopped being served, which is not the same as being current.
+    /// A newer build exists and does not include this platform.
     NoArtifactForTarget { target: String, version: Version },
 }
 
@@ -482,8 +404,7 @@ impl UpdateDecision {
 /// skipped this platform; then a newer build on another channel; then being
 /// ahead of the feed; then nothing newer; then an empty feed.
 ///
-/// Only a release *strictly* newer than the installed one can be offered, which
-/// is what makes a downgrade unrepresentable rather than merely unlikely.
+/// Only a release *strictly* newer than the installed one can be offered.
 pub fn decide(
     installed: &Version,
     channel: ReleaseChannel,
@@ -584,9 +505,7 @@ pub fn decide_for_this_machine(
     }
 }
 
-/// The same version published on both channels is one build that was promoted,
-/// so a beta install takes the stable copy of it: same bytes' worth of change,
-/// more people have run it.
+/// The same version on both channels is one promoted build; prefer the stable copy.
 fn beats(candidate: (Version, ReleaseChannel), incumbent: (Version, ReleaseChannel)) -> bool {
     match candidate.0.cmp(&incumbent.0) {
         Ordering::Greater => true,
@@ -596,10 +515,6 @@ fn beats(candidate: (Version, ReleaseChannel), incumbent: (Version, ReleaseChann
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Integrity
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum IntegrityError {
@@ -642,13 +557,7 @@ pub fn verify(bytes: &[u8], artifact: &Artifact) -> Result<(), IntegrityError> {
     }
 }
 
-/// Folds the whole digest before deciding, instead of returning at the first
-/// byte that differs.
-///
-/// The timing argument is thin for a checksum an attacker already knows, and
-/// this is not what makes the update safe — the signature Phase 8 adds is. It is
-/// written this way because a comparison of two digests is exactly the routine
-/// that gets copied into a place where the early exit does matter.
+/// Folds the whole digest rather than returning at the first byte that differs.
 fn digests_match(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
     if left.len() != right.len() {
@@ -662,14 +571,7 @@ fn digests_match(left: &str, right: &str) -> bool {
     difference == 0
 }
 
-// ---------------------------------------------------------------------------
-// Permission to apply
-// ---------------------------------------------------------------------------
-
-/// Whether this build is one a stranger might be running.
-///
-/// Defaults to the strict arm: a caller that forgets to say gets the behaviour
-/// that cannot hurt anyone.
+/// Whether this build is one a stranger might be running. Defaults to the strict arm.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum BuildProfile {
     Development,
@@ -677,12 +579,8 @@ pub enum BuildProfile {
     Production,
 }
 
-/// What is known about where the feed came from.
-///
-/// Nothing in this crate can produce [`FeedProvenance::Signed`] today, and that
-/// is deliberate. Phase 8 owns signing; the value exists now so the decision
-/// that depends on it is written and tested now, and so that when signature
-/// checking lands there is exactly one place that returns it.
+/// What is known about where the feed came from. Nothing in this crate can
+/// produce [`FeedProvenance::Signed`] yet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum FeedProvenance {
     #[default]
@@ -727,10 +625,8 @@ impl fmt::Display for ApplyPermission {
     }
 }
 
-/// The signature check comes first on purpose. It is the reason that outlives
-/// the flag: in a production build with an unsigned feed the answer is no
-/// whatever the flag says, and reporting "disabled" there would invite somebody
-/// to turn it on and expect a different outcome.
+/// The signature check comes first: in a production build with an unsigned feed
+/// the answer is no whatever the flag says.
 pub const fn apply_permission(policy: ApplyPolicy) -> ApplyPermission {
     match (policy.profile, policy.provenance) {
         (BuildProfile::Production, FeedProvenance::Unsigned) => {
@@ -746,10 +642,6 @@ pub const fn apply_permission(policy: ApplyPolicy) -> ApplyPermission {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Where this copy of the app lives
-// ---------------------------------------------------------------------------
-
 /// How this copy was put on disk. The Linux plan turns on this rather than on
 /// the OS.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -759,20 +651,13 @@ pub enum InstallShape {
     SelfContained,
     /// A single-file Linux AppImage. Replacing it replaces one file.
     AppImage,
-    /// dpkg, rpm, a Flatpak or a snap owns these files. Overwriting them leaves
-    /// the package database describing something that is no longer there, and
-    /// the next `apt upgrade` reverts or breaks the app. They are also all
-    /// root-owned or read-only, so a session process cannot write them anyway —
-    /// refusing is honest, whereas trying fails halfway.
+    /// dpkg, rpm, a Flatpak or a snap owns these files; overwriting them corrupts
+    /// the package database, and they are root-owned besides.
     PackageManaged,
 }
 
 /// Prefixes whose contents belong to the system rather than to the app.
-///
-/// `/opt` is deliberately in the list even though hand-unpacked tarballs also
-/// live there: distributions ship `.deb`s into `/opt`, and the cost of being
-/// wrong in that direction is a corrupted package database, while the cost of
-/// being wrong in this direction is that the user downloads a new build by hand.
+/// `/opt` is deliberately included even though hand-unpacked tarballs live there.
 const PACKAGE_OWNED_PREFIXES: [&str; 6] = ["/usr/", "/bin/", "/sbin/", "/opt/", "/snap/", "/app/"];
 
 /// Everything a plan needs to know about this installation.
@@ -783,9 +668,8 @@ pub struct InstallSite {
     /// What an update replaces: the `.app` bundle on macOS, the executable on
     /// Windows, the AppImage file or the unpacked tree on Linux.
     pub installed: PathBuf,
-    /// A writable directory for the downloaded artifact. It must be on the same
-    /// volume as `installed`, because the swap is a rename and a rename across
-    /// volumes is a copy that can be interrupted halfway through an application.
+    /// A writable directory for the downloaded artifact. Must be on the same
+    /// volume as `installed`: the swap is a rename.
     pub staging: PathBuf,
     /// Windows only, and only where it was found on disk.
     pub helper: Option<PathBuf>,
@@ -795,11 +679,9 @@ impl InstallSite {
     /// `app_path` is what gpui reports: the bundle path on macOS, the executable
     /// elsewhere.
     ///
-    /// `appimage` is `$APPIMAGE`, and it is not a nicety. Inside an AppImage the
-    /// executable path points into the temporary squashfs mount
-    /// (`/tmp/.mount_XXXXXX/AppRun`), which disappears when the app exits;
-    /// `$APPIMAGE` is the only thing that names the file the user actually
-    /// launched and therefore the only thing an update can replace.
+    /// `appimage` is `$APPIMAGE`. Inside an AppImage the executable path points
+    /// into a temporary mount that disappears on exit, so only `$APPIMAGE` names
+    /// the file an update can replace.
     pub fn resolve(
         host: HostOs,
         app_path: &Path,
@@ -837,26 +719,18 @@ fn is_package_owned(path: &Path) -> bool {
         .any(|prefix| text.starts_with(prefix))
 }
 
-// ---------------------------------------------------------------------------
-// The install plan
-// ---------------------------------------------------------------------------
-
 /// The name the Windows swap helper ships under, beside the executable.
 pub const WINDOWS_HELPER_EXECUTABLE: &str = "riseonly-updater.exe";
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum InstallMethod {
-    /// macOS. Rename the running `.app` aside, rename the staged one into its
-    /// place, then relaunch. The kernel keeps the running image alive through
-    /// its inode, so replacing the bundle underneath a running app is allowed.
+    /// macOS. Rename the running `.app` aside, rename the staged one in, then
+    /// relaunch; the kernel keeps the running image alive through its inode.
     SwapBundle,
-    /// Windows. The OS holds a lock on the running `.exe`: it cannot rename
-    /// itself out of the way, and nothing in this process can do it either. A
-    /// separate program waits for this process to exit and performs the swap.
+    /// Windows. The OS locks the running `.exe`, so a separate program waits for
+    /// this process to exit and performs the swap.
     HelperProcess { helper: PathBuf },
-    /// Windows with no helper on disk. There is no in-process fallback — the
-    /// lock is the OS's, not ours — so the only honest answer is to send the
-    /// user to a download.
+    /// Windows with no helper on disk. There is no in-process fallback.
     HelperUnavailable,
     /// A Linux AppImage: one file replaces one file.
     ReplaceFile,
@@ -917,10 +791,8 @@ pub fn plan_install(site: &InstallSite, update: &AvailableUpdate) -> InstallPlan
 
 /// The file name a download is staged under.
 ///
-/// Taken from the URL but never trusted: the URL comes out of the manifest, and
-/// a feed that named its artifact `../../Applications/Something.app` would
-/// otherwise choose a path outside the staging directory. Anything that is not a
-/// plain name falls back to one derived from the version.
+/// Taken from the URL but never trusted; anything that is not a plain name falls
+/// back to one derived from the version.
 pub fn staged_file_name(url: &str, version: &Version) -> String {
     let without_query = url.split(['?', '#']).next().unwrap_or(url);
     let last = without_query.rsplit('/').next().unwrap_or("");
@@ -950,9 +822,8 @@ fn displaced_path(installed: &Path, staging: &Path) -> PathBuf {
 
 /// What the Windows helper is started with.
 ///
-/// A vector of arguments rather than a command line: the paths are chosen by the
-/// manifest and by the user's install location, and a single string handed to a
-/// shell would let a space or a quote in either of them become a second command.
+/// A vector of arguments rather than a command line, so a space or quote in a
+/// path cannot become a second command.
 pub fn helper_arguments(plan: &InstallPlan, pid: u32) -> Vec<String> {
     vec![
         "--wait-for-pid".to_owned(),
@@ -968,16 +839,8 @@ pub fn helper_arguments(plan: &InstallPlan, pid: u32) -> Vec<String> {
 
 /// Where the Windows helper is looked for when gpui cannot answer.
 ///
-/// `path_for_auxiliary_executable` is `bail!("not yet implemented")` on the
-/// Windows backend at the pinned gpui rev, and unimplemented on Linux too, so on
-/// Windows this is the only lookup that will resolve. The installer lays the
-/// helper down beside the executable.
-///
-/// A sibling or nothing: an executable path with no directory in it yields
-/// `None` rather than a bare name. A bare name is resolved against the working
-/// directory and then `PATH`, neither of which this app chose, and the result
-/// would be a program of somebody else's choosing handed the job of replacing
-/// this one.
+/// A sibling or nothing: an executable path with no directory yields `None`
+/// rather than a bare name, which `PATH` would resolve to somebody else's binary.
 pub fn helper_beside_executable(executable: &Path, helper_name: &str) -> Option<PathBuf> {
     let directory = executable.parent()?;
     if directory.as_os_str().is_empty() {
@@ -986,10 +849,6 @@ pub fn helper_beside_executable(executable: &Path, helper_name: &str) -> Option<
 
     Some(directory.join(helper_name))
 }
-
-// ---------------------------------------------------------------------------
-// Applying
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]
 pub enum UpdateError {
@@ -1007,9 +866,7 @@ pub enum UpdateError {
 
 /// Permission first, then integrity, then the plan.
 ///
-/// The order is the point: a build that is not allowed to install anything says
-/// so before it spends a hash over a few hundred megabytes, and no plan is ever
-/// produced for bytes that were not checked.
+/// No plan is ever produced for bytes that were not checked.
 pub fn prepare(
     site: &InstallSite,
     policy: ApplyPolicy,
@@ -1026,8 +883,7 @@ pub fn prepare(
 }
 
 /// Performs the plan. Returns `Unsupported` where this app is deliberately not
-/// the thing that installs the update, so a caller can point the user at what
-/// is.
+/// the thing that installs the update.
 pub fn install(plan: &InstallPlan) -> Result<PlatformSupport, UpdateError> {
     match &plan.method {
         InstallMethod::SwapBundle | InstallMethod::ReplaceFile | InstallMethod::ReplaceTree => {
@@ -1049,14 +905,7 @@ pub fn install(plan: &InstallPlan) -> Result<PlatformSupport, UpdateError> {
     }
 }
 
-/// Two renames rather than a copy.
-///
-/// A copy over the installed application is observable half-written, and if the
-/// machine loses power in the middle the user is left with nothing that starts.
-/// A rename within a volume is atomic, so at every instant the installed path is
-/// either the old application or the new one. The displaced copy is kept until
-/// the new one is in place, which is what makes the failure path a rollback
-/// rather than an apology.
+/// Two renames rather than a copy: the installed path is never half-written.
 fn swap_in_place(staged: &Path, installed: &Path, displaced: &Path) -> Result<(), UpdateError> {
     let failure = |path: &Path, error: &std::io::Error| UpdateError::Io {
         path: path.to_path_buf(),
@@ -1093,18 +942,10 @@ fn remove_any(path: &Path) -> std::io::Result<()> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The gpui binding — three calls, no decisions
-// ---------------------------------------------------------------------------
-
 /// Reads this installation off the running app.
 ///
-/// `app_path` is the bundle on macOS and the executable elsewhere, which is
-/// exactly what an update replaces on each, so no branch is needed here. On
-/// macOS it fails when the app is running loose instead of from its bundle;
-/// there is nothing to swap in that case, and saying so is better than swapping
-/// a bare executable that the Keychain and the notification centre will not
-/// recognise afterwards.
+/// Fails on macOS when the app is running loose instead of from its bundle:
+/// there is nothing to swap in that case.
 pub fn current_site(app: &gpui::App, staging: PathBuf) -> Result<InstallSite, UpdateError> {
     let installed = app
         .app_path()
@@ -1129,9 +970,8 @@ pub fn current_site(app: &gpui::App, staging: PathBuf) -> Result<InstallSite, Up
 
 /// Restarts into the build that was just installed.
 ///
-/// Only where this process performed the swap. After a helper handoff the helper
-/// owns the relaunch, and calling this as well would race it: gpui would start a
-/// second copy of the executable the helper is trying to replace.
+/// Only where this process performed the swap; after a helper handoff the helper
+/// owns the relaunch and calling this would race it.
 pub fn relaunch(app: &mut gpui::App, plan: &InstallPlan) -> PlatformSupport {
     if !plan.method.replaces_in_place() {
         return PlatformSupport::Unsupported;
@@ -1202,8 +1042,6 @@ mod tests {
         }
     }
 
-    // -- versions ----------------------------------------------------------
-
     #[test]
     fn ten_sorts_after_nine_rather_than_before_it() {
         assert!(
@@ -1269,8 +1107,6 @@ mod tests {
     fn the_compiled_in_version_of_this_build_parses() {
         assert!(Version::of_this_build().is_ok());
     }
-
-    // -- channels ----------------------------------------------------------
 
     #[test]
     fn an_unset_channel_is_stable_not_beta() {
@@ -1364,8 +1200,6 @@ mod tests {
         );
     }
 
-    // -- targets -----------------------------------------------------------
-
     #[test]
     fn every_target_key_round_trips() {
         for host in HostOs::ALL {
@@ -1399,8 +1233,6 @@ mod tests {
             "the test suite only runs on architectures we publish for"
         );
     }
-
-    // -- the manifest ------------------------------------------------------
 
     #[test]
     fn a_release_with_no_checksum_is_refused_outright() {
@@ -1488,8 +1320,6 @@ mod tests {
             manifest
         );
     }
-
-    // -- the decision ------------------------------------------------------
 
     #[test]
     fn a_newer_build_is_offered_with_the_checksum_it_will_be_held_to() {
@@ -1619,8 +1449,6 @@ mod tests {
         );
     }
 
-    // -- integrity ---------------------------------------------------------
-
     #[test]
     fn the_digest_matches_a_known_answer() {
         assert_eq!(sha256_hex(b""), EMPTY_DIGEST);
@@ -1681,8 +1509,6 @@ mod tests {
         assert!(digests_match(EMPTY_DIGEST, EMPTY_DIGEST));
     }
 
-    // -- permission to apply -----------------------------------------------
-
     #[test]
     fn an_unstated_build_profile_is_the_strict_one() {
         assert_eq!(BuildProfile::default(), BuildProfile::Production);
@@ -1736,8 +1562,6 @@ mod tests {
             ApplyPermission::Allowed
         );
     }
-
-    // -- install shape and plan --------------------------------------------
 
     fn site(host: HostOs, shape: InstallShape, helper: Option<PathBuf>) -> InstallSite {
         InstallSite {
@@ -2020,12 +1844,7 @@ mod tests {
         assert!(arguments.contains(&"C:\\Program Files\\Riseonly\\riseonly.exe".to_owned()));
     }
 
-    /// The fixture uses host separators even though the case is a Windows one.
-    /// `std::path` is flavoured by the host it compiles for, so a `C:\...`
-    /// literal is a single opaque component on this Mac and its parent is `""`,
-    /// which would assert nothing. What is under test is that the helper is
-    /// resolved as a sibling of the running executable, and that holds in either
-    /// flavour.
+    /// Host separators on purpose: a `C:\...` literal is one opaque component here.
     #[test]
     fn the_helper_is_looked_for_beside_the_executable() {
         let executable = Path::new("/Applications/Riseonly/riseonly.exe");
@@ -2044,8 +1863,6 @@ mod tests {
             "a bare name would be resolved from the working directory and PATH"
         );
     }
-
-    // -- preparing and performing ------------------------------------------
 
     #[test]
     fn preparing_refuses_before_it_looks_at_the_bytes() {

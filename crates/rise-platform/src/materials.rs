@@ -1,27 +1,11 @@
 //! Which materials are real on this machine.
 //!
-//! The rule this file exists to enforce is `docs/PLATFORM_GLASS.md`: **no
-//! component ever asks for glass.** A component asks for a [`Material`] and this
-//! seam decides what that material actually is here. A call site that could name
-//! glass directly would be a hole on Linux, and nobody would notice until a
-//! screenshot arrived; routing through a material keeps the fallback a property
-//! of the design system instead of an afterthought at every call site.
+//! **No component ever asks for glass.** A component asks for a [`Material`] and
+//! this seam decides what that material actually is here. Nothing here picks a
+//! colour: the painted form of a material is a rise-theme token.
 //!
-//! Nothing here picks a colour. The painted form of a material is a rise-theme
-//! token; this file only decides whether painting is what happens.
-//!
-//! Two tiers live here and must not be conflated:
-//!
-//! - The **window** material, [`WindowMaterial`], is tier 0 and is already free.
-//!   `gpui_macos` ships an `NSVisualEffectView` subclass and honours
-//!   `WindowBackgroundAppearance::Blurred`, so it needs no native code of ours
-//!   at all. It is modelled apart from [`Material`] precisely so that the Swift
-//!   work in Phase 5 does not re-solve a problem that is already solved.
-//! - The **per-region** materials, [`Material`], are tiers 1 and 2. Tier 1 is an
-//!   AppKit view hosted below the Metal layer, which this crate does own — it is
-//!   `crate::macos::glass`, the Rust half of the `RiseGlass` bridge; tier 2 is
-//!   paint. The policy that chooses between them is here and is exercised for
-//!   all three platforms from a Mac.
+//! [`WindowMaterial`] (tier 0, whole-window) and [`Material`] (per-region) are
+//! different mechanisms and must not be conflated.
 
 use rise_core::Generation;
 use thiserror::Error;
@@ -31,31 +15,19 @@ use crate::host_os::HostOs;
 
 /// What a surface asks the platform for.
 ///
-/// The shell's mapping, from `docs/PLATFORM_GLASS.md`: the left rail is
-/// [`Material::Chrome`], the list column is [`Material::Panel`], and sheets and
-/// popovers are [`Material::Overlay`]. Content is opaque and is deliberately not
-/// a material — a surface that is never translucent has no fallback to get
-/// wrong, and giving it one would invite glass behind dense scrolling text,
-/// which is the one place Apple's own guidance says not to put it.
+/// Content is deliberately not a material: a surface that is never translucent
+/// has no fallback to get wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Material {
     /// The left rail: the strip that carries what the phone puts in a tab bar.
     Chrome,
     /// The list column beside the rail — chats, folders, search results.
     Panel,
-    /// Sheets and popovers. In-window on every platform, because gpui has no
-    /// native popups on X11 or Windows and the design must never rely on
-    /// leaving the window rectangle.
+    /// Sheets and popovers. In-window on every platform, never a native popup.
     Overlay,
 }
 
 /// The AppKit class behind [`MaterialBacking::LiquidGlass`].
-///
-/// Only the class is named. Its configuration API is Swift-first and changes
-/// shape between OS versions, which is exactly why `docs/PLATFORM_GLASS.md`
-/// puts that part in a Swift target rather than in hand-rolled message sends;
-/// naming its style constants from Rust would be guessing at an API this crate
-/// cannot see.
 pub const GLASS_VIEW_CLASS: &str = "NSGlassEffectView";
 
 /// The AppKit class behind [`MaterialBacking::Vibrancy`].
@@ -65,14 +37,8 @@ impl Material {
     pub const ALL: [Self; 3] = [Self::Chrome, Self::Panel, Self::Overlay];
 
     /// The `NSVisualEffectMaterial` case a tier-1 vibrancy region is configured
-    /// with. Vibrancy materials are semantic rather than decorative: AppKit
-    /// picks the blur radius, the tint and the behaviour behind an inactive
-    /// window from this case, so choosing one by how it looks in a screenshot
-    /// gets the inactive and the increased-contrast appearances wrong.
-    ///
-    /// [`Material::Overlay`] is `.popover` and not `.sheet` because our sheets
-    /// never leave the window; `.sheet` is the case AppKit means for a real
-    /// document-modal sheet, which is not what this is.
+    /// with. These cases are semantic: AppKit picks blur, tint and inactive
+    /// behaviour from them, so choosing one by how it looks is wrong.
     pub const fn vibrancy_material(self) -> &'static str {
         match self {
             Self::Chrome => "NSVisualEffectMaterial.headerView",
@@ -83,15 +49,15 @@ impl Material {
 
     /// The best backing this surface will accept, whatever the machine offers.
     ///
-    /// All three are currently glass, because `docs/PLATFORM_GLASS.md` names the
-    /// rail, the sidebar, the composer bar, sheets and popovers as glass
-    /// regions. The ceiling exists so that the judgement can change in one
-    /// place: if the list column ever fails the legibility check with dense text
-    /// scrolling over it at one of the two appearances, lowering it here demotes
-    /// that surface everywhere and no call site changes.
+    /// PAINTED, everywhere, since the shell became an opaque plate. A native
+    /// region is an AppKit view *below* the Metal layer, and it samples what is
+    /// behind the WINDOW — so with an opaque app in front of it, every native
+    /// region stops being a material and becomes a hole punched through the app
+    /// to the desktop. The tier-1 machinery below is intact and reachable by
+    /// raising this again; nothing about it is deleted.
     pub const fn ceiling(self) -> MaterialBacking {
         match self {
-            Self::Chrome | Self::Panel | Self::Overlay => MaterialBacking::LiquidGlass,
+            Self::Chrome | Self::Panel | Self::Overlay => MaterialBacking::Painted,
         }
     }
 }
@@ -103,9 +69,7 @@ pub enum MaterialBacking {
     LiquidGlass,
     /// [`VIBRANCY_VIEW_CLASS`], which every macOS this product supports has.
     Vibrancy,
-    /// Theme tokens: a translucent fill, a hairline border, a soft inner
-    /// highlight. It reads as a deliberate flat design rather than a broken
-    /// attempt at glass, which is the whole point of having a named tier for it.
+    /// Theme tokens: a translucent fill, a hairline border, a soft inner highlight.
     Painted,
 }
 
@@ -113,10 +77,6 @@ impl MaterialBacking {
     pub const ALL: [Self; 3] = [Self::LiquidGlass, Self::Vibrancy, Self::Painted];
 
     /// Ascending: painted 0, vibrancy 1, glass 2.
-    ///
-    /// Written out rather than derived from the declaration order, so that
-    /// reordering the variants cannot silently invert which way the fallback
-    /// falls.
     pub const fn tier(self) -> u8 {
         match self {
             Self::Painted => 0,
@@ -137,11 +97,8 @@ impl MaterialBacking {
 
     /// Whether this backing is an AppKit view rather than something GPUI draws.
     ///
-    /// The distinction is not cosmetic. A native backing is a real view sitting
-    /// *below* the Metal layer, so GPUI has to leave that rectangle transparent,
-    /// the rectangle has to be registered with the platform, and anything GPUI
-    /// draws there lands on top of it. A painted backing is an ordinary element
-    /// in the scene with none of that bookkeeping.
+    /// A native backing sits *below* the Metal layer: GPUI must leave that
+    /// rectangle transparent, and anything it draws there lands on top.
     pub const fn is_native(self) -> bool {
         self.view_class().is_some()
     }
@@ -163,10 +120,8 @@ impl MaterialBacking {
 
 /// A macOS release, as `NSProcessInfo` reports it.
 ///
-/// The derived ordering is lexicographic over the fields in declaration order,
-/// so that order is load-bearing. [`MacOsVersion::is_at_least`] exists beside it
-/// because the comparison operators are not usable from a `const fn`, and a test
-/// asserts the two never disagree.
+/// The derived ordering runs over the fields in declaration order, so that order
+/// is load-bearing; [`MacOsVersion::is_at_least`] is the `const fn` equivalent.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct MacOsVersion {
     pub major: u32,
@@ -177,17 +132,12 @@ pub struct MacOsVersion {
 impl MacOsVersion {
     /// The first release with [`GLASS_VIEW_CLASS`].
     ///
-    /// Apple renumbered to the year scheme at this release, so 16 through 25
-    /// were never shipped. The boundary is therefore written as "at least 26"
-    /// rather than "after 15": a machine that reports something inside that gap
-    /// — a beta, a virtual machine, a compatibility shim — lands on vibrancy
-    /// instead of falling off the bottom into paint.
+    /// Apple renumbered to the year scheme here, so 16 through 25 never shipped;
+    /// the boundary is "at least 26" so a version inside that gap gets vibrancy.
     pub const LIQUID_GLASS: Self = Self::new(26, 0, 0);
 
-    /// The oldest release this product runs on, matching `LSMinimumSystemVersion`
-    /// in the bundle. `NSVisualEffectView` is far older than this; the floor is
-    /// the product's, not the API's, and anything below it is a host we make no
-    /// claims about rather than one we know is missing vibrancy.
+    /// The oldest release this product runs on, matching `LSMinimumSystemVersion`.
+    /// The floor is the product's, not `NSVisualEffectView`'s.
     pub const VIBRANCY: Self = Self::new(13, 0, 0);
 
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
@@ -208,12 +158,8 @@ impl MacOsVersion {
         self.patch >= other.patch
     }
 
-    /// The best tier this release can host.
-    ///
-    /// Unknown falls *down*. A version below [`MacOsVersion::VIBRANCY`] is not a
-    /// release we have decided anything about, and guessing upward is the
-    /// expensive mistake: assuming glass and getting nothing leaves a blank
-    /// rail, while assuming paint and getting a flat panel is merely plainer.
+    /// The best tier this release can host. Anything below
+    /// [`MacOsVersion::VIBRANCY`] falls *down* to paint rather than guessing up.
     pub const fn backing(self) -> MaterialBacking {
         if self.is_at_least(Self::LIQUID_GLASS) {
             MaterialBacking::LiquidGlass
@@ -227,29 +173,21 @@ impl MacOsVersion {
 
 /// The best tier this machine can host, before any per-material ceiling.
 ///
-/// `version` is `None` both off macOS and when the running version could not be
-/// established, and both answer paint — see [`MacOsVersion::backing`] for why
-/// the unknown case falls down rather than up.
+/// `version` is `None` off macOS and when it could not be read; both answer paint.
 pub const fn offered_backing(host: HostOs, version: Option<MacOsVersion>) -> MaterialBacking {
     match host {
         HostOs::MacOs => match version {
             Some(version) => version.backing(),
             None => MaterialBacking::Painted,
         },
-        // Not "not implemented yet": there is no equivalent. Neither platform
-        // can put a system material behind a *region* of a window, and GPUI
-        // renders the whole window into one layer with no backdrop filter, so a
-        // shader here could imitate a blur but never sample what is behind it.
+        // No equivalent exists: neither can put a system material behind a region.
         HostOs::Windows | HostOs::Linux => MaterialBacking::Painted,
     }
 }
 
 /// What `material` actually is on this host and this OS version.
 ///
-/// The one function every call site is downstream of. It takes the material
-/// rather than answering a single question per machine so that a surface can
-/// decline a tier the machine offers ([`Material::ceiling`]) — the cap can only
-/// ever lower, never raise.
+/// [`Material::ceiling`] can only lower the tier the machine offers, never raise it.
 pub const fn resolve(
     material: Material,
     host: HostOs,
@@ -258,30 +196,31 @@ pub const fn resolve(
     offered_backing(host, version).capped_at(material.ceiling())
 }
 
-/// The whole-window material: tier 0, and the only tier that costs us nothing.
-///
-/// Kept apart from [`Material`] because it is a different mechanism with a
-/// different owner. gpui already implements it on every backend; a region
-/// material does not exist anywhere yet. Conflating the two would hide the fact
-/// that the app background is solved and the rail is not.
+/// The whole-window material: tier 0, a different mechanism from [`Material`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum WindowMaterial {
     Opaque,
+    /// Plain alpha: nothing at all behind the Metal layer.
+    ///
+    /// What the shell asks for on macOS, and not for a material — for the
+    /// CORNER. AppKit rounds a titled window by leaving its corner pixels
+    /// clear, and a window that has declared itself opaque has no clear pixels
+    /// to leave. See [`preferred_window_material`].
+    Transparent,
     /// A transparent Metal layer over a real system material.
     ///
-    /// Not free everywhere it works: gpui turns subpixel text rendering off for
-    /// any non-opaque window background. That costs nothing on macOS, whose
-    /// backend never offered subpixel rendering at all, and costs real text
-    /// quality on the Windows and Linux backends, which do offer it.
+    /// gpui turns subpixel text rendering off for any non-opaque background —
+    /// free on macOS, real text quality on Windows and Linux.
     Blurred,
 }
 
 impl WindowMaterial {
-    pub const ALL: [Self; 2] = [Self::Opaque, Self::Blurred];
+    pub const ALL: [Self; 3] = [Self::Opaque, Self::Transparent, Self::Blurred];
 
     pub const fn into_gpui(self) -> gpui::WindowBackgroundAppearance {
         match self {
             Self::Opaque => gpui::WindowBackgroundAppearance::Opaque,
+            Self::Transparent => gpui::WindowBackgroundAppearance::Transparent,
             Self::Blurred => gpui::WindowBackgroundAppearance::Blurred,
         }
     }
@@ -290,23 +229,12 @@ impl WindowMaterial {
 /// Whether asking gpui for a blurred window background produces one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum WindowVibrancy {
-    /// `gpui_macos` inserts an `NSVisualEffectView` subclass below the Metal
-    /// layer and the OS composites it. No native code of ours is involved, which
-    /// is why this tier is available now and tier 1 is not.
+    /// `gpui_macos` inserts an `NSVisualEffectView` below the Metal layer.
     Native,
     /// Only the running session can answer, and the failure is not a missing
-    /// blur. gpui clears the surface's opaque region for any non-opaque
-    /// appearance, and adds a blur object only where the compositor exports the
-    /// blur protocol — X11 exports none at all. Where it does not, the window
-    /// ends up see-through with the desktop showing straight through the app
-    /// background, which is worse than never asking.
+    /// blur: without the compositor's blur protocol the window is see-through.
     SessionDependent,
-    /// Reached through `SetWindowCompositionAttribute`, which Microsoft has
-    /// never documented, and it is not obviously the call we would want anyway:
-    /// Windows 11 has Mica, which gpui exposes as its own appearance through a
-    /// documented DWM API. Choosing between the two is Windows work nobody has
-    /// done, and guessing is how an app ends up leaning on a blur that a future
-    /// Windows update takes away.
+    /// Only `SetWindowCompositionAttribute`, which Microsoft has never documented.
     Undocumented,
 }
 
@@ -320,14 +248,16 @@ pub const fn window_vibrancy(host: HostOs) -> WindowVibrancy {
 
 /// What the window is actually set to, given what was asked for.
 ///
-/// Blur is granted only where it is [`WindowVibrancy::Native`]. Substituting
-/// opaque elsewhere is deliberate and is not a silent no-op — [`apply_window_material`]
-/// reports the substitution — because forwarding the request would hand the user
-/// a transparent window on a Linux session with no blur protocol, and would trade
-/// subpixel text for an undocumented call on Windows.
+/// Blur is granted only where it is [`WindowVibrancy::Native`];
+/// [`apply_window_material`] reports the substitution rather than hiding it.
+///
+/// Plain transparency is a weaker ask than blur — no system material, only an
+/// alpha channel — and every target this ships to composites one, so it is
+/// granted as asked.
 pub const fn granted_window_material(host: HostOs, requested: WindowMaterial) -> WindowMaterial {
     match requested {
         WindowMaterial::Opaque => WindowMaterial::Opaque,
+        WindowMaterial::Transparent => WindowMaterial::Transparent,
         WindowMaterial::Blurred => match window_vibrancy(host) {
             WindowVibrancy::Native => WindowMaterial::Blurred,
             WindowVibrancy::SessionDependent | WindowVibrancy::Undocumented => {
@@ -337,26 +267,50 @@ pub const fn granted_window_material(host: HostOs, requested: WindowMaterial) ->
     }
 }
 
-/// The shell's own choice for this platform: a real system material behind the
-/// app wherever one exists.
+/// The shell's own choice, and the two answers are asking for different things.
+///
+/// **macOS: TRANSPARENT, and not for a material — for the CORNER.** A rounded
+/// corner is a piece of the window CUT AWAY, and there is nowhere to cut it out
+/// of a window that has declared itself opaque; Apple's own rule for `isOpaque`
+/// is that a window with rounded corners sets it `NO`. gpui maps
+/// [`WindowMaterial::Opaque`] straight onto `-[NSWindow setOpaque:YES]`, so
+/// asking for it squares off the whole app no matter who does the cutting.
+///
+/// Who does the cutting is [`crate::window_chrome::round_window_corner`], not
+/// AppKit: AppKit's own rounding never reaches the Metal layer gpui renders the
+/// app into. This half is only what makes that mask visible.
+///
+/// The app still fills its window edge to edge and paints every pixel of it, so
+/// the alpha channel this buys reaches nothing but those four corners. Nothing
+/// shows through anywhere else, which is why this is `Transparent` and not
+/// [`WindowMaterial::Blurred`].
+///
+/// **Windows and Linux: OPAQUE.** Neither cuts the window out of the surface's
+/// alpha — DWM rounds server-side, and under
+/// [`crate::window_chrome::DecorationMode::ClientSide`] the Linux corner is
+/// ours to paint — so on neither is there anything to buy with it.
+///
+/// The usual price of a non-opaque window is subpixel text antialiasing, which
+/// gpui turns off for one. On macOS that price is zero: the Metal backend
+/// reports no subpixel support at all, so mac text is greyscale-antialiased
+/// either way. That is the same asymmetry [`WindowMaterial::Blurred`] notes.
 pub const fn preferred_window_material(host: HostOs) -> WindowMaterial {
-    granted_window_material(host, WindowMaterial::Blurred)
+    let requested = match host {
+        HostOs::MacOs => WindowMaterial::Transparent,
+        HostOs::Windows | HostOs::Linux => WindowMaterial::Opaque,
+    };
+
+    granted_window_material(host, requested)
 }
 
 /// A region of the window that a native material is hosted behind.
 ///
-/// The identity is stable across layout passes so the platform side can move a
-/// view it already has instead of tearing every view down and building it again
-/// every pass. Allocation of the numbers belongs to the shell; this crate only
-/// requires that one surface keeps one number for as long as it exists.
+/// One surface must keep one number for as long as it exists: the identity is
+/// what lets the platform move an existing view instead of rebuilding it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RegionId(pub u64);
 
 /// A rectangle in the window's logical pixels, top-left origin.
-///
-/// Deliberately not `gpui::Bounds`: the platform layer hands these to AppKit,
-/// and nothing above this crate should have to hold a renderer type to describe
-/// where its own sidebar is.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct RegionRect {
     pub x: f32,
@@ -384,9 +338,7 @@ impl RegionRect {
         }
     }
 
-    /// A comparison rather than a subtraction, so a NaN from a layout that
-    /// divided by a zero-width parent answers false and never reaches AppKit,
-    /// where the same value is a view with an undefined frame.
+    /// False for NaN as well as for zero — a NaN frame is undefined to AppKit.
     pub fn has_area(&self) -> bool {
         self.width > 0.0 && self.height > 0.0
     }
@@ -394,23 +346,15 @@ impl RegionRect {
 
 /// One native material region, as the platform layer receives it.
 ///
-/// A region is background and never a mid-stack layer. The view sits below the
-/// Metal layer, so it cannot be put over GPUI content — anything drawn in its
-/// rectangle appears on top of it — and a design that stacks something under a
-/// glass surface has no way to be built. `docs/PLATFORM_GLASS.md` says to design
-/// so that never comes up; this type cannot enforce it, only name it.
+/// A region is background and never a mid-stack layer: the view sits below the
+/// Metal layer, so anything GPUI draws in its rectangle lands on top of it.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct GlassRegion {
     pub id: RegionId,
     pub material: Material,
     pub bounds: RegionRect,
-    /// Rounding the *platform* applies, in logical pixels.
-    ///
-    /// A painted material is rounded by the renderer like any other element. A
-    /// native one cannot be: the view is below the Metal layer, so GPUI drawing
-    /// a rounded mask over it would draw on top of it rather than clip it. The
-    /// radius therefore has to travel with the region, and it has to match the
-    /// painted form's radius or the two tiers look like different designs.
+    /// Rounding the *platform* applies, in logical pixels. GPUI cannot clip a
+    /// native view, so this must match the painted form's radius.
     pub corner_radius: f32,
 }
 
@@ -444,13 +388,8 @@ pub enum GlassError {
 
 /// Admits a batch of regions only when it comes from a newer layout pass.
 ///
-/// This is the constraint in `docs/PLATFORM_GLASS.md` made mechanical rather
-/// than left in a comment: a glass region's rectangle must be static for the
-/// duration of a frame and must be updated from the **layout** pass, never from
-/// a render pass. A render pass has no new [`Generation`] to offer, so it cannot
-/// get through this gate, and a region animated frame by frame — which is how
-/// the rectangle desynchronises from the content drawn around it — stops being
-/// expressible rather than merely discouraged.
+/// A region's rectangle must be static for the duration of a frame and updated
+/// from the **layout** pass; a render pass has no new [`Generation`] to offer.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct LayoutGate {
     admitted: Option<Generation>,
@@ -481,9 +420,8 @@ impl LayoutGate {
 
 /// Every native material region for one layout pass, stamped with that pass.
 ///
-/// Built during layout and handed over whole rather than as a diff. Whole,
-/// because the platform side has to know which views should no longer exist, and
-/// a surface that simply stopped being laid out sends no removal of its own.
+/// Handed over whole rather than as a diff: a surface that stopped being laid
+/// out sends no removal of its own.
 pub struct GlassLayout {
     generation: Generation,
     regions: Vec<GlassRegion>,
@@ -497,11 +435,7 @@ impl GlassLayout {
         }
     }
 
-    /// Both refusals are caller bugs rather than platform conditions, which is
-    /// why they are errors and not [`PlatformSupport::Unsupported`]: a
-    /// zero-area region is a view the compositor draws nothing into, and two
-    /// regions sharing an id would fight over one AppKit view, moving it twice
-    /// per pass.
+    /// A zero-area region and a duplicate id are caller bugs, so both are errors.
     pub fn push(&mut self, region: GlassRegion) -> Result<(), GlassError> {
         if !region.bounds.has_area() {
             return Err(GlassError::EmptyRegion(region.id));
@@ -528,43 +462,26 @@ impl GlassLayout {
 
 /// The window's native material regions, for as long as this value lives.
 ///
-/// Deliberately neither `Send` nor `Sync`, like `Tray` and for the same reason:
-/// the implementation this seam exists for holds AppKit views, and AppKit off
-/// the main thread is undefined behaviour rather than a lint.
-///
-/// The implementation that hosts real [`GLASS_VIEW_CLASS`] views is
-/// `crate::macos::glass::MacGlassSurface`, over the `RiseGlass` Swift target
-/// described in `docs/PLATFORM_GLASS.md`; it is Swift rather than `objc2`
-/// because the view's configuration API is Swift-first and shifts between OS
-/// versions. [`current_glass_surface`] returns it on macOS and
-/// [`painted_glass_surface`] everywhere else, so [`MaterialBacking::Painted`] is
-/// what Linux and Windows get and is a branch every caller still has to handle.
+/// Implementations hold AppKit views, so build, use and drop on the main thread.
+/// [`MaterialBacking::Painted`] is what Linux and Windows get, and is a branch
+/// every caller still has to handle.
 pub trait GlassSurface {
-    /// What this surface actually is. Ask once and keep the answer: it cannot
-    /// change while the process runs, and a caller that re-asks per frame is
-    /// paying for a decision that was made at startup.
+    /// What this surface actually is. Ask once: it cannot change while running.
     fn backing(&self) -> MaterialBacking;
 
     /// Hands over every region for one layout pass.
     ///
-    /// Reports [`PlatformSupport::Unsupported`] on a painted host, which is the
-    /// ordinary answer on Linux and Windows and not a fault; the caller paints
-    /// the material itself and carries on. `Err` means the layout-pass contract
-    /// was broken, which is a bug on any platform.
+    /// [`PlatformSupport::Unsupported`] on a painted host is the ordinary answer
+    /// and not a fault; `Err` means the layout-pass contract was broken.
     fn commit(&mut self, layout: &GlassLayout) -> Result<PlatformSupport, GlassError>;
 
-    /// Removes every region. Needed on the way out of a screen that had them:
-    /// a view left behind under a Metal layer that no longer leaves a hole for
-    /// it is invisible, and stays allocated.
+    /// Removes every region. Needed on the way out of a screen that had them: a
+    /// view left behind is invisible but still allocated.
     fn clear(&mut self) -> PlatformSupport;
 }
 
-/// Records what it was asked to host instead of hosting it.
-///
-/// For tests above this crate, and for the case every caller has to handle
-/// anyway: built with [`MaterialBacking::Painted`] it is the shape Linux and
-/// Windows present, and code that has only ever run against a native backing is
-/// code that has never taken that branch.
+/// Records what it was asked to host instead of hosting it. Built with
+/// [`MaterialBacking::Painted`] it is the shape Linux and Windows present.
 pub struct InMemoryGlassSurface {
     backing: MaterialBacking,
     gate: LayoutGate,
@@ -601,10 +518,7 @@ impl GlassSurface for InMemoryGlassSurface {
     }
 
     fn commit(&mut self, layout: &GlassLayout) -> Result<PlatformSupport, GlassError> {
-        // The gate runs before the host check on purpose. A violation of the
-        // layout-pass contract is a bug everywhere, and gating it behind a
-        // native backing would mean it could only ever be caught on the one
-        // platform that has glass.
+        // The gate runs before the host check, so the contract is catchable everywhere.
         self.gate.admit(layout.generation())?;
 
         if self.backing.is_painted() {
@@ -632,10 +546,6 @@ pub fn current_backing(material: Material) -> MaterialBacking {
 }
 
 /// The surface every host without a region material presents.
-///
-/// Named rather than inlined into [`current_glass_surface`] because it is the
-/// branch that never runs on the machine this is developed on, and a value with
-/// a name can be exercised here anyway.
 pub fn painted_glass_surface() -> Box<dyn GlassSurface> {
     Box::new(InMemoryGlassSurface::new(MaterialBacking::Painted))
 }
@@ -643,15 +553,9 @@ pub fn painted_glass_surface() -> Box<dyn GlassSurface> {
 /// The window's native material regions, for the machine this process is
 /// running on.
 ///
-/// The caller never learns which OS that is. Off macOS, and on a macOS whose
-/// version or SDK cannot host a region material, this is
-/// [`painted_glass_surface`]: `commit` reports [`PlatformSupport::Unsupported`]
-/// and the caller paints the material from theme tokens, which is the ordinary
-/// answer rather than a fault.
-///
-/// Cheap to build and expensive to hold: the macOS implementation owns AppKit
-/// views, so the returned value is neither `Send` nor `Sync` and must be built,
-/// used and dropped on the main thread.
+/// Off macOS this is [`painted_glass_surface`] and `commit` reports
+/// [`PlatformSupport::Unsupported`]. The macOS implementation owns AppKit views,
+/// so build, use and drop it on the main thread.
 pub fn current_glass_surface() -> Box<dyn GlassSurface> {
     #[cfg(target_os = "macos")]
     {
@@ -666,30 +570,16 @@ pub fn current_glass_surface() -> Box<dyn GlassSurface> {
 /// The macOS release this process is running on, or `None` when it could not be
 /// established — which includes every non-macOS host.
 ///
-/// Read once and cached, because the value cannot change under a running
-/// process and the resolution above it is on the layout path.
-///
-/// The trap worth knowing about is that this number is not always the truth.
-/// macOS reports `10.16` to a process linked against an SDK older than 11.0, so
-/// a build that loses its modern SDK starts reporting a version below
-/// [`MacOsVersion::VIBRANCY`]. That answer costs a flat panel and nothing else,
-/// which is the direction this seam is deliberately wrong in.
+/// Read once and cached. macOS reports `10.16` to a process linked against a
+/// pre-11.0 SDK, so a build that loses its modern SDK falls to paint, not up.
 pub fn macos_version() -> Option<MacOsVersion> {
     static CACHED: std::sync::OnceLock<Option<MacOsVersion>> = std::sync::OnceLock::new();
     *CACHED.get_or_init(read_macos_version)
 }
 
-// ---------------------------------------------------------------------------
-// Bindings. No decisions live below this line.
-// ---------------------------------------------------------------------------
-
 #[cfg(target_os = "macos")]
 fn read_macos_version() -> Option<MacOsVersion> {
-    // `NSProcessInfo` is Foundation, so it is present on every macOS this can
-    // run on, and `objc2-foundation` 0.3 exposes both calls as safe `fn`s. The
-    // one thing that can still come back wrong is the value, so a major version
-    // of zero — which is what a failed or shimmed read looks like — is treated
-    // as "not established" rather than as "older than everything".
+    // A major version of zero is what a failed or shimmed read looks like.
     let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
 
     let major = u32::try_from(version.majorVersion).ok()?;
@@ -712,9 +602,7 @@ fn read_macos_version() -> Option<MacOsVersion> {
 /// Sets the tier-0 window material and reports whether the OS will really
 /// composite one.
 ///
-/// Unsupported means the request was downgraded to opaque before it reached
-/// gpui; see [`granted_window_material`] for why forwarding it would be worse
-/// than refusing it.
+/// Unsupported means the request was downgraded to opaque before it reached gpui.
 pub fn apply_window_material(window: &gpui::Window, requested: WindowMaterial) -> PlatformSupport {
     let granted = granted_window_material(HostOs::current(), requested);
     window.set_background_appearance(granted.into_gpui());
@@ -758,48 +646,44 @@ mod tests {
         }
     }
 
+    /// These read [`offered_backing`] rather than [`resolve`]: the version
+    /// policy is what they are about, and `resolve` now caps every material at
+    /// painted, which would make them pass without testing anything.
     #[test]
     fn macos_26_is_the_first_release_that_gets_liquid_glass() {
-        for material in Material::ALL {
-            assert_eq!(
-                resolve(material, HostOs::MacOs, Some(MacOsVersion::new(25, 9, 9))),
-                MaterialBacking::Vibrancy,
-                "{material:?} must not reach for a class that does not exist yet"
-            );
-            assert_eq!(
-                resolve(material, HostOs::MacOs, Some(MacOsVersion::new(26, 0, 0))),
-                MaterialBacking::LiquidGlass
-            );
-        }
+        assert_eq!(
+            offered_backing(HostOs::MacOs, Some(MacOsVersion::new(25, 9, 9))),
+            MaterialBacking::Vibrancy,
+            "the machine must not offer a class that does not exist yet"
+        );
+        assert_eq!(
+            offered_backing(HostOs::MacOs, Some(MacOsVersion::new(26, 0, 0))),
+            MaterialBacking::LiquidGlass
+        );
     }
 
     #[test]
     fn a_macos_version_that_could_not_be_read_falls_down_to_painted() {
-        for material in Material::ALL {
-            assert_eq!(
-                resolve(material, HostOs::MacOs, None),
-                MaterialBacking::Painted,
-                "guessing upward from an unknown version leaves a blank rail"
-            );
-        }
+        assert_eq!(
+            offered_backing(HostOs::MacOs, None),
+            MaterialBacking::Painted,
+            "guessing upward from an unknown version leaves a blank rail"
+        );
     }
 
     #[test]
     fn a_macos_older_than_the_product_floor_falls_down_rather_than_up() {
-        // 10.16 is what macOS 11 and later report to a process linked against a
-        // pre-11.0 SDK, so it is a version we can actually be handed.
+        // 10.16 is what macOS reports to a process linked against a pre-11.0 SDK.
         for version in [
             MacOsVersion::new(10, 16, 0),
             MacOsVersion::new(12, 7, 6),
             MacOsVersion::new(1, 0, 0),
         ] {
-            for material in Material::ALL {
-                assert_eq!(
-                    resolve(material, HostOs::MacOs, Some(version)),
-                    MaterialBacking::Painted,
-                    "{version:?} is not a host we have decided anything about"
-                );
-            }
+            assert_eq!(
+                offered_backing(HostOs::MacOs, Some(version)),
+                MaterialBacking::Painted,
+                "{version:?} is not a host we have decided anything about"
+            );
         }
     }
 
@@ -837,14 +721,24 @@ mod tests {
     }
 
     #[test]
-    fn every_surface_the_shell_uses_takes_glass_where_the_machine_has_it() {
+    fn no_surface_takes_a_native_backing_while_the_app_is_an_opaque_plate() {
         for material in Material::ALL {
             assert_eq!(
                 material.ceiling(),
-                MaterialBacking::LiquidGlass,
-                "PLATFORM_GLASS.md names the rail, the sidebar and the overlays as glass regions"
+                MaterialBacking::Painted,
+                "{material:?} would be an AppKit view below the Metal layer, and \
+                 the plate in front of it turns that into a hole to the desktop"
             );
         }
+    }
+
+    #[test]
+    fn the_machine_is_still_asked_even_though_nothing_accepts_the_answer() {
+        assert_eq!(
+            offered_backing(HostOs::MacOs, Some(MacOsVersion::LIQUID_GLASS)),
+            MaterialBacking::LiquidGlass,
+            "the tier-1 policy stays live so raising a ceiling is the whole change"
+        );
     }
 
     #[test]
@@ -918,16 +812,47 @@ mod tests {
     #[test]
     fn asking_for_blur_where_it_is_not_real_leaves_the_window_opaque() {
         assert_eq!(
-            preferred_window_material(HostOs::MacOs),
+            granted_window_material(HostOs::MacOs, WindowMaterial::Blurred),
             WindowMaterial::Blurred
+        );
+
+        for host in [HostOs::Windows, HostOs::Linux] {
+            assert_eq!(
+                granted_window_material(host, WindowMaterial::Blurred),
+                WindowMaterial::Opaque,
+                "a non-opaque window with nothing behind it is see-through, not frosted"
+            );
+        }
+    }
+
+    /// The mac answer is the window's CORNER, not a material: AppKit rounds a
+    /// titled window by leaving its corner pixels clear, and an opaque window
+    /// has none to leave.
+    #[test]
+    fn the_shell_asks_for_the_window_material_its_corner_needs() {
+        assert_eq!(
+            preferred_window_material(HostOs::MacOs),
+            WindowMaterial::Transparent,
+            "an opaque window is a square one: AppKit has no clear pixels to \
+             round it with"
         );
 
         for host in [HostOs::Windows, HostOs::Linux] {
             assert_eq!(
                 preferred_window_material(host),
                 WindowMaterial::Opaque,
-                "a non-opaque window with nothing behind it is see-through, not frosted"
+                "{host:?} does not round the window out of the surface's alpha, \
+                 and the app paints every pixel of its window"
             );
+        }
+    }
+
+    /// Transparency here is for the corners and nothing else, so it must not
+    /// come back as a material that puts something behind the whole window.
+    #[test]
+    fn the_preferred_window_material_is_never_blurred() {
+        for host in HostOs::ALL {
+            assert_ne!(preferred_window_material(host), WindowMaterial::Blurred);
         }
     }
 
@@ -946,6 +871,10 @@ mod tests {
         assert_eq!(
             WindowMaterial::Opaque.into_gpui(),
             gpui::WindowBackgroundAppearance::Opaque
+        );
+        assert_eq!(
+            WindowMaterial::Transparent.into_gpui(),
+            gpui::WindowBackgroundAppearance::Transparent
         );
         assert_eq!(
             WindowMaterial::Blurred.into_gpui(),
@@ -977,7 +906,7 @@ mod tests {
         );
 
         assert_eq!(
-            preferred_window_material(HostOs::MacOs),
+            granted_window_material(HostOs::MacOs, WindowMaterial::Blurred),
             WindowMaterial::Blurred,
             "tier 0 is a view gpui already ships and is real on every macOS we run on"
         );
@@ -1182,9 +1111,6 @@ mod tests {
 
     #[test]
     fn the_surface_a_host_without_region_materials_gets_is_still_usable() {
-        // This is exactly the value `current_glass_surface` returns off macOS,
-        // which is the branch that never runs on the machine this is written
-        // on. Naming it is what makes it testable here.
         let passes = generations(2);
         let mut surface = painted_glass_surface();
         assert_eq!(surface.backing(), MaterialBacking::Painted);

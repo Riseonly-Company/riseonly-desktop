@@ -3,30 +3,24 @@ use rise_theme::AppTheme;
 
 include!(concat!(env!("OUT_DIR"), "/flags.rs"));
 
-/// Height over width. The shipped set is the 4:3 one, and a flag stretched to
-/// some other ratio is a different flag.
+/// Height over width. The shipped artwork is 4:3; another ratio is another flag.
 pub const FLAG_ASPECT: f32 = 3.0 / 4.0;
 
 /// A country flag, by ISO 3166-1 alpha-2 region code.
 ///
-/// The reference derives a flag arithmetically: offsetting each ASCII letter of
-/// the region code into the regional-indicator block gives a pair that macOS
-/// renders as a flag. Linux and Windows render it as two letters in boxes,
-/// because neither ships a font with flag glyphs. So the arithmetic is gone and
-/// the flags are assets.
-///
-/// The fallback is deliberately not another emoji and not upstream's crossed-out
-/// placeholder: it is the region's own two letters in a chip, which is
-/// information rather than a blank.
+/// Three tiers in order: the regional-indicator emoji where the host renders
+/// one, the shipped SVG, then a two-letter chip. gpui draws an `svg()` as a
+/// one-colour MASK, so the SVG tier is a silhouette rather than the artwork.
 pub struct FlagUi;
 
 impl FlagUi {
     pub const ASSET_PREFIX: &'static str = "icons/flags/";
 
+    /// Apple Color Emoji advances wider than its point size, so a glyph set to
+    /// the full box width overflows it.
+    const EMOJI_FILL: f32 = 0.92;
+
     /// Whether the bundle carries this region, after normalising case.
-    ///
-    /// Answered from a table built at compile time. A component that touched the
-    /// filesystem to decide this would be doing disk I/O inside a frame.
     pub fn is_shipped(region: &str) -> bool {
         Self::normalise(region)
             .is_some_and(|code| SHIPPED_FLAGS.binary_search(&code.as_str()).is_ok())
@@ -40,12 +34,39 @@ impl FlagUi {
             .map(|_| SharedString::from(format!("{}{code}.svg", Self::ASSET_PREFIX)))
     }
 
+    /// The regional-indicator pair for a region code, or `None` when the code is
+    /// not one.
+    pub fn emoji(region: &str) -> Option<String> {
+        let code = Self::normalise(region)?;
+        Some(
+            code.chars()
+                .filter_map(|letter| {
+                    char::from_u32(
+                        0x1F1E6 + u32::from(letter.to_ascii_uppercase()) - u32::from(b'A'),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// The flag for `region`, or the chip when there is no flag to draw.
-    ///
-    /// One entry point rather than two, so no call site can forget the fallback
-    /// and leave a hole that only shows up on a machine nobody here runs.
     pub fn render(theme: &AppTheme, region: &str, width: Pixels) -> AnyElement {
         let height = px(f32::from(width) * FLAG_ASPECT);
+
+        // The box is the same size in all three tiers, so the row never moves.
+        let box_of = || div().w(width).h(height).flex_none();
+
+        if rise_platform::text_capabilities::renders_flag_emoji()
+            && let Some(emoji) = Self::emoji(region)
+        {
+            return box_of()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(f32::from(width) * Self::EMOJI_FILL))
+                .child(emoji)
+                .into_any_element();
+        }
 
         match Self::asset_path(region) {
             Some(path) => svg()
@@ -58,13 +79,8 @@ impl FlagUi {
         }
     }
 
-    /// What the chip prints: the region's own two letters, uppercased because
-    /// that is how ISO 3166-1 writes a region, and truncated to two so a
-    /// malformed tag cannot widen the row it sits in.
-    ///
-    /// Split out so a test can assert this component never emits a code point
-    /// outside ASCII — the regional-indicator pair is exactly what must not come
-    /// back.
+    /// What the chip prints: the region's own two letters, uppercased and
+    /// truncated to two so a malformed tag cannot widen the row it sits in.
     pub fn fallback_label(region: &str) -> String {
         region
             .chars()
@@ -135,6 +151,36 @@ mod tests {
         }
     }
 
+    /// Pinned by code point rather than by a glyph: `RU` is U+1F1F7 U+1F1FA.
+    #[test]
+    fn a_region_becomes_the_regional_indicator_pair() {
+        let ru = FlagUi::emoji("ru").expect("RU is a region");
+        assert_eq!(
+            ru.chars().collect::<Vec<_>>(),
+            vec!['\u{1F1F7}', '\u{1F1FA}']
+        );
+        assert_eq!(FlagUi::emoji("KZ").as_deref(), Some("\u{1F1F0}\u{1F1FF}"));
+        assert_eq!(FlagUi::emoji(" us ").as_deref(), Some("\u{1F1FA}\u{1F1F8}"));
+    }
+
+    #[test]
+    fn something_that_is_not_a_region_has_no_emoji() {
+        for junk in ["", "R", "RUS", "R7", "рф"] {
+            assert_eq!(FlagUi::emoji(junk), None, "{junk:?} produced a flag");
+        }
+    }
+
+    /// Every region the picker can show must reach a flag on macOS.
+    #[test]
+    fn every_shipped_region_has_an_emoji_too() {
+        for code in SHIPPED_FLAGS {
+            assert!(
+                FlagUi::emoji(code).is_some_and(|emoji| emoji.chars().count() == 2),
+                "{code} has artwork but no regional-indicator pair"
+            );
+        }
+    }
+
     #[test]
     fn a_region_resolves_whatever_case_it_arrives_in() {
         for spelling in ["RU", "ru", "Ru", " ru "] {
@@ -148,8 +194,6 @@ mod tests {
 
     #[test]
     fn every_region_the_language_catalogue_names_is_shipped() {
-        // The locale identifiers riseonly-ios carries in AppLanguageCatalog:
-        // the region is the last underscore-separated component.
         for locale in [
             "ar_SA",
             "bn_BD",
@@ -217,8 +261,6 @@ mod tests {
         let theme = AppTheme::dark();
         let width = px(24.0);
 
-        // The chip is fixed to the same box as the flag it stands in for, so a
-        // long or empty tag cannot change the layout around it.
         let _ = FlagUi::chip(&theme, "not-a-region-at-all", width);
         let _ = FlagUi::chip(&theme, "", width);
     }

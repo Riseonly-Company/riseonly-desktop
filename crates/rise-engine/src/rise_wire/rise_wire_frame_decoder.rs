@@ -20,12 +20,9 @@ pub enum IncomingFrame {
     Unrecognized,
 }
 
-/// Classifies an inbound frame the way the deployed gateway actually behaves,
-/// not the way the proto suggests it should.
-///
-/// Three deviations are load-bearing and each is covered by a test below:
-/// `status` is omitted on success, the payload lives under `data` or `result`
-/// depending on the service, and `request_id` arrives as a number or a string.
+/// Classifies an inbound frame as the deployed gateway behaves, not as the proto
+/// suggests: `status` is omitted on success, the payload sits under `data` or
+/// `result` depending on the service, and `request_id` may be a number or string.
 pub fn decode_frame(root: &Value) -> IncomingFrame {
     if let Some(request_id) = root.get("request_id").and_then(parse_request_id) {
         let error = root.get("error").and_then(parse_error);
@@ -103,6 +100,8 @@ fn parse_request_id(value: &Value) -> Option<RequestId> {
 fn parse_error(value: &Value) -> Option<RemoteError> {
     match value {
         Value::Null => None,
+        // An empty string is an unset proto `string`, not an error without a message.
+        Value::String(message) if message.trim().is_empty() => None,
         Value::String(message) => Some(RemoteError {
             code: None,
             message: message.clone(),
@@ -156,6 +155,14 @@ mod tests {
             ResponseStatus::Success,
             "the deployed gateway omits status on success"
         );
+    }
+
+    #[test]
+    fn an_empty_error_string_is_not_an_error() {
+        let (_, status, _, error) =
+            response(json!({"request_id": 3, "error": "", "data": {"ok": true}}));
+        assert_eq!(status, ResponseStatus::Success);
+        assert!(error.is_none());
     }
 
     #[test]

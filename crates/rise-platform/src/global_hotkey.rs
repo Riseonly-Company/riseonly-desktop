@@ -1,24 +1,14 @@
 //! System-wide hotkeys — chords that reach the app while another application
 //! has focus.
 //!
-//! Almost all of this file is a pure model: a chord, its spellings, and the
-//! per-OS tables that turn it into the numbers an OS API wants. `HostOs` is an
-//! argument everywhere, so all three platforms' answers are asserted by the
-//! suite on a Mac, and the only thing left unverified is the final call.
+//! Almost all of this is a pure model taking `HostOs` as an argument, so all
+//! three platforms' tables are asserted from a Mac; only macOS is bound for
+//! real, through Carbon's `RegisterEventHotKey` (which needs no Accessibility
+//! permission, unlike an `NSEvent` global monitor).
 //!
-//! macOS is bound for real, through Carbon's `RegisterEventHotKey`. The obvious
-//! modern alternative, `NSEvent addGlobalMonitorForEventsMatchingMask:`, is a
-//! worse trade for a chat client: it requires the Accessibility permission,
-//! which means a system panel and an explanatory paragraph on first launch, and
-//! it hands us every keystroke typed anywhere on the machine in exchange for one
-//! shortcut. Carbon needs no permission, delivers only the chords we asked for,
-//! and is still what the platform's own shortcut handling is built on.
-//!
-//! Presses are queued and polled, not delivered by callback. The Carbon handler
-//! runs on the main thread inside gpui's run loop, and a callback that reached
-//! into app state from there would have to be reentrancy-safe against whatever
-//! gpui was doing at the time. `take_pressed` is drained from the caller's own
-//! loop, exactly like `single_instance::PrimaryInstance::take_pending`.
+//! Presses are queued and polled, not delivered by callback: the Carbon handler
+//! runs inside gpui's run loop, so `take_pressed` is drained from the caller's
+//! own loop instead.
 
 use std::marker::PhantomData;
 
@@ -53,15 +43,9 @@ pub enum HotkeyError {
     HandlerUnavailable(i32),
 }
 
-/// The four modifiers a portable chord may use.
-///
-/// `command` is one flag, not three: a chord is authored once and has to mean
-/// the same physical gesture on all three desktops. It is Command on macOS, the
-/// Windows key on Windows, Super on Linux.
-///
-/// Left and right variants are deliberately absent. Carbon cannot distinguish
-/// them in a hotkey registration at all, so a binding that promised the
-/// distinction would keep that promise on at most two platforms.
+/// The four modifiers a portable chord may use. `command` is one flag, not
+/// three: Command on macOS, the Windows key on Windows, Super on Linux. Left
+/// and right variants are absent — Carbon cannot distinguish them at all.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Modifiers {
     pub command: bool,
@@ -111,13 +95,9 @@ impl Modifiers {
         !(self.command || self.control || self.alt || self.shift)
     }
 
-    /// The bitmask the platform's registration call expects.
-    ///
-    /// Linux caveat that stays invisible until someone reports it: `Mod1Mask` is
-    /// only conventionally Alt and `Mod4Mask` only conventionally Super. X11
-    /// lets a keymap put them anywhere, so an implementation that actually grabs
-    /// keys should resolve both from `XGetModifierMapping` rather than trusting
-    /// these constants. They are the right default and the wrong certainty.
+    /// The bitmask the platform's registration call expects. Linux caveat:
+    /// `Mod1Mask` is only conventionally Alt and `Mod4Mask` only conventionally
+    /// Super, so a real grab must resolve both from `XGetModifierMapping`.
     pub fn mask(self, host: HostOs) -> u32 {
         let (command, control, alt, shift): (u32, u32, u32, u32) = match host {
             // cmdKey, controlKey, optionKey, shiftKey — HIToolbox/Events.h.
@@ -161,20 +141,15 @@ impl KeyRow {
     }
 }
 
-/// Emits the key vocabulary and its per-OS table from one list.
-///
-/// The enum and the table cannot drift apart, and because they come out in the
-/// same order a lookup is `KEYS[key as usize]` rather than a search.
+/// Emits the key vocabulary and its per-OS table from one list, in the same
+/// order, so a lookup is `KEYS[key as usize]` rather than a search.
 #[rustfmt::skip]
 macro_rules! key_table {
     ($($variant:ident, $token:literal, $mac:literal, [$($alias:literal),*],
         $carbon:literal, $windows:literal, $x11:literal;)+) => {
-        /// The keys a chord may end in.
-        ///
-        /// Wide enough for what a chat client binds — a letter or digit for
-        /// quick actions, a function key for push-to-talk, navigation and
-        /// punctuation for the rest — and deliberately no wider. Every entry
-        /// costs three hand-written platform numbers.
+        /// The keys a chord may end in. Wide enough for what a chat client
+        /// binds and deliberately no wider: every entry costs three
+        /// hand-written platform numbers.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
         pub enum KeyCode {
             $($variant,)+
@@ -196,10 +171,8 @@ macro_rules! key_table {
     };
 }
 
-// Carbon numbers are kVK_* from HIToolbox/Events.h, Windows numbers are the VK_*
-// constants, Linux numbers are X11 keysyms (XK_*) — not keycodes, see
-// `native_code`. Columns: variant, token, macOS glyph, extra spellings, Carbon,
-// Windows, X11.
+// Columns: variant, token, macOS glyph, extra spellings, Carbon kVK_*, Windows
+// VK_*, X11 keysym (XK_*, a keysym and not a keycode — see `native_code`).
 #[rustfmt::skip]
 key_table! {
     A,             "A",         "A",        [],                             0x00, 0x41, 0x0061;
@@ -282,23 +255,17 @@ impl KeyCode {
         KEYS.iter().map(|row| row.key)
     }
 
-    /// Every spelling is matched without regard to case, so a settings file
-    /// edited by hand does not have to guess the canonical capitalisation.
+    /// Every spelling is matched without regard to case.
     pub fn from_token(token: &str) -> Option<Self> {
         let lowered = token.to_lowercase();
         let row = KEYS.iter().find(|row| row.answers_to(token, &lowered))?;
         Some(row.key)
     }
 
-    /// The number the platform's registration call wants.
-    ///
-    /// Two traps live here. The macOS number is a *positional* virtual key code:
-    /// `kVK_ANSI_Q` names the key at Q's position on a US keyboard, which on a
-    /// French AZERTY machine is the one labelled A. Carbon hotkeys bind to
-    /// positions rather than to letters, and that is the platform's behaviour,
-    /// not a defect to paper over here. The Linux number is a *keysym*, which is
-    /// not what `XGrabKey` accepts; it has to pass through `XKeysymToKeycode`
-    /// first, against the display that will hold the grab.
+    /// The number the platform's registration call wants. The macOS number is a
+    /// *positional* virtual key code, so a Carbon hotkey binds to a position on
+    /// the keyboard rather than to a letter. The Linux number is a *keysym*,
+    /// which `XGrabKey` accepts only after `XKeysymToKeycode`.
     pub fn native_code(self, host: HostOs) -> u32 {
         let row = self.row();
         match host {
@@ -375,12 +342,8 @@ impl Hotkey {
     }
 
     /// Accepts what people actually type — `Cmd+Shift+R`, `cmd shift r`,
-    /// `Ctrl+Alt+K`, `Super+M` — and the glyph form this module emits on macOS,
-    /// so anything `display` produces can be read back.
-    ///
-    /// `-` is not a separator. It would be the natural second choice after `+`,
-    /// but then `Ctrl+-` could not name the minus key, and a shortcut that
-    /// cannot be expressed at all is worse than one that needs a `+`.
+    /// `Super+M` — and the macOS glyph form, so anything `display` produces
+    /// reads back. `-` is not a separator, or `Ctrl+-` could not be named.
     pub fn parse(raw: &str) -> Result<Self, HotkeyParseError> {
         let raw = raw.trim();
         if raw.is_empty() {
@@ -390,8 +353,7 @@ impl Hotkey {
         let mut modifiers = Modifiers::NONE;
         let mut rest = raw;
 
-        // The macOS form has no separators at all, so leading modifier glyphs
-        // are peeled one character at a time before anything is split.
+        // The macOS form has no separators, so glyphs are peeled one at a time.
         while let Some(glyph) = rest.chars().next() {
             match modifier_from_glyph(glyph) {
                 Some(flag) => flag.set(&mut modifiers),
@@ -426,12 +388,9 @@ impl Hotkey {
         }
     }
 
-    /// How this chord is written for a human on `host`.
-    ///
-    /// macOS renders glyphs with no separator, in the order the menu bar uses —
-    /// ⌃⌥⇧⌘ — because anything else reads as a foreign application. Windows and
-    /// Linux spell the words and join them with `+`, differing only in whether
-    /// the meta key is called Win or Super.
+    /// How this chord is written for a human on `host`: macOS renders glyphs
+    /// with no separator, in menu-bar order (⌃⌥⇧⌘); Windows and Linux spell
+    /// words joined with `+` and differ only in Win versus Super.
     pub fn display(self, host: HostOs) -> String {
         let meta = match host {
             HostOs::MacOs => return self.macos_display(),
@@ -456,12 +415,9 @@ impl Hotkey {
         parts.join("+")
     }
 
-    /// The spelling that goes into a settings file.
-    ///
-    /// Never the macOS glyph form: settings follow the account, and `⌘⇧R` means
-    /// nothing to the Linux install the same person signs into next. It is the
-    /// Linux rendering, pinned by a test so that it cannot move out from under
-    /// files already written.
+    /// The spelling that goes into a settings file — the Linux rendering, never
+    /// the macOS glyph form, because settings follow the account. Pinned by a
+    /// test so it cannot move out from under files already written.
     pub fn canonical(self) -> String {
         self.display(HostOs::Linux)
     }
@@ -510,12 +466,9 @@ fn entry_view(entry: &(String, Hotkey)) -> (&str, Hotkey) {
 /// Which chord belongs to which feature, and the rules about that.
 ///
 /// Pure — it never touches the OS, so a preferences screen can validate a chord
-/// the user is still typing. Two rules live here rather than being left to the
-/// platform. A chord with no modifier is refused outright, because registering a
-/// bare letter system-wide takes that letter away from every other application
-/// on the machine. And two features may not claim one chord, because the second
-/// registration is the one that silently never fires, and nothing about that
-/// failure is visible at the call site that caused it.
+/// as it is typed. A chord with no modifier is refused (registering a bare
+/// letter system-wide takes it from every other application), and two features
+/// may not claim one chord (the second registration silently never fires).
 #[derive(Clone, Default, Debug)]
 pub struct HotkeySet {
     bindings: Vec<(String, Hotkey)>,
@@ -582,8 +535,7 @@ impl HotkeySet {
     }
 }
 
-/// An exported but empty variable is not a running display server; treating one
-/// as present is how a headless CI box gets reported as an X11 session.
+/// An exported but empty variable is not a running display server.
 fn is_present(value: Option<&str>) -> bool {
     value.is_some_and(|text| !text.is_empty())
 }
@@ -605,11 +557,9 @@ impl DisplayServer {
         Self::from_environment(wayland.as_deref(), session.as_deref(), x11.as_deref())
     }
 
-    /// `WAYLAND_DISPLAY` outranks `DISPLAY`, and that ordering is the point of
-    /// this function. Under XWayland both are set; a key grab taken through
-    /// XWayland never sees a key pressed in a native Wayland client, so calling
-    /// such a session X11 would promise a system-wide hotkey that covers half
-    /// the desktop and reports success for the other half.
+    /// `WAYLAND_DISPLAY` outranks `DISPLAY`: under XWayland both are set, and a
+    /// grab taken through XWayland never sees a key pressed in a native Wayland
+    /// client.
     pub fn from_environment(
         wayland_display: Option<&str>,
         session_type: Option<&str>,
@@ -631,23 +581,16 @@ impl DisplayServer {
 /// background.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UnavailableReason {
-    /// `RegisterHotKey`/`UnregisterHotKey` would be the Windows implementation.
-    /// They deliver `WM_HOTKEY` to a thread's message queue, and this crate does
-    /// not own the message loop — gpui's Windows backend does, and it exposes no
-    /// hook for a foreign message. Doing this honestly means either a hook
-    /// upstream or a hidden-window thread of our own; registering without one
-    /// produces a grab that nothing ever reads.
+    /// `RegisterHotKey` delivers `WM_HOTKEY` to a thread's message queue, and
+    /// gpui's Windows backend owns the message loop with no hook for a foreign
+    /// message — registering without one produces a grab nothing ever reads.
     NoMessageLoop,
-    /// X11's `XGrabKey` on the root window is the implementation, and it is a
-    /// real one. Nothing in this build can reach an X server: there is no x11 or
-    /// xcb crate in the dependency set, and adding one is a decision rather than
-    /// an implementation detail.
+    /// X11's `XGrabKey` on the root window would be the implementation; nothing
+    /// in this build can reach an X server.
     NoX11Binding,
-    /// Wayland has no global shortcut protocol, by design rather than by
-    /// omission — only the compositor may see keys the focused client did not
-    /// receive. The single supported route is the
-    /// `org.freedesktop.portal.GlobalShortcuts` desktop portal over D-Bus, which
-    /// needs a compositor that implements it and a session the user approves.
+    /// Wayland has no global shortcut protocol by design — only the compositor
+    /// may see keys the focused client did not receive. The one route is the
+    /// `org.freedesktop.portal.GlobalShortcuts` portal over D-Bus.
     WaylandHasNoProtocol,
     /// Neither `WAYLAND_DISPLAY` nor `DISPLAY` is set.
     NoDisplayServer,
@@ -670,8 +613,8 @@ impl std::fmt::Display for UnavailableReason {
 pub enum HotkeyAvailability {
     /// The chord reaches us while another application has focus.
     SystemWide,
-    /// The chord reaches us only while one of our own windows has focus, so the
-    /// caller should present it as an in-app shortcut and promise no more.
+    /// The chord reaches us only while one of our own windows has focus, so it
+    /// must be presented as an in-app shortcut and promise no more.
     WindowOnly(UnavailableReason),
 }
 
@@ -697,21 +640,16 @@ impl HotkeyAvailability {
     }
 }
 
-/// The app's live global hotkeys.
-///
-/// Dropping this releases every chord it holds. That is not tidiness: a chord
-/// left registered after the account it belonged to logs out stays claimed by a
-/// process that no longer answers it, and the user's only clue is that the
-/// shortcut quietly stopped working.
+/// The app's live global hotkeys. Dropping this releases every chord it holds:
+/// a chord left registered stays claimed by a process that no longer answers
+/// it, and the user's only clue is that the shortcut stopped working.
 pub struct GlobalHotkeys {
     bindings: HotkeySet,
     #[cfg(target_os = "macos")]
     live: Vec<macos::Registration>,
-    /// Carbon's hotkey calls are documented as not thread safe and a live
-    /// registration holds a raw handle, so this is a main-thread type on macOS.
-    /// It is `!Send` on every platform for the same reason it is here: otherwise
-    /// app code written and compiled on this Mac could move it to a worker and
-    /// fail to compile only on the platform nobody builds.
+    /// Carbon's hotkey calls are not thread safe, so this is `!Send` on every
+    /// platform — otherwise code written on this Mac would move it to a worker
+    /// and fail to compile only where nobody builds.
     _main_thread_only: PhantomData<*const ()>,
 }
 
@@ -737,9 +675,7 @@ impl GlobalHotkeys {
 
     /// `Ok(Unsupported)` means the chord was recorded but no OS grab exists, so
     /// it fires only while a window of ours has focus. The binding is kept all
-    /// the same: a preferences screen still has to show it, and conflict
-    /// detection still has to cover it, or the same chord gets handed out twice
-    /// and collides on the one platform where it does work.
+    /// the same, or conflict detection would stop covering it.
     pub fn bind(
         &mut self,
         action: impl Into<String>,
@@ -767,8 +703,7 @@ impl GlobalHotkeys {
     }
 
     /// Drains the chords pressed since the last call, oldest first.
-    /// Non-blocking, so the caller polls from its own loop rather than this
-    /// crate owning a thread or reaching into app state from an OS callback.
+    /// Non-blocking: the caller polls it from its own loop.
     pub fn take_pressed(&self) -> Vec<String> {
         #[cfg(target_os = "macos")]
         {
@@ -815,13 +750,9 @@ impl GlobalHotkeys {
     }
 }
 
-/// Carbon, declared by hand.
-///
-/// There is no binding crate for HIToolbox in this project's dependency set and
-/// there will not be one for five functions. The declarations below follow
-/// `HIToolbox/CarbonEvents.h` and `HIToolbox/CarbonEventsCore.h`: `OSStatus` is
+/// Carbon, declared by hand from `HIToolbox/CarbonEvents.h`: `OSStatus` is
 /// `SInt32`, `OSType` is `UInt32`, and `ItemCount` and `ByteCount` are both
-/// `unsigned long`, which is 64-bit on every Mac this ships to — hence `usize`.
+/// `unsigned long`, 64-bit on every Mac this ships to — hence `usize`.
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::c_void;
@@ -908,19 +839,16 @@ mod macos {
     const PARAM_DIRECT_OBJECT: u32 = fourcc(b"----");
     const TYPE_EVENT_HOT_KEY_ID: u32 = fourcc(b"hkid");
 
-    /// Stamped into every registration, so a hotkey event belonging to some
-    /// other Carbon client in this process cannot be read as one of ours.
+    /// Stamped into every registration, so another Carbon client's hotkey event
+    /// in this process cannot be read as one of ours.
     const SIGNATURE: u32 = fourcc(b"rise");
 
-    /// `kEventHotKeyNoOptions`, not `kEventHotKeyExclusive`. Exclusivity would
-    /// deny the chord to every other application for as long as we run, which is
-    /// a hostile thing for a chat client to do. The cost is that macOS notifies
-    /// all registrants, so a successful registration does not prove the chord is
-    /// ours alone.
+    /// `kEventHotKeyNoOptions`, not `kEventHotKeyExclusive`: macOS notifies all
+    /// registrants, so a successful registration does not prove the chord is
+    /// ours alone — but exclusivity would deny it to every other application.
     const NO_OPTIONS: u32 = 0;
 
-    /// A press nobody collects must not accumulate forever. Sixty-four is far
-    /// more than a person can produce between two turns of the caller's loop.
+    /// A press nobody collects must not accumulate forever.
     const MAX_PENDING: usize = 64;
 
     static SLOTS: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
@@ -939,8 +867,8 @@ mod macos {
         };
 
         // SAFETY: `event` is the event Carbon is dispatching to this handler,
-        // and the out buffer is exactly one EventHotKeyID, which the header
-        // documents as the type of kEventParamDirectObject on this event kind.
+        // and the out buffer is exactly one EventHotKeyID, the documented type
+        // of kEventParamDirectObject on this event kind.
         let status = unsafe {
             get_event_parameter(
                 event,
@@ -979,11 +907,9 @@ mod macos {
                 event_kind: EVENT_HOT_KEY_PRESSED,
             };
 
-            // SAFETY: one EventTypeSpec is described by the count of 1, and
-            // Carbon copies the list during the call. No user data is passed:
-            // the callback reaches its state through this module's statics,
-            // because a pointer into a struct the caller is free to move would
-            // dangle the moment it did.
+            // SAFETY: one EventTypeSpec matches the count of 1, and Carbon
+            // copies the list during the call. No user data is passed: the
+            // callback reaches its state through this module's statics.
             unsafe {
                 install_event_handler(
                     get_application_event_target(),
@@ -1013,7 +939,7 @@ mod macos {
         fn drop(&mut self) {
             // SAFETY: `handle` came from a register_event_hot_key that returned
             // noErr, and this is the only place it is released — Registration is
-            // neither Clone nor Copy, so it cannot be unregistered twice.
+            // neither Clone nor Copy.
             unsafe {
                 unregister_event_hot_key(self.handle);
             }
@@ -1027,16 +953,15 @@ mod macos {
             return Err(HotkeyError::HandlerUnavailable(status));
         }
 
-        // Slots are never reused, so an event already in flight when a chord was
-        // released cannot be delivered to whatever took that chord's place.
+        // Slots are never reused: an event in flight when a chord is released
+        // cannot be delivered to whatever takes that chord's place.
         let slot = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
         SLOTS.lock().push((slot, action.to_owned()));
 
         let mut handle: EventHotKeyRef = std::ptr::null_mut();
 
-        // SAFETY: the key code and mask come from this module's tables, the
-        // target is the process's own event target, and `handle` is a live local
-        // that Carbon writes exactly one pointer into.
+        // SAFETY: the key code and mask come from this module's tables, and
+        // `handle` is a live local Carbon writes exactly one pointer into.
         let status = unsafe {
             register_event_hot_key(
                 hotkey.native_key_code(HostOs::MacOs),
@@ -1076,9 +1001,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    // Nothing here registers a real chord. A test that called
-    // RegisterEventHotKey would claim a system-wide combination on the machine
-    // running the suite and take it from whatever the user had in front of them.
+    // Nothing here registers a real chord: it would claim a system-wide
+    // combination on the machine running the suite.
 
     fn chord(raw: &str) -> Hotkey {
         match Hotkey::parse(raw) {
@@ -1235,7 +1159,7 @@ mod tests {
     #[test]
     fn nonsense_is_refused_rather_than_guessed() {
         // "R+Cmd" is refused because the key comes last: anything before it has
-        // to be a modifier, or two keys in one chord would parse.
+        // to be a modifier.
         let cases = [
             ("", HotkeyParseError::Empty),
             ("   ", HotkeyParseError::Empty),
@@ -1393,7 +1317,6 @@ mod tests {
         let mut set = HotkeySet::new();
         set.bind("quick_search", chord("Cmd+Shift+R")).unwrap();
 
-        // The second registration is the one that would silently never fire.
         let second = set.bind("toggle_window", chord("Cmd+Shift+R"));
         let Err(HotkeyError::Conflict { owner, .. }) = second else {
             panic!("a chord already claimed by quick_search must be refused");

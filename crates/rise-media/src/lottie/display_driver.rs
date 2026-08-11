@@ -1,20 +1,8 @@
 //! One tick for every animated sticker on screen.
 //!
-//! THE PROBLEM THIS SOLVES
-//!
-//! The obvious implementation gives each player its own loop that awaits a
-//! render and then sleeps. That is two main-thread resumptions plus a
-//! cross-thread hop per frame per sticker — roughly 120·N work items a second —
-//! and under contention the sleep collapses to zero and the loop becomes a busy
-//! spin. A picker grid of sixty stickers is then sixty spinning tasks.
-//!
-//! One driver ticking at the sticker cadence replaces all of it. Each tick is a
-//! bounded pass that reads already-rasterised frames and reports what to
-//! present, so the caller applies the whole screen's worth in a single commit.
-//!
-//! Ported from `RiseLottieDisplayDriver`, with the callbacks removed: this
-//! returns a decision rather than invoking anything, which is what lets a
-//! sixty-sticker screen be tested with no window and no clock.
+//! Each tick is a bounded pass over every registered player that reads
+//! already-rasterised frames and returns what to present, so the caller applies
+//! a whole screen's worth in a single commit.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,8 +10,7 @@ use std::sync::Arc;
 use super::raster_policy::{MAXIMUM_FRAME_RATE, PREFETCH_PRESENTATIONS};
 use super::sequence::{DecodedFrame, FrameSequence};
 
-/// A registered player's identity. Stable for the life of the view, and never
-/// an index into anything.
+/// A registered player's identity, stable for the life of the view.
 pub type PlayerId = u64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -49,8 +36,8 @@ impl std::fmt::Debug for Presentation {
     }
 }
 
-/// A frame the raster pool should produce, in priority order: the frame a
-/// player is waiting on comes before the ones it will want next.
+/// A frame the raster pool should produce. Emitted in priority order: the
+/// frame a player is waiting on before the ones it will want next.
 #[derive(Clone, Debug)]
 pub struct FrameRequest {
     pub sequence: Arc<FrameSequence>,
@@ -79,10 +66,8 @@ impl std::fmt::Debug for Tick {
 struct Registration {
     sequence: Arc<FrameSequence>,
     looping: Loop,
-    /// Monotonic milliseconds, and signed because registering at a non-zero
-    /// frame rewinds the clock to where that frame sits on the timeline. That
-    /// is what makes a player whose playback slot was revoked and regranted
-    /// resume instead of snapping back to frame zero.
+    /// Signed: registering at a non-zero frame rewinds this behind the clock so
+    /// a regranted player resumes instead of snapping back to frame zero.
     started_at_millis: i64,
     last_presented: Option<usize>,
 }
@@ -97,9 +82,7 @@ impl DisplayDriver {
         Self::default()
     }
 
-    /// The cadence the host should drive this at. Not the monitor's refresh
-    /// rate: a 165 Hz display is what the compositor does, not what a sticker
-    /// needs, and presenting more often only costs decodes.
+    /// The cadence the host should drive this at — not the monitor refresh rate.
     pub const fn frame_rate() -> f64 {
         MAXIMUM_FRAME_RATE
     }
@@ -141,8 +124,7 @@ impl DisplayDriver {
     /// Advance every registered player.
     ///
     /// A player whose frame is not rasterised yet is skipped rather than
-    /// blanked: holding the last image while the raster pool catches up is
-    /// invisible, and clearing it is a flicker on every cache miss.
+    /// blanked, so its last image holds while the raster pool catches up.
     pub fn tick(&mut self, now_millis: i64) -> Tick {
         let mut tick = Tick::default();
         let mut finished: Vec<PlayerId> = Vec::new();
@@ -165,9 +147,7 @@ impl DisplayDriver {
             let elapsed_millis = (now_millis - registration.started_at_millis).max(0);
             let elapsed_frames =
                 (elapsed_millis as f64 / 1000.0 * sequence.frame_rate().max(1.0)) as usize;
-            // Snapped to the stride so a looping sticker keeps visiting the
-            // same frame indices, and the compressed set converges after one
-            // loop instead of filling with frames nothing will show again.
+            // Snapped to the stride so a looping sticker keeps visiting the same indices and the compressed set converges after one loop.
             let raw_index = elapsed_frames / stride * stride;
 
             let index = match registration.looping {
@@ -211,11 +191,6 @@ impl DisplayDriver {
         tick
     }
 
-    /// Keep the raster pool a few presentations ahead so the first loop fills
-    /// in without ever blocking a tick.
-    ///
-    /// Stepping by the presentation stride matters: any other index is never
-    /// shown, so rasterising it is pure waste.
     fn prefetch(
         sequence: &Arc<FrameSequence>,
         index: usize,
@@ -243,11 +218,8 @@ mod tests {
     use super::super::sequence::tests::CountingRasterizer;
     use super::*;
 
-    /// The monotonic instant at which authored frame `index` becomes due.
-    ///
-    /// Rounded up with a millisecond of margin: elapsed frames are truncated,
-    /// so asking at exactly index/rate lands one frame short and every timing
-    /// assertion below would be testing the rounding rather than the policy.
+    /// When authored frame `index` becomes due, rounded up by a millisecond
+    /// because elapsed frames are truncated.
     fn at_frame(index: usize, rate: f64) -> i64 {
         (index as f64 / rate * 1000.0).ceil() as i64 + 1
     }
@@ -347,7 +319,6 @@ mod tests {
         driver.tick(at_frame(10, 30.0));
         driver.unregister(1);
 
-        // Comes back a whole second later, at the frame it had reached.
         driver.register(1, sequence, Loop::Forever, 10, 10_000);
         let tick = driver.tick(10_000 + at_frame(1, 30.0));
 

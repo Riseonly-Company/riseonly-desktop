@@ -22,11 +22,7 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-// Point rsmpeg at the LGPL prefix built by scripts/build-ffmpeg-lgpl.sh.
-//
-// Without this, rsmpeg finds the system FFmpeg — which on macOS is Homebrew's,
-// configured --enable-gpl with libx264 and libx265. Linking that relicenses the
-// product, so finding it by accident is the failure mode worth engineering out.
+// Without this, rsmpeg finds the system FFmpeg — Homebrew's is --enable-gpl, and linking it relicenses the product.
 fn point_rsmpeg_at_the_lgpl_prefix(root: &Path) {
     let os = if cfg!(target_os = "macos") {
         "macos"
@@ -65,12 +61,6 @@ fn point_rsmpeg_at_the_lgpl_prefix(root: &Path) {
 
 const RLOTTIE_VERSION: &str = "0.2";
 
-// Compile the vendored rlottie into the crate, the way rusqlite bundles SQLite.
-//
-// The alternative is asking three operating systems for a system librlottie
-// that none of them ships, or requiring cmake and ninja on every developer
-// machine and CI runner to build a shared object we would then have to sign and
-// relocate inside a .app. Neither is worth it for 35 translation units.
 fn compile_rlottie(root: &Path) {
     let src = root
         .join("vendor/rlottie")
@@ -83,12 +73,7 @@ fn compile_rlottie(root: &Path) {
         );
     }
 
-    // Upstream generates this from cmake/config.h.in. LOTTIE_IMAGE_MODULE is
-    // deliberately absent: with it, rlottie dlopens a separate
-    // librlottie-image-loader at runtime, which means shipping and signing a
-    // second binary. Without it, stb_image.cpp is linked in and called
-    // directly. The module is not optional in effect — a sticker with an
-    // embedded raster asset renders blank without an image loader.
+    // LOTTIE_IMAGE_MODULE is deliberately absent: it would dlopen a second binary, whereas without it stb_image.cpp is linked in — and a sticker with an embedded raster asset renders blank with no image loader at all.
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
     std::fs::write(
         out.join("config.h"),
@@ -104,12 +89,7 @@ fn compile_rlottie(root: &Path) {
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let msvc = target_env == "msvc";
 
-    // The pixman NEON routines that vdrawhelper_neon.cpp calls are 32-bit ARM
-    // assembly, and upstream assembles them only for that target. On aarch64
-    // the compiler still predefines __ARM_NEON__, so compiling the NEON helper
-    // would reference symbols nothing provides — and the same macro suppresses
-    // the portable memfill32 in vdrawhelper.cpp, so the link fails twice over.
-    // Undefining it selects the portable path consistently.
+    // aarch64 predefines __ARM_NEON__, but the pixman NEON routines are 32-bit ARM assembly and the same macro suppresses the portable memfill32; undefining it selects the portable path.
     let arm32 = arch == "arm";
     let neon_asm = arm32;
 
@@ -154,8 +134,7 @@ fn compile_rlottie(root: &Path) {
             .compile("rlottie_pixman_neon");
     }
 
-    // Not linked through cc because the C++ runtime is not one of cc's outputs:
-    // rlottie uses std::string, std::vector and std::thread throughout.
+    // cc does not emit the C++ runtime, which rlottie needs throughout.
     if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=dylib=c++");
     } else if !msvc {
@@ -195,9 +174,7 @@ fn rlottie_sources(src: &Path, neon: bool) -> Vec<PathBuf> {
         }
     }
 
-    // read_dir order is filesystem order, which differs between machines and
-    // makes the compiled object list — and therefore ccache and sccache keys —
-    // nondeterministic.
+    // read_dir order is per-machine, which makes ccache/sccache keys nondeterministic.
     files.sort();
     files
 }

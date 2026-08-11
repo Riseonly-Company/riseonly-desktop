@@ -6,16 +6,9 @@ use gpui::{
 };
 use rise_i18n::tr;
 use rise_navigation::RootTab;
-use rise_platform::materials::Material;
 use rise_theme::AppTheme;
 use rise_ui::{IconSize, IconUi};
-use rise_widgets::GlassPanel;
 
-/// One section of the rail: what the phone puts in its tab bar.
-///
-/// The SF Symbol and the string key are the reference's own —
-/// `MainTabs.swift` — so the rail and the phone's tab bar cannot drift apart
-/// without the drift being visible in a diff.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RailSection {
     pub tab: RootTab,
@@ -24,7 +17,7 @@ pub struct RailSection {
 }
 
 impl RailSection {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self {
             tab: RootTab::Feed,
             sf_symbol: "doc.text",
@@ -46,18 +39,35 @@ impl RailSection {
             title_key: "navbtn_shorts",
         },
         Self {
+            tab: RootTab::Vacancies,
+            sf_symbol: "briefcase",
+            title_key: "navbtn_vacancies",
+        },
+        Self {
+            tab: RootTab::Music,
+            sf_symbol: "music.note",
+            title_key: "navbtn_music",
+        },
+        Self {
             tab: RootTab::Profile,
-            sf_symbol: "ellipsis.circle",
-            title_key: "more_tab_title",
+            sf_symbol: "person.crop.circle",
+            title_key: "navbtn_profile",
         },
     ];
+
+    pub fn primary() -> &'static [Self] {
+        &Self::ALL[..Self::ALL.len() - 1]
+    }
+
+    pub fn footer() -> &'static Self {
+        &Self::ALL[Self::ALL.len() - 1]
+    }
 
     pub fn title(&self) -> String {
         tr(self.title_key)
     }
 }
 
-/// A chat folder, stacked under the sections the way Telegram for macOS does it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RailFolder {
     pub id: String,
@@ -65,11 +75,11 @@ pub struct RailFolder {
     pub unread: u32,
 }
 
-/// What a click on the rail addresses.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RailTarget {
     Section(RootTab),
     Folder(String),
+    Settings,
 }
 
 pub struct RailState<'a> {
@@ -86,42 +96,31 @@ pub struct RailHandlers<V: 'static> {
     pub context_menu: Contextual<V>,
 }
 
-/// The vertical strip on the left.
-///
-/// This is the only part of the design that deliberately departs from the phone.
-/// It is `Material::Chrome`, which on a recent macOS is a real system material
-/// and everywhere else is paint — the rail itself never learns which.
 pub struct Rail;
 
 impl Rail {
-    pub const REGION_KEY: &'static str = "shell.rail";
+    const SETTINGS_SYMBOL: &'static str = "gearshape";
 
-    /// The tab-index the sections start at.
-    ///
-    /// The rail is the first thing Tab reaches, before the columns beside it,
-    /// because it is the first thing the eye reaches.
     const FIRST_TAB_INDEX: isize = 0;
 
     pub fn render<V: 'static>(
         state: RailState<'_>,
+        corner_radius: Pixels,
         handlers: &RailHandlers<V>,
         cx: &mut Context<V>,
     ) -> impl IntoElement {
         let theme: AppTheme = rise_ui::theme(cx as &App).clone();
         let metrics = theme.shell;
 
-        let mut rail = GlassPanel::surface(Self::REGION_KEY, Material::Chrome, cx)
-            .w(metrics.rail_width)
-            .h_full()
+        let mut top = div()
             .flex()
             .flex_col()
             .items_center()
-            .gap(metrics.rail_item_gap)
-            .p(metrics.rail_padding)
-            .tab_group();
+            .w_full()
+            .gap(metrics.rail_item_gap);
 
-        for (index, section) in RailSection::ALL.iter().enumerate() {
-            rail = rail.child(Self::item(
+        for (index, section) in RailSection::primary().iter().enumerate() {
+            top = top.child(Self::item(
                 &theme,
                 ElementId::Name(SharedString::new_static(section.tab.screen_id())),
                 Self::FIRST_TAB_INDEX + index as isize,
@@ -136,12 +135,12 @@ impl Rail {
         }
 
         if !state.folders.is_empty() {
-            rail = rail.child(Self::divider(&theme));
+            top = top.child(Self::divider(&theme));
         }
 
-        let folders_start = Self::FIRST_TAB_INDEX + RailSection::ALL.len() as isize;
+        let folders_start = Self::FIRST_TAB_INDEX + RailSection::primary().len() as isize;
         for (index, folder) in state.folders.iter().enumerate() {
-            rail = rail.child(Self::item(
+            top = top.child(Self::item(
                 &theme,
                 ElementId::Name(SharedString::from(format!("folder.{}", folder.id))),
                 folders_start + index as isize,
@@ -155,7 +154,63 @@ impl Rail {
             ));
         }
 
-        rail
+        let profile = RailSection::footer();
+        let footer_index = folders_start + state.folders.len() as isize;
+
+        let bottom = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .w_full()
+            .gap(metrics.rail_item_gap)
+            .child(Self::divider(&theme))
+            .child(Self::item(
+                &theme,
+                ElementId::Name(SharedString::new_static("rail.settings")),
+                footer_index,
+                Self::SETTINGS_SYMBOL,
+                Some(tr("settings_page_title")),
+                false,
+                None,
+                RailTarget::Settings,
+                handlers,
+                cx,
+            ))
+            .child(Self::item(
+                &theme,
+                ElementId::Name(SharedString::new_static(profile.tab.screen_id())),
+                footer_index + 1,
+                profile.sf_symbol,
+                Some(profile.title()),
+                profile.tab == state.selected,
+                None,
+                RailTarget::Section(profile.tab),
+                handlers,
+                cx,
+            ));
+
+        // This is the one inset surface in the shell. Content columns remain
+        // edge-to-edge; only the Telegram-style navigation rail floats five
+        // points inside the native window.
+        div()
+            .w(metrics.rail_width)
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_between()
+            .pt(metrics.window_drag_height)
+            .pb(metrics.rail_padding)
+            .px(metrics.rail_padding)
+            .rounded(corner_radius)
+            .border_1()
+            .border_color(theme.border._100)
+            .bg(theme.bg._200)
+            .overflow_hidden()
+            .tab_group()
+            .child(div().flex_1().min_h_0().overflow_hidden().child(top))
+            .child(bottom)
     }
 
     fn divider(theme: &AppTheme) -> impl IntoElement {
@@ -167,10 +222,6 @@ impl Rail {
             .bg(theme.border._200)
     }
 
-    /// Icon over a caption, the way the phone's tab bar reads, rather than an
-    /// icon alone with a tooltip: gpui ships no tooltip and nothing may leave
-    /// the window rectangle, so a hover-only label would be ours to build and
-    /// would still be unreachable from the keyboard.
     #[allow(clippy::too_many_arguments)]
     fn item<V: 'static>(
         theme: &AppTheme,
@@ -219,8 +270,6 @@ impl Rail {
             .w_full()
             .py(theme.shell.rail_item_gap / 2.0)
             .rounded(theme.radius._300)
-            .when(is_selected, |item| item.bg(theme.bg._400))
-            .hover(|item| item.bg(theme.bg._300))
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                 activate(view, on_click_target.clone(), window, cx);
             }))
@@ -248,8 +297,6 @@ impl Rail {
         item
     }
 
-    /// Capped at 99+ so a folder with four thousand unread messages cannot widen
-    /// the rail and shift every column beside it.
     fn badge(theme: &AppTheme, count: u32) -> impl IntoElement {
         let label = if count > 99 {
             "99+".to_owned()
@@ -281,25 +328,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_rail_presents_every_tab_in_the_reference_order() {
+    fn the_rail_presents_every_tab_in_the_navigation_order() {
         let presented: Vec<RootTab> = RailSection::ALL.iter().map(|s| s.tab).collect();
 
         assert_eq!(
             presented,
             RootTab::ALL.to_vec(),
             "the rail is a presentation of RootTab::ALL; a different order moves \
-             the sections under the user's Cmd+1..5 as well"
+             the sections under the user's Cmd+1..n as well"
         );
+    }
+
+    #[test]
+    fn the_phones_five_are_still_the_first_four_plus_the_profile() {
+        let first_four: Vec<RootTab> = RailSection::ALL.iter().take(4).map(|s| s.tab).collect();
         assert_eq!(
-            presented,
+            first_four,
             vec![
                 RootTab::Feed,
                 RootTab::Search,
                 RootTab::Chats,
-                RootTab::Shorts,
-                RootTab::Profile
-            ],
-            "MainTabs.swift declares posts, search, chats, shorts, more"
+                RootTab::Shorts
+            ]
+        );
+        assert_eq!(RailSection::footer().tab, RootTab::Profile);
+    }
+
+    #[test]
+    fn the_two_unpacked_sections_are_the_references_own_more_entries() {
+        let keys: Vec<&str> = RailSection::ALL
+            .iter()
+            .skip(4)
+            .take(2)
+            .map(|s| s.title_key)
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["navbtn_vacancies", "navbtn_music"],
+            "both keys exist in the reference's own catalogue; neither is invented here"
+        );
+    }
+
+    #[test]
+    fn the_profile_is_the_only_section_pinned_to_the_bottom() {
+        assert_eq!(RailSection::primary().len(), RailSection::ALL.len() - 1);
+        assert!(
+            !RailSection::primary()
+                .iter()
+                .any(|section| section.tab == RootTab::Profile)
         );
     }
 
@@ -312,10 +388,7 @@ mod tests {
                 section.sf_symbol
             );
         }
-    }
-
-    #[test]
-    fn the_folder_icon_is_mapped_too() {
+        assert!(IconUi::asset_path(Rail::SETTINGS_SYMBOL).is_some());
         assert!(IconUi::asset_path("folder").is_some());
     }
 
@@ -332,21 +405,6 @@ mod tests {
     }
 
     #[test]
-    fn the_section_keys_are_the_ones_the_reference_uses() {
-        let keys: Vec<&str> = RailSection::ALL.iter().map(|s| s.title_key).collect();
-        assert_eq!(
-            keys,
-            vec![
-                "navbtn_posts",
-                "navbtn_search",
-                "navbtn_chats",
-                "navbtn_shorts",
-                "more_tab_title"
-            ]
-        );
-    }
-
-    #[test]
     fn every_tab_resolves_to_exactly_one_section() {
         for tab in RootTab::ALL {
             let matches = RailSection::ALL
@@ -355,5 +413,10 @@ mod tests {
                 .count();
             assert_eq!(matches, 1, "{tab:?} is presented {matches} times");
         }
+    }
+
+    #[test]
+    fn settings_is_a_target_the_rail_can_address_without_being_a_tab() {
+        assert_ne!(RailTarget::Settings, RailTarget::Section(RootTab::Profile));
     }
 }

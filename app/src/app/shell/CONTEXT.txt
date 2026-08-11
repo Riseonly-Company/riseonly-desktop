@@ -17,12 +17,18 @@ WHAT THIS DIRECTORY OWNS
   that deliberately departs from the phone: the screens are the phone's, the
   frame is the desktop's.
 
-    rail 56 · list/sidebar 320 · content flexible · aside 300
-    rail = Material::Chrome · list = Material::Panel · content opaque
+    rail 90 + 5 inset · list/sidebar 320 · content flexible · aside 300
+    rail = painted near-black surface · list/content/aside = edge-to-edge plate
 
   The numbers are not here. They are rise-theme's ShellMetrics, so density
   reaches them and so rise-navigation's PanePolicy can be built from the same
   values instead of repeating them.
+
+  The 5pt inset belongs ONLY to the rail. Do not turn it into padding on the
+  shell: future lists and media are allowed to touch the native window edge.
+  The rail resolves `current_window_corner()` once, subtracts the 5pt inset so
+  its arc stays parallel to the window arc, and keeps macOS traffic lights as
+  real AppKit buttons rather than painted replicas.
 
   rail.rs              the sections and folders, click and right-click
   shell_actions.rs     the actions, the one idempotent key map, and what
@@ -120,9 +126,9 @@ WINDOWS
 
 WHAT IT MUST NEVER DO
 
-  Ask for glass. The rail asks for Material::Chrome and rise-platform decides
-  what that is on this machine. A component that could name glass would be a
-  hole on Linux that nobody notices until a screenshot arrives.
+  Ask for glass. The rail is the painted near-black surface selected by the
+  shell theme. A component that could name glass would be a hole on Linux that
+  nobody notices until a screenshot arrives.
 
   Reach past InteractionsStore for data. The folder list arrives as values; the
   rail neither fetches nor owns it.

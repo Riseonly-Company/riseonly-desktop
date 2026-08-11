@@ -20,7 +20,7 @@ run_task = [
 # macOS runs from a real .app bundle, never a bare binary: Keychain ACLs,
 # UserNotifications and MPNowPlayingInfoCenter all key off the bundle identity.
 [tasks.dev-macos]
-description = "Build, bundle and launch Riseonly.app (debug)"
+description = "Build, bundle and launch Riseonly.app (debug). --design opens the storybook"
 script_runner = "@shell"
 script = '''
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -32,6 +32,7 @@ cargo build -p riseonly
 # The bundle is named for the environment it was compiled for, so the script
 # reports where it put it rather than the caller guessing.
 BUNDLE="$(./scripts/bundle-macos.sh debug | sed -n 's/^bundled: \(.*\)  (.*)$/\1/p')"
+. ./scripts/dev-args.sh
 open -n "$BUNDLE" --args "$@"
 '''
 
@@ -40,7 +41,7 @@ RUST_BACKTRACE = "1"
 RUST_LOG = "riseonly=debug,rise_app=debug,rise_engine=debug"
 
 [tasks.dev-linux]
-description = "Build and launch on Linux (X11 or Wayland, chosen at runtime)"
+description = "Build and launch on Linux (X11 or Wayland, chosen at runtime). --design opens the storybook"
 script_runner = "@shell"
 script = '''
 if [ "$(uname -s)" != "Linux" ]; then
@@ -51,6 +52,7 @@ if [ "$(uname -s)" != "Linux" ]; then
 fi
 cd "${CARGO_MAKE_WORKING_DIRECTORY}"
 cargo build -p riseonly
+. ./scripts/dev-args.sh
 exec ./target/debug/riseonly "$@"
 '''
 

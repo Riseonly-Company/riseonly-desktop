@@ -2,29 +2,19 @@ use std::time::Duration;
 
 use gpui::Animation;
 
-/// One full sweep of the highlight across a placeholder group.
-///
-/// The reference sweeps at roughly this cadence. It is deliberately slow: gpui
-/// has no damage regions, so a permanently animating element repaints its whole
-/// window every frame it advances, and the cost is battery and compositor load
-/// that never appears in a frame trace.
+/// One full sweep of the highlight across a placeholder group. Deliberately
+/// slow: gpui has no damage regions, so an animating element repaints its whole
+/// window on every frame it advances.
 pub const SHIMMER_PERIOD: Duration = Duration::from_millis(1200);
 
-/// The looping driver for a skeleton group.
-///
-/// One per container, never one per shape. `gpui::AnimationExt::with_animation`
-/// honours `App::reduce_motion` on its own — with it set the element renders in
-/// its start state and no frames are scheduled at all — which is why the
-/// reduce-motion policy is not repeated at the call site.
+/// The looping driver for a skeleton group — one per container, never one per
+/// shape. `with_animation` honours `App::reduce_motion` on its own.
 pub fn shimmer_animation() -> Animation {
     Animation::new(SHIMMER_PERIOD).repeat()
 }
 
-/// Where the highlight band sits, as a fraction of the container's width.
-///
-/// `leading` and `trailing` are the band's two edges. Both may fall outside
-/// `0.0..=1.0`, which is what makes the band enter and leave rather than
-/// appearing and disappearing at the edges.
+/// Where the highlight band sits, as a fraction of the container's width. Either
+/// edge may fall outside `0.0..=1.0` so the band enters and leaves.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ShimmerBand {
     pub leading: f32,
@@ -41,12 +31,8 @@ impl ShimmerBand {
     }
 }
 
-/// The band's position for one point in the sweep.
-///
-/// `progress` is the 0..=1 delta `with_animation` supplies. The travel is wider
-/// than the container on both sides so the band is fully off-screen at the ends
-/// of the loop; otherwise the highlight pops into existence at the left edge on
-/// every repeat.
+/// The band's position for one point in the sweep. `progress` is the 0..=1 delta
+/// `with_animation` supplies.
 pub fn shimmer_band(progress: f32) -> ShimmerBand {
     const BAND_WIDTH: f32 = 0.45;
 

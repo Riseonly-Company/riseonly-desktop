@@ -4,20 +4,11 @@ use gpui::{
 };
 use rise_platform::HostOs;
 use rise_platform::materials::{apply_window_material, preferred_window_material};
+use rise_platform::window_chrome::round_window_corner;
 
 use crate::app::root_view::RootView;
 use crate::core::config::AppEnvironment;
 
-/// Opens and counts the app's windows.
-///
-/// ONE ACCOUNT PER PROCESS, MANY WINDOWS ONTO IT. `rise-engine` holds one engine
-/// per account per process behind a lease on the database path, and the account
-/// root entity is dropped whole when the account changes; a second account in a
-/// second window would mean a second engine, a second database and two teardown
-/// orders in one process, which is the thing the ownership model exists to
-/// avoid. Two accounts at once is therefore a second process, and each process
-/// already has its own advisory lock. Every window here is a view onto the same
-/// account, with its own navigation stacks and its own overlays.
 pub struct WindowPresenter;
 
 impl WindowPresenter {
@@ -47,23 +38,24 @@ impl WindowPresenter {
         let step = metrics.window_cascade_offset * cascade_step(existing);
         bounds.origin += point(step, step);
 
+        let requested = preferred_window_material(HostOs::current());
+
         let handle = cx
             .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    // No titlebar strip. The reference is a phone and has none;
-                    // Telegram for macOS has none either, and the shell's whole
-                    // premise is that the rail and the list run to the top edge.
-                    // The traffic lights stay — a macOS window without them is
-                    // one the user cannot close — and are inset over the content,
-                    // which is what `shell.traffic_light_inset` reserves room for.
+                    // The mac answer here is NOT opaque, and not for a material:
+                    // a rounded corner is a piece of the window cut away, and an
+                    // opaque window has nowhere to cut it out of. See
+                    // `preferred_window_material`. Set at open as well as
+                    // through `apply_window_material` below so the very first
+                    // frame is already right rather than flashing one that is
+                    // not.
+                    window_background: requested.into_gpui(),
                     titlebar: Some(TitlebarOptions {
                         title: Some(AppEnvironment::compiled().display_name().into()),
                         appears_transparent: true,
-                        traffic_light_position: Some(point(
-                            metrics.traffic_light_inset,
-                            metrics.traffic_light_inset,
-                        )),
+                        traffic_light_position: Some(metrics.traffic_light_origin()),
                     }),
                     ..Default::default()
                 },
@@ -74,18 +66,23 @@ impl WindowPresenter {
             })
             .ok()?;
 
-        // Tier 0 of docs/PLATFORM_GLASS.md, and the only tier that is free:
-        // gpui_macos already hosts an NSVisualEffectView behind a transparent
-        // Metal layer. Elsewhere the request is downgraded to opaque rather than
-        // forwarded — see granted_window_material for why a see-through window
-        // with no compositor blur is worse than never asking for one.
-        let requested = preferred_window_material(HostOs::current());
         let granted = handle.update(cx, |_, window, _| apply_window_material(window, requested));
 
         if !matches!(granted, Ok(rise_platform::PlatformSupport::Performed)) {
             tracing::info!(
                 target: "riseonly",
                 "window material {requested:?} was not granted here; the painted tier stands in"
+            );
+        }
+
+        // After the material, never before it: the mask cuts the corner away and
+        // only a window that is not opaque has anywhere for the cut to go.
+        let rounded = handle.update(cx, |_, window, _| round_window_corner(window));
+
+        if !matches!(rounded, Ok(rise_platform::PlatformSupport::Performed)) {
+            tracing::info!(
+                target: "riseonly",
+                "the window kept the square corner gpui opens it with"
             );
         }
 
@@ -97,10 +94,6 @@ impl WindowPresenter {
     }
 }
 
-/// How many cascade steps in the nth window opens.
-///
-/// It wraps, because a user who opens twelve windows should get the twelfth back
-/// near the first rather than off the bottom of the screen.
 fn cascade_step(existing: usize) -> f32 {
     const WRAP: usize = 6;
     (existing % WRAP) as f32

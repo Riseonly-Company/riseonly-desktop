@@ -7,12 +7,6 @@ use tokio::runtime::Handle;
 
 use super::core::rise_presence_rpc as rpc;
 
-/// The presence verbs, as something a store can hold.
-///
-/// Every one of them is fire-and-forget: the gateway answers a subscription with
-/// an acknowledgement carrying no state, and the state itself arrives later as a
-/// push. So there is nothing to await and nothing to reconcile — which is also
-/// why presence has no actor repository, only a projection over the pushes.
 pub trait PresenceWire: Send + Sync {
     fn subscribe(&self, user_ids: Vec<String>);
     fn unsubscribe(&self, user_ids: Vec<String>);
@@ -40,9 +34,6 @@ impl LivePresenceWire {
                 .map(|since| since.as_millis() as u64)
                 .unwrap_or_default();
 
-            // A failure here is not actionable: presence is decoration, and a
-            // reconnect re-subscribes everything anyway. Logged rather than
-            // surfaced, so a flaky network cannot put an error on a chat list.
             if let Err(error) = wire.call(descriptor, payload, now).await {
                 tracing::debug!(
                     target: "riseonly::presence",

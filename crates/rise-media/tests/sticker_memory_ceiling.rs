@@ -1,16 +1,5 @@
-//! The sticker half of the Phase 4 gate: scroll a picker and hold the ceiling.
-//!
-//! Video multiplies memory by frame rate and stream count. Stickers multiply it
-//! by frame count and grid size, and a picker is the worst case in the product:
-//! several hundred animations, each with dozens of frames, all of which want to
-//! be resident at once. The failure mode is the same one the video ceiling
-//! guards — memory that grows with how far the user scrolled — and it is just
-//! as invisible while it is happening.
-//!
-//! Three ceilings are asserted because there are three pools: the compressed
-//! frame sets, the decoded frames waiting to be shown, and the GPU atlas. A
-//! leak in any one of them is a picker that costs a gigabyte after five
-//! minutes.
+//! Scroll a sticker picker and hold three ceilings: the compressed frame sets,
+//! the decoded frames, and the GPU atlas.
 
 use std::sync::Arc;
 
@@ -25,10 +14,7 @@ const VISIBLE_STICKERS: usize = 40;
 const FRAMES_PER_STICKER: usize = 30;
 const STICKER_DIMENSION: u32 = 64;
 
-/// Stands in for rlottie. Paints a real frame so compression, decoding and the
-/// caches all do their actual work; the C++ library is exercised by
-/// `lottie::rlottie_backend`'s own tests, and needing it here would make the
-/// ceiling untestable without the vendored source.
+/// Stands in for rlottie, painting a real frame so the caches do real work.
 struct SyntheticRasterizer;
 
 impl LottieRasterizer for SyntheticRasterizer {
@@ -41,9 +27,7 @@ impl LottieRasterizer for SyntheticRasterizer {
     }
 
     fn render(&mut self, frame: usize, _dimension: u32, out: &mut [u32]) {
-        // A gradient rather than a flat fill: a solid colour compresses to
-        // almost nothing and would make the budget look far healthier than it
-        // is for real artwork.
+        // A gradient, not a flat fill: a solid colour compresses to nothing.
         for (index, pixel) in out.iter_mut().enumerate() {
             let shade = ((index + frame * 7) % 256) as u32;
             *pixel = 0xFF00_0000 | (shade << 16) | (shade << 8) | shade;
@@ -86,8 +70,7 @@ impl Picker {
             .expect("the atlas must have room for what is on screen");
         self.live.push((key, tile));
 
-        // One loop of playback, at the presentation stride: exactly the frames
-        // the display driver would ever ask for.
+        // One loop at the presentation stride: all the display driver asks for.
         let stride = sequence.presentation_stride();
         for frame in (0..FRAMES_PER_STICKER).step_by(stride) {
             sequence.frame(frame);
@@ -214,8 +197,7 @@ fn leaving_the_picker_returns_every_byte_of_gpu_memory() {
     );
 }
 
-/// Resident set size in bytes, where the OS will tell us cheaply. Same approach
-/// and same caveats as `feed_memory_ceiling.rs`.
+/// Resident set size in bytes, or `None` where the OS will not report it.
 fn resident_bytes() -> Option<u64> {
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return None;
@@ -253,8 +235,7 @@ fn the_process_itself_does_not_grow_across_a_long_picker_scroll() {
     let after = resident_bytes().expect("rss was readable a moment ago");
     let growth = after.saturating_sub(before);
 
-    // Deliberately generous: this catches a leak proportional to how far the
-    // user scrolled, not allocator noise.
+    // Generous: this catches a leak proportional to scroll depth, not noise.
     const ALLOWED_GROWTH: u64 = 128 * 1024 * 1024;
 
     assert!(

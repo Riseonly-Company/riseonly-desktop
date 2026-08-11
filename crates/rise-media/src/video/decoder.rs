@@ -1,23 +1,15 @@
 //! Video decode, and the choice of who does it.
 //!
-//! The decoder itself is FFmpeg (through rsmpeg, which exposes
-//! `AVHWDeviceContext` where ffmpeg-next does not — without it there is no way
-//! to ask for a hardware frame rather than a CPU one). That dependency is
-//! behind the `ffmpeg` feature so the rest of the crate, and the whole test
-//! suite, builds on a machine with no FFmpeg prefix.
-//!
-//! Everything in this file that makes a DECISION is pure and always compiled:
-//! which accelerator a host uses, which codecs are accepted, what happens when
-//! hardware decode is refused. Only the binding to libavcodec is optional.
+//! Everything here that makes a decision — accelerator, codec, fallback — is
+//! pure and always compiled; only the binding to libavcodec sits behind the
+//! `ffmpeg` feature.
 
 use super::super::texture::frame::{FrameFormat, FrameGeometry};
 use rise_platform::HostOs;
 
 /// The codecs the client will decode.
 ///
-/// Deliberately short. Each entry is a C parser fed bytes off a socket, and the
-/// ones not listed here are the cheapest attack-surface reduction available.
-/// This list must stay a subset of what `scripts/build-ffmpeg-lgpl.sh` enables.
+/// Must stay a subset of what `scripts/build-ffmpeg-lgpl.sh` enables.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum VideoCodec {
     H264,
@@ -48,8 +40,7 @@ pub enum HwAccel {
     VideoToolbox,
     D3D11Va,
     Vaapi,
-    /// libavcodec's own software decoders. Correct everywhere, and the only
-    /// option for a codec the GPU does not implement.
+    /// libavcodec's own software decoders.
     None,
 }
 
@@ -73,15 +64,11 @@ impl HwAccel {
         }
     }
 
-    /// The frame format this accelerator hands back.
-    ///
-    /// All three return biplanar YUV, which is why NV12 is the format the
-    /// texture path is built around rather than an intermediate everything is
-    /// converted to.
+    /// The frame format this accelerator hands back: biplanar YUV in hardware,
+    /// planar YUV in software.
     pub const fn output_format(self, bit_depth: u8) -> FrameFormat {
         match self {
-            // Software decoders keep YUV planar at every bit depth. The
-            // shader's triplanar path reads it directly.
+            // Software decoders keep YUV planar at every bit depth.
             Self::None => FrameFormat::I420,
             _ => {
                 if bit_depth > 8 {
@@ -96,19 +83,15 @@ impl HwAccel {
 
 /// Whether a codec at a bit depth is decoded in hardware on a host.
 ///
-/// The pessimistic entries are deliberate. Claiming hardware where it does not
-/// exist means the decoder opens, fails on the first packet, and the video is
-/// black — worse than starting in software and being smooth.
+/// Pessimistic on purpose: claiming hardware that is not there gives a black
+/// video, not a slow one.
 pub const fn hardware_support(host: HostOs, codec: VideoCodec, bit_depth: u8) -> HwAccel {
     let accel = HwAccel::for_host(host);
 
     match (host, codec) {
-        // VP8 has no hardware decoder on any Apple silicon, and Intel Macs are
-        // out of scope.
+        // VP8 has no hardware decoder on any Apple silicon.
         (HostOs::MacOs, VideoCodec::Vp8) => HwAccel::None,
-        // AV1 hardware decode arrived with M3; older Macs must decode it in
-        // software, and this cannot be known until the device is opened, so the
-        // conservative answer is the one that always works.
+        // AV1 hardware decode arrived with M3, and the chip cannot be probed before the device opens.
         (HostOs::MacOs, VideoCodec::Av1) => HwAccel::None,
         // VP8 predates the D3D11 video decode profiles that matter.
         (HostOs::Windows, VideoCodec::Vp8) => HwAccel::None,
@@ -131,17 +114,15 @@ pub enum DecoderError {
         reason: String,
     },
     InvalidGeometry(String),
-    /// The `ffmpeg` feature is off. Returned rather than panicking so a build
-    /// without FFmpeg still runs the whole app and simply shows poster frames.
+    /// The `ffmpeg` feature is off; the caller should fall back to poster frames.
     NotCompiledIn,
     Backend(String),
 }
 
 /// A decoded frame's description, plus a handle to where its pixels live.
 ///
-/// The pixels themselves never pass through this type. On the zero-copy paths
-/// they are already in GPU memory and `handle` identifies them; that is the
-/// entire point.
+/// Pixels never pass through this type: on the zero-copy paths they are already
+/// in GPU memory and `handle` only identifies them.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DecodedFrame {
     pub geometry: FrameGeometry,
@@ -200,8 +181,8 @@ impl DecoderPlan {
         })
     }
 
-    /// The same plan with hardware given up on, used when opening the hardware
-    /// device fails at runtime — an old driver, a VM, a headless CI runner.
+    /// The same plan with hardware given up on, for when opening the hardware
+    /// device fails at runtime.
     pub fn degraded_to_software(&self, request: &DecoderRequest) -> Result<Self, DecoderError> {
         let format = HwAccel::None.output_format(request.bit_depth);
         let geometry = FrameGeometry::packed(format, request.width, request.height)
@@ -220,10 +201,6 @@ impl DecoderPlan {
 }
 
 /// A decode session.
-///
-/// A trait so the scheduler, the budget and the ceiling test can all run with
-/// no FFmpeg present, and so rlottie or a future ThorVG-style backend can be
-/// substituted without touching the callers.
 pub trait VideoDecoder: Send {
     fn plan(&self) -> &DecoderPlan;
 
@@ -239,8 +216,7 @@ pub trait VideoDecoder: Send {
 /// Open a decoder for a request on this host.
 ///
 /// Without the `ffmpeg` feature this reports `NotCompiledIn` rather than
-/// panicking: a build with no FFmpeg prefix is a legitimate configuration and
-/// should degrade to poster frames, not crash the feed.
+/// panicking.
 pub fn open(request: &DecoderRequest) -> Result<Box<dyn VideoDecoder>, DecoderError> {
     let _plan = DecoderPlan::resolve(HostOs::current(), request)?;
 

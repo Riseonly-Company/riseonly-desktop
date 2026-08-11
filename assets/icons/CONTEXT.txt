@@ -5,10 +5,19 @@ assets/icons/
 WHAT IS HERE
 
   sf-to-lucide.json   every SF Symbol name riseonly-ios actually uses, mapped to
-                      a Lucide icon name. 229 keys, 169 distinct Lucide icons.
-  lucide/*.svg        exactly those 169 icons, and nothing else.
+                      a Lucide icon name. 233 keys, 170 distinct Lucide icons.
+  lucide/*.svg        exactly those 170 icons, and nothing else.
   lucide/LICENSE      Lucide's licence text, shipped with the product.
   flags/              owned elsewhere; see its own CONTEXT.txt.
+
+  ONE FILE IS NOT FROM THE PINNED RELEASE. `thumbs-down.svg` was taken from
+  lucide-react 0.454.0 (ISC, same project, already vendored elsewhere in this
+  workspace) because the 1.28.0 zip is not on this machine. It is the comment
+  module's dislike control and there is no honest substitute in the shipped set.
+  The two releases are NOT interchangeable in general — 0.454.0's `heart` is the
+  older four-arc design and 1.28.0's is the redesigned one — so re-take this file
+  from 1.28.0 the next time that archive is at hand, and take nothing else from
+  0.454.0 in the meantime.
 
   Lucide version 1.28.0, the GitHub release `lucide-icons-1.28.0.zip`,
   sha256 79b02addeac22305ac49b238cb810161c4bfe7c60856a6d6b8f37cd42f1f6365.
@@ -62,7 +71,7 @@ WHY THE MAP IS KEYED BY THE SF NAME
   both greps currently agree at 228 and the 244 no longer reproduces. Keep the
   exclusion: the next build can put them back.
 
-  228 of the 229 keys are those reference symbols. The 229th is `folder`, which
+  228 of the keys are those reference symbols. The 229th is `folder`, which
   the reference does not use: the desktop rail stacks chat folders under the
   sections, and a phone has no equivalent. It is keyed by the SF name Apple uses
   so the table keeps one convention.
@@ -70,6 +79,19 @@ WHY THE MAP IS KEYED BY THE SF NAME
   Symbols reached through a variable or an expression (`player.repeatMode.icon`,
   a `pause.fill` inside a ternary) are not in the list yet and will surface as
   the modules land. Adding them is the rule above, not an exception to it.
+
+  Four have surfaced that way already, with the post and comment modules:
+
+      hand.thumbsdown, hand.thumbsdown.fill   Comment.swift computes the name
+                                              into a variable, so the literal
+                                              grep never saw it
+      bookmark                                only `bookmark.fill` was mapped;
+                                              a post that is NOT favourited
+                                              draws the unfilled half
+      text.bubble                             same, opposite `text.bubble.fill`
+
+  That is what "will surface as the modules land" looks like in practice: the
+  derivation is a floor, not a census.
 
 THE "approximate" LIST — A DESIGNER MUST REVIEW IT
 
@@ -87,6 +109,17 @@ THE "approximate" LIST — A DESIGNER MUST REVIEW IT
      STATE is the component's job — fill the path with the current colour — not
      a second file. A component that cannot distinguish liked from unliked is a
      bug in the component, not in this table.
+
+     THAT IS NOW IMPLEMENTED, and here is where it lives, because the mechanism
+     spans two crates. `IconUi::toggled(.., is_filled)` asks for a path this
+     directory does NOT contain — `icons/lucide/heart.filled.svg` — and
+     `RiseAssets` synthesises it by reading `heart.svg` and rewriting the root's
+     `fill="none"` to `fill="currentColor"`. Lucide puts fill and stroke on the
+     root and lets every path inherit both, so one substitution fills every
+     closed subpath and leaves the open ones as strokes: thumbs-down's stem
+     stays a line, which is exactly how the filled SF Symbol reads. gpui caches
+     the two rasterisations separately because they are two paths, and the icon
+     set on disk stays at 170 files.
 
   2. SF's speech bubbles are oval; Lucide's are rounded rectangles. Every bubble
      maps into Lucide's `message-square` family rather than `message-circle`,

@@ -1,21 +1,8 @@
 //! The threads that turn vectors into pixels, and what stops them multiplying.
 //!
-//! Two properties matter and neither is obvious from the outside.
-//!
-//! DEDUPLICATION. The same sticker is asked for by the display tick, by the
-//! prefetch that follows it, and by every other cell showing the same emoji.
-//! Without a set of in-flight requests, a picker grid submits the same
-//! rasterisation dozens of times and rlottie does all of them.
-//!
-//! BOUNDED QUEUE. A fast scroll asks for frames faster than they can be
-//! rasterised, and every one of those requests is for a sticker that is already
-//! off screen by the time a worker reaches it. An unbounded queue turns a
-//! two-second flick into a minute of CPU nobody is waiting for. The queue is
-//! capped and the OLDEST request is dropped, because the oldest is the one the
-//! user has scrolled furthest away from.
-//!
-//! The pool is the desktop equivalent of the reference's raster pool, its
-//! per-sequence lane and its two semaphores.
+//! In-flight requests are deduplicated, so a grid of the same emoji rasterises
+//! once. The queue is capped at `MAXIMUM_PENDING` and drops the OLDEST request,
+//! which is the one the user has scrolled furthest away from.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
@@ -28,11 +15,8 @@ use super::frame_cache::FrameCache;
 use super::raster_policy::{self, SequenceKey};
 use super::sequence::FrameSequence;
 
-/// Requests allowed to be waiting at once.
-///
-/// Sized for a full screen of stickers each with its prefetch window, plus room
-/// for one scroll tick's worth of new arrivals. Past that, the queue is
-/// describing the past rather than the viewport.
+/// Requests allowed to be waiting at once: a full screen of stickers with their
+/// prefetch windows, plus one scroll tick's worth of new arrivals.
 pub const MAXIMUM_PENDING: usize = 256;
 
 struct Job {
@@ -105,8 +89,7 @@ impl RasterPool {
         Self { shared, workers }
     }
 
-    /// Requests dropped because the queue was full. A non-zero value on a
-    /// normal scroll means the cap is too low or the stickers are too large.
+    /// Requests dropped because the queue was full.
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::Relaxed)
     }
@@ -150,8 +133,7 @@ impl RasterPool {
 
     /// Block until nothing is queued or running.
     ///
-    /// For tests and for teardown. Never call it from the GPUI thread — the
-    /// whole point of the pool is that the tick does not wait for it.
+    /// For tests and teardown; never call it from the GPUI thread.
     pub fn wait_idle(&self) {
         let mut queue = self.shared.queue.lock();
         while !queue.jobs.is_empty() || queue.running > 0 {
@@ -196,8 +178,7 @@ fn worker(shared: Arc<Shared>) {
         let produced = job.sequence.frame(job.frame).is_some();
         if produced {
             shared.rasterised.fetch_add(1, Ordering::Relaxed);
-            // A sequence only grows here, so this is the only place the ledger
-            // can fall behind what the sequences actually hold.
+            // A sequence only grows here, so this is the only place the cache ledger can fall behind.
             shared.cache.sweep();
         }
 

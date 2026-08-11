@@ -2,14 +2,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::Value;
 
-/// Reads a JWT's own claims without verifying it.
-///
-/// Deliberately unverified: the client has no signing key and never will, and
-/// what it needs from the token is not a security decision. The user id decides
-/// which cached rows to show and whether a message is the reader's own; the
-/// expiry decides whether to refresh BEFORE spending a round trip on a request
-/// the gateway would refuse. Both are the client's own bookkeeping, and the
-/// server re-checks the signature on every call regardless.
+// Claims are read unverified: the client has no signing key, and the server re-checks every call.
 pub struct AccessTokenUserId;
 
 impl AccessTokenUserId {
@@ -25,10 +18,7 @@ impl AccessTokenUserId {
         None
     }
 
-    /// Seconds since the epoch, normalised from whichever unit the issuer used.
-    ///
-    /// A value past the year 33658 is milliseconds, not a token valid for
-    /// thirty thousand years — auth-service has issued both.
+    // auth-service has issued `exp` in both units; a value past year 33658 is milliseconds.
     pub fn expiry_seconds(jwt: &str) -> Option<i64> {
         let claims = payload(jwt)?;
         let raw = claims.get("exp").and_then(number)?;
@@ -39,12 +29,6 @@ impl AccessTokenUserId {
         })
     }
 
-    /// Whether the token is unusable `leeway` seconds from `now`.
-    ///
-    /// An empty token is expired: it is the state before signing in, and every
-    /// caller wants the same answer for both. A token whose expiry cannot be
-    /// read is NOT expired — refusing to use an opaque token would lock out an
-    /// account whose issuer changed shape, and the server is the authority.
     pub fn is_expired(jwt: &str, now_seconds: i64, leeway_seconds: i64) -> bool {
         if jwt.trim().is_empty() {
             return true;
@@ -60,13 +44,9 @@ fn payload(jwt: &str) -> Option<Value> {
     let mut parts = jwt.trim().split('.');
     let _header = parts.next()?;
     let claims = parts.next()?;
-    // A signature part must be present: two segments is an unsigned token, and
-    // reading claims out of one would trust something nobody signed.
+    // Rejects a two-segment unsigned token; the discarded segment is the signature.
     parts.next()?;
 
-    // base64url without padding, which is what RFC 7515 mandates and what
-    // auth-service emits. The tolerant decoder also accepts a padded value, so a
-    // token from a library that pads anyway still reads.
     let decoded = URL_SAFE_NO_PAD.decode(claims.trim_end_matches('=')).ok()?;
     serde_json::from_slice(&decoded).ok()
 }

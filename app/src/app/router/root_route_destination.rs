@@ -6,50 +6,78 @@ use crate::modules::auth::pages::sign::auth_step_flow::AuthMode;
 use crate::modules::auth::pages::sign::sign_in::sign_in::SignIn;
 use crate::modules::auth::pages::sign::sign_up::sign_up::SignUp;
 use crate::modules::onboarding::pages::onboarding::onboarding::Onboarding;
+use crate::modules::post::pages::posts::Posts;
+use crate::modules::user::pages::profile::{Profile, ProfileRouteTarget};
 
-/// The single place a route becomes a screen.
-///
-/// The match is exhaustive on purpose: adding a variant to RootRoute fails the
-/// build here until someone decides what it renders. That is the same property
-/// the iOS reference gets from its switch with no default arm.
-///
-/// The caller CACHES what this returns, keyed by the route's resource key. A
-/// screen built fresh on every frame would lose its caret, its scroll position
-/// and the step of the form it was on — which is exactly what a step flow is.
 pub fn destination<T: 'static>(
     route: &RootRoute,
+    can_dismiss: bool,
     window: &mut Window,
     cx: &mut Context<T>,
 ) -> AnyView {
     match route {
         RootRoute::Onboarding => cx.new(|cx| Onboarding::new(window, cx)).into(),
-        RootRoute::SignIn => auth_screen(AuthMode::SignIn, window, cx),
-        RootRoute::SignUp => auth_screen(AuthMode::SignUp, window, cx),
+        RootRoute::SignIn | RootRoute::SignUp => {
+            auth_screen(AuthMode::SignIn, can_dismiss, window, cx)
+        }
+        RootRoute::Tab(RootTab::Feed) => feed_screen(window, cx),
+        RootRoute::Tab(RootTab::Profile) => profile_screen(ProfileRouteTarget::Own, window, cx),
         RootRoute::Tab(tab) => placeholder(tab_title(*tab), cx),
         RootRoute::Chat { .. } => placeholder("Chat", cx),
         RootRoute::ChatTopic { .. } => placeholder("Chat topic", cx),
-        RootRoute::UserProfile { .. } => placeholder("Profile", cx),
+        RootRoute::UserProfile { user_id } => {
+            profile_screen(ProfileRouteTarget::resolve(Some(user_id), None), window, cx)
+        }
         RootRoute::Post { .. } => placeholder("Post", cx),
         RootRoute::Settings => placeholder("Settings", cx),
     }
 }
 
-/// The sign-in and sign-up screens, or a placeholder when the composition root
-/// never ran.
-///
-/// That happens when the transport could not start: the app still draws, and a
-/// screen that cannot reach the engine says so rather than panicking on a global
-/// that is not there.
-fn auth_screen<T: 'static>(mode: AuthMode, window: &mut Window, cx: &mut Context<T>) -> AnyView {
+fn auth_screen<T: 'static>(
+    mode: AuthMode,
+    can_dismiss: bool,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> AnyView {
     match composition::interactions(cx as &App) {
         Some(interactions) => {
             let auth = interactions.auth.clone();
             match mode {
-                AuthMode::SignIn => cx.new(|cx| SignIn::new(auth, window, cx)).into(),
-                AuthMode::SignUp => cx.new(|cx| SignUp::new(auth, window, cx)).into(),
+                AuthMode::SignIn => cx
+                    .new(|cx| SignIn::new(auth, can_dismiss, window, cx))
+                    .into(),
+                AuthMode::SignUp => cx
+                    .new(|cx| SignUp::new(auth, can_dismiss, window, cx))
+                    .into(),
             }
         }
         None => placeholder("Sign in", cx),
+    }
+}
+
+fn feed_screen<T: 'static>(window: &mut Window, cx: &mut Context<T>) -> AnyView {
+    match composition::interactions(cx as &App) {
+        Some(interactions) => {
+            let post = interactions.post.clone();
+            cx.new(|cx| Posts::new(post, window, cx)).into()
+        }
+        None => placeholder("Feed", cx),
+    }
+}
+
+fn profile_screen<T: 'static>(
+    target: ProfileRouteTarget,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> AnyView {
+    match composition::interactions(cx as &App) {
+        Some(interactions) => {
+            let user = interactions.user.clone();
+            let post = interactions.post.clone();
+            cx.new(|cx| Profile::new(user, post, target, window, cx))
+                .into()
+        }
+        None => placeholder("Profile", cx),
     }
 }
 
@@ -59,6 +87,8 @@ fn tab_title(tab: RootTab) -> &'static str {
         RootTab::Search => "Search",
         RootTab::Shorts => "Shorts",
         RootTab::Chats => "Chats",
+        RootTab::Vacancies => "Jobs",
+        RootTab::Music => "Music",
         RootTab::Profile => "Profile",
     }
 }

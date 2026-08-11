@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rise_engine::WireError;
+use rise_engine::{Debouncer, WireError};
 use rise_platform::{DeviceLocale, HostOs, SecureStore};
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
@@ -23,18 +23,13 @@ use super::rise_auth_presentation::{
     AuthFlowState, AuthSnapshot, RiseAuthPresentation, TagAvailability,
 };
 
-/// Refresh this long before the access token actually dies.
-///
-/// The reference's thirty seconds. Spending a round trip on a token that expires
-/// mid-flight costs a retry and, on the socket, a whole reconnect.
 const ACCESS_TOKEN_LEEWAY_SECONDS: i64 = 30;
 
-/// How long a sign-out waits for the server before clearing local state anyway.
-///
-/// The local reset is unconditional: a user who pressed "log out" must not still
-/// be signed in because the network was gone. The wait exists only so that the
-/// server usually gets to revoke the session too.
 const LOGOUT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub const TAG_CHECK_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+
+const TAG_CHECK_MAX_WAIT: std::time::Duration = std::time::Duration::from_millis(2_000);
 
 pub enum AuthCommand {
     Restore,
@@ -55,6 +50,10 @@ pub enum AuthCommand {
     CheckTag {
         tag: String,
     },
+    CheckTagNow {
+        tag: String,
+    },
+    MarkTagTaken,
     TagChecked {
         generation: u64,
         tag: String,
@@ -75,12 +74,6 @@ pub enum AuthCommand {
     Shutdown,
 }
 
-/// The repository, as the canon means it: a task that owns the state and a
-/// channel that serialises every mutation.
-///
-/// A mutex would give mutual exclusion without ordering, and every rule here
-/// depends on ordering — a refresh that lands after a sign-out must find the
-/// account already gone, not race it.
 pub struct AuthRepository {
     commands: mpsc::Sender<AuthCommand>,
     snapshot: watch::Receiver<Arc<AuthSnapshot>>,
@@ -93,6 +86,7 @@ pub struct AuthRepositoryConfig {
     pub host: HostOs,
     pub locale: DeviceLocale,
     pub now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+    pub tag_check_debounce: std::time::Duration,
 }
 
 impl AuthRepository {
@@ -114,8 +108,6 @@ impl AuthRepository {
         self.snapshot.clone()
     }
 
-    /// Commands are dropped rather than queued when the actor is gone. Failing
-    /// loudly here would mean a shutting-down app panicking on its last frame.
     pub fn dispatch(&self, command: AuthCommand) {
         let _ = self.commands.try_send(command);
     }
@@ -137,9 +129,8 @@ struct AuthState {
     tokens: Option<StoredTokens>,
     flow: AuthFlowState,
     is_restoring: bool,
-    /// Bumped on every keystroke that starts a tag check, so an answer for a tag
-    /// the user has already edited past cannot land on the newer one.
     tag_generation: u64,
+    tag_debounce: Debouncer,
 }
 
 impl AuthState {
@@ -148,6 +139,9 @@ impl AuthState {
         presentation: RiseAuthPresentation,
         commands: mpsc::Sender<AuthCommand>,
     ) -> Self {
+        let tag_debounce =
+            Debouncer::new(config.tag_check_debounce).with_max_wait(TAG_CHECK_MAX_WAIT);
+
         Self {
             transport: config.transport,
             credentials: config.credentials,
@@ -164,6 +158,7 @@ impl AuthState {
             flow: AuthFlowState::default(),
             is_restoring: false,
             tag_generation: 0,
+            tag_debounce,
         }
     }
 
@@ -180,7 +175,9 @@ impl AuthState {
                     code,
                 } => self.register(name, tag, phone, password, code).await,
                 AuthCommand::SignIn { phone, password } => self.sign_in(phone, password).await,
-                AuthCommand::CheckTag { tag } => self.start_tag_check(tag),
+                AuthCommand::CheckTag { tag } => self.schedule_tag_check(tag),
+                AuthCommand::CheckTagNow { tag } => self.start_tag_check(tag),
+                AuthCommand::MarkTagTaken => self.mark_tag_taken(),
                 AuthCommand::TagChecked {
                     generation,
                     tag,
@@ -214,8 +211,6 @@ impl AuthState {
         }
     }
 
-    // ── lifecycle ───────────────────────────────────────────────────────────
-
     async fn restore(&mut self) {
         self.is_restoring = true;
         self.accounts = self.credentials.accounts();
@@ -235,9 +230,6 @@ impl AuthState {
 
         self.activate(&user_id, false);
 
-        // A refresh token that is already dead cannot recover anything, so the
-        // account is dropped rather than left on screen as a session that fails
-        // every request it makes.
         if self.refresh_token_is_dead() {
             self.trace.record(TraceEvent::RestoreFoundExpiredSession);
             self.clear_active_account(ResetReason::ForcedLogout);
@@ -254,7 +246,6 @@ impl AuthState {
         self.publish();
     }
 
-    /// Puts an account on screen and points the socket at it.
     fn activate(&mut self, user_id: &str, update_last_used: bool) {
         let Ok(Some(tokens)) = self.credentials.tokens(user_id, self.secrets.as_ref()) else {
             self.trace.record(TraceEvent::MissingCredential);
@@ -311,9 +302,6 @@ impl AuthState {
     }
 
     async fn sign_out(&mut self, reason: ResetReason) {
-        // Best effort, and bounded: the local reset happens whether or not the
-        // server answers, so a dead network cannot leave somebody signed in
-        // against their wishes.
         if let (Some(user_id), Some(tokens)) = (self.active.clone(), self.tokens.clone()) {
             let body = serde_json::to_value(rpc::LogoutRequest {
                 user_id: self.wire_user_id().unwrap_or(user_id),
@@ -334,7 +322,6 @@ impl AuthState {
         self.publish();
     }
 
-    /// Removes the current account and promotes whatever is left.
     fn clear_active_account(&mut self, reason: ResetReason) {
         let Some(user_id) = self.active.clone() else {
             self.tokens = None;
@@ -357,8 +344,6 @@ impl AuthState {
             None => self.transport.authenticate(SocketCredential::Anonymous),
         }
     }
-
-    // ── sign in and sign up ─────────────────────────────────────────────────
 
     async fn sign_in(&mut self, phone: String, password: String) {
         self.begin_busy();
@@ -428,7 +413,7 @@ impl AuthState {
             phone_number: phone,
             name: name.trim().to_owned(),
             tag: auth_validation::normalize_tag(&tag),
-            code,
+            code: auth_validation::CODE.normalize(&code),
             password,
             device: DeviceIdentity::envelope(self.host, None),
             device_region: region,
@@ -441,7 +426,6 @@ impl AuthState {
         self.consume_grant(outcome, "register_error");
     }
 
-    /// The one place a login, a registration or a restore becomes a session.
     fn consume_grant(&mut self, outcome: Result<Value, WireError>, fallback_key: &'static str) {
         let payload = match outcome {
             Ok(payload) => payload,
@@ -508,8 +492,6 @@ impl AuthState {
         self.publish();
     }
 
-    // ── tokens ──────────────────────────────────────────────────────────────
-
     fn now_seconds(&self) -> i64 {
         (self.now_ms)() / 1_000
     }
@@ -545,9 +527,6 @@ impl AuthState {
             Ok(payload) => payload,
             Err(error) => {
                 self.trace.record(TraceEvent::RefreshFailed);
-                // A refused refresh is the end of the session; a network failure
-                // is not. Signing somebody out because their wifi dropped would
-                // lose the cache along with the session.
                 if matches!(error, WireError::Remote(_)) {
                     self.clear_active_account(ResetReason::ForcedLogout);
                 }
@@ -568,9 +547,6 @@ impl AuthState {
             session: session.unwrap_or(current.session.clone()),
         };
 
-        // The compare-and-set is what makes two concurrent refreshes safe: the
-        // loser sees that the pair on disk is no longer the one it started from
-        // and abandons its own answer rather than reinstating an older token.
         match self
             .credentials
             .rotate_if_matching(&user_id, &current, &next, self.secrets.as_ref())
@@ -586,7 +562,6 @@ impl AuthState {
         }
     }
 
-    /// What to do when any request anywhere came back as an auth failure.
     async fn note_remote_failure(&mut self, code: Option<&str>, message: Option<&str>) {
         let refresh = self
             .tokens
@@ -607,27 +582,53 @@ impl AuthState {
         }
     }
 
-    // ── tag availability ────────────────────────────────────────────────────
-
-    fn start_tag_check(&mut self, tag: String) {
+    fn schedule_tag_check(&mut self, tag: String) {
         let normalized = auth_validation::normalize_tag(&tag);
         self.tag_generation = self.tag_generation.wrapping_add(1);
-        let generation = self.tag_generation;
 
-        if auth_validation::validate_tag(&normalized).is_err() {
+        if normalized.is_empty() {
+            self.tag_debounce.cancel();
+            self.flow.tag_availability = TagAvailability::Idle;
+            self.flow.checked_tag = None;
+            self.flow.tag_problem_key = None;
+            self.publish();
+            return;
+        }
+
+        if let Err(violation) = auth_validation::TAG.check(&normalized) {
+            self.tag_debounce.cancel();
             self.flow.tag_availability = TagAvailability::Invalid;
             self.flow.checked_tag = Some(normalized);
+            self.flow.tag_problem_key = Some(auth_validation::message_key(&violation));
             self.publish();
             return;
         }
 
         self.flow.tag_availability = TagAvailability::Checking;
         self.flow.checked_tag = Some(normalized.clone());
+        self.flow.tag_problem_key = None;
         self.publish();
 
-        // Spawned rather than awaited: the actor stays responsive to the next
-        // keystroke, and the generation on the way back is what keeps a slow
-        // answer from landing on a tag the user has already edited past.
+        self.tag_debounce
+            .send(&self.commands, AuthCommand::CheckTagNow { tag: normalized });
+    }
+
+    fn mark_tag_taken(&mut self) {
+        self.tag_generation = self.tag_generation.wrapping_add(1);
+        self.tag_debounce.cancel();
+        self.flow.tag_availability = TagAvailability::Taken;
+        self.flow.tag_problem_key = Some("tag_already_exists");
+        self.flow.error_key = None;
+        self.flow.is_busy = false;
+        self.publish();
+    }
+
+    fn start_tag_check(&mut self, tag: String) {
+        let normalized = auth_validation::normalize_tag(&tag);
+
+        // Not bumped here: the scheduling keystroke already did, and bumping would void this call.
+        let generation = self.tag_generation;
+
         let transport = Arc::clone(&self.transport);
         let commands = self.commands.clone();
         tokio::spawn(async move {
@@ -664,8 +665,6 @@ impl AuthState {
         self.publish();
     }
 
-    // ── shared plumbing ─────────────────────────────────────────────────────
-
     fn begin_busy(&mut self) {
         self.flow.is_busy = true;
         self.flow.error_key = None;
@@ -680,13 +679,6 @@ impl AuthState {
         self.publish();
     }
 
-    /// A transport failure shows the step's own fallback string, not a network
-    /// message of its own.
-    ///
-    /// That is the reference's behaviour and it is deliberate here rather than
-    /// inherited: inventing "check your connection" would mean adding a key to
-    /// 41 locale files, and the reference ships no generic one. What the server
-    /// said, when it said anything, always wins over the fallback.
     fn fail_wire(&mut self, error: WireError, fallback: &'static str) {
         match &error {
             WireError::Remote(remote) => {
@@ -708,11 +700,7 @@ impl AuthState {
             .map(|account| &account.user)
     }
 
-    /// The id a request is stamped with.
-    ///
-    /// The token's own claim beats the stored profile: after a switch the
-    /// profile can lag by a frame, and the token is what the gateway will
-    /// actually authenticate the call as.
+    // The token's own claim beats the stored profile, which can lag a frame after a switch.
     fn wire_user_id(&self) -> Option<String> {
         self.tokens
             .as_ref()
@@ -736,12 +724,8 @@ impl AuthState {
     }
 }
 
-/// A tag is available only when the server says so.
-///
-/// `Unknown` for anything ambiguous: telling somebody a tag is free and then
-/// failing their registration is worse than asking them to try again.
 fn tag_availability(response: &rpc::CheckTagResponse) -> TagAvailability {
-    if response.error.is_some() {
+    if rise_engine::remote_message(response.error.as_deref()).is_some() {
         return TagAvailability::Unknown;
     }
     match (response.available, response.exists) {

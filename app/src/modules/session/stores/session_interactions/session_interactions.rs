@@ -20,8 +20,6 @@ impl SessionInteractionsStore {
         &self.services
     }
 
-    /// Opening the screen. The repository's own gate stops a second open from
-    /// re-fetching, so this is safe to call on every appearance.
     pub fn ensure_loaded(&self, identity: SessionIdentity) {
         self.actions.load_sessions_action(identity, false);
     }
