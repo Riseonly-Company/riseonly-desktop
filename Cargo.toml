@@ -21,6 +21,32 @@ rise-widgets = { path = "crates/rise-widgets" }
 rise-media = { path = "crates/rise-media" }
 rise-navigation = { path = "crates/rise-navigation" }
 
+# Общее ядро из riseonly-tools: канон один на четыре дерева, генератор раскладывает его
+# в Rust, Swift и Kotlin. Десктоп подключает крейты напрямую и за мост не платит.
+# Значения править здесь нельзя — источник в ../riseonly-tools/canon, гейт `codegen check`.
+#
+# Подключено то, ЧЕГО У ДЕСКТОПА НЕТ ВООБЩЕ: чистое приобретение, замещать нечего.
+rise-perm = { path = "../riseonly-tools/crates/rise-perm" }
+rise-moderation = { path = "../riseonly-tools/crates/rise-moderation" }
+rise-rtc = { path = "../riseonly-tools/crates/rise-rtc" }
+rise-music = { path = "../riseonly-tools/crates/rise-music" }
+rise-limits = { path = "../riseonly-tools/crates/rise-limits" }
+rise-events = { path = "../riseonly-tools/crates/rise-events" }
+rise-catalog = { path = "../riseonly-tools/crates/rise-catalog" }
+rise-chat = { path = "../riseonly-tools/crates/rise-chat" }
+rise-endpoints = { path = "../riseonly-tools/crates/rise-endpoints" }
+rise-regions = { path = "../riseonly-tools/crates/rise-regions" }
+
+# НЕ подключено, и каждому нужно отдельное решение, а не побочный эффект копирования:
+#
+# rise-validate — у десктопа есть СВОЙ крейт с этим именем (crates/rise-validate);
+#   два одноимённых пакета в одном графе требуют переименования одного из них.
+# rise-theme-tokens, rise-avatar, rise-i18n-catalog, rise-deeplink, rise-notify —
+#   у десктопа уже есть своя реализация (rise-theme, rise-i18n, rise-platform);
+#   подключение означает ЗАМЕНУ, а замена меняет поведение.
+# rise-wire, rise-store, rise-sync, rise-rpc, rise-crypto, rise-upload, rise-shapes —
+#   их место занимает crates/rise-engine; см. docs/BRIDGE.md о порядке замены.
+
 
 gpui = { git = "https://github.com/zed-industries/zed", rev = "6b2aa1c90aeb72cadfd30ed12141ed9e2569eded" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "6b2aa1c90aeb72cadfd30ed12141ed9e2569eded", features = [

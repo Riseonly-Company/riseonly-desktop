@@ -5327,6 +5327,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rise-catalog"
+version = "0.1.0"
+
+[[package]]
+name = "rise-chat"
+version = "0.1.0"
+
+[[package]]
 name = "rise-core"
 version = "0.1.0"
 dependencies = [
@@ -5335,6 +5343,10 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.19",
 ]
+
+[[package]]
+name = "rise-endpoints"
+version = "0.1.0"
 
 [[package]]
 name = "rise-engine"
@@ -5361,11 +5373,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rise-events"
+version = "0.1.0"
+
+[[package]]
 name = "rise-i18n"
 version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
+
+[[package]]
+name = "rise-limits"
+version = "0.1.0"
 
 [[package]]
 name = "rise-media"
@@ -5391,6 +5411,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rise-moderation"
+version = "0.1.0"
+
+[[package]]
+name = "rise-music"
+version = "0.1.0"
+
+[[package]]
 name = "rise-navigation"
 version = "0.1.0"
 dependencies = [
@@ -5401,6 +5429,10 @@ dependencies = [
  "serde",
  "smallvec",
 ]
+
+[[package]]
+name = "rise-perm"
+version = "0.1.0"
 
 [[package]]
 name = "rise-platform"
@@ -5427,6 +5459,14 @@ dependencies = [
  "windows 0.62.2",
  "zbus",
 ]
+
+[[package]]
+name = "rise-regions"
+version = "0.1.0"
+
+[[package]]
+name = "rise-rtc"
+version = "0.1.0"
 
 [[package]]
 name = "rise-theme"
@@ -5490,12 +5530,22 @@ dependencies = [
  "parking_lot",
  "rand 0.9.5",
  "reqwest",
+ "rise-catalog",
+ "rise-chat",
  "rise-core",
+ "rise-endpoints",
  "rise-engine",
+ "rise-events",
  "rise-i18n",
+ "rise-limits",
  "rise-media",
+ "rise-moderation",
+ "rise-music",
  "rise-navigation",
+ "rise-perm",
  "rise-platform",
+ "rise-regions",
+ "rise-rtc",
  "rise-theme",
  "rise-ui",
  "rise-validate",
