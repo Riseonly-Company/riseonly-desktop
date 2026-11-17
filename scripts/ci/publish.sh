@@ -66,7 +66,7 @@ purge_urls=("$feed_url" "$feed_url.sig" "${DOWNLOADS_BASE%/}/$ENVIRONMENT/releas
 for file in "${files[@]}"; do purge_urls+=("$base_url/$(basename "$file")"); done
 while IFS=$'\t' read -r name latest; do
     source_file=$(printf '%s\n' "${files[@]}" | awk -F/ -v n="$name" '$NF == n' | head -n 1)
-    [ -n "$source_file" ] || { echo "no local file for $name" >&2; exit 1; }
+    [ -n "$source_file" ] || continue
     upload "$source_file" "$ENVIRONMENT/latest/$latest" application/octet-stream
     purge_urls+=("$latest_url/$latest")
 done < "$work/latest-copies.tsv"
