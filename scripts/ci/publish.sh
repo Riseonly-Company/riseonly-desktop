@@ -82,12 +82,7 @@ if [ -n "${BUNNY_API_KEY:-}" ]; then
 fi
 
 notes="$work/notes.md"
-{
-    echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT"
-    echo
-    echo "feed: $feed_url"
-    for file in "${files[@]}"; do echo "- $base_url/$(basename "$file")"; done
-} > "$notes"
+echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT" > "$notes"
 if [ "$ENVIRONMENT" = production ]; then
     gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
         --title "$SLUG $VERSION" --notes-file "$notes" "${files[@]}"
@@ -96,6 +91,12 @@ else
     gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --draft --prerelease \
         --title "$SLUG $VERSION ($BUILD_NUMBER)" --notes-file "$notes" "${files[@]}"
 fi
+{
+    echo
+    gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+        --jq '.assets | sort_by(.name) | .[] | "- [\(.name)](\(.url))"'
+} >> "$notes"
+gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes" >/dev/null
 
 if [ -n "${BACKEND_RELEASE_HOOK:-}" ]; then
     FEED_URL="$feed_url" python3 - "$work/feed.json" "$VERSION" > "$work/hook.json" <<'PY'
