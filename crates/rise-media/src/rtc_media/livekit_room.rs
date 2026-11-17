@@ -7,7 +7,9 @@ use cpal::Sample;
 use futures::StreamExt;
 use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
 use livekit::e2ee::{E2eeOptions, EncryptionType};
-use livekit::options::{AudioEncoding as SdkAudioEncoding, TrackPublishOptions, VideoEncoding as SdkVideoEncoding};
+use livekit::options::{
+    AudioEncoding as SdkAudioEncoding, TrackPublishOptions, VideoCodec as SdkVideoCodec, VideoEncoding as SdkVideoEncoding,
+};
 use livekit::prelude::{
     LocalAudioTrack, LocalTrack, LocalVideoTrack, RemoteTrack, Room, RoomEvent, RoomOptions, TrackSid,
 };
@@ -31,6 +33,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::rtc_media::*;
+use crate::screen_capture::{ScreenCaptureError, ScreenFrame, ScreenPixels};
 use crate::texture::color::{ColorDescription, ColorRange, ColorSpace};
 use crate::texture::frame::FrameFormat;
 use crate::texture::native_surface::{self, HostNv12Frame, PreparedHostFrame};
@@ -335,7 +338,7 @@ pub fn perform(os: &dyn RtcMediaEngine, host: HostOs, intent: &MediaIntent) -> R
             let (enabled, camera_id) = (*enabled, camera_id.clone());
             engine.runtime.spawn(async move {
                 if enabled {
-                    publish_video(engine, call, TrackSource::Camera, shelf, camera_id, false).await;
+                    publish_video(engine, call, TrackSource::Camera, shelf, PublishedVideoCodec::Vp8, camera_id, false).await;
                 } else {
                     unpublish_video(engine, &call, TrackSource::Camera).await;
                 }
@@ -354,9 +357,10 @@ pub fn perform(os: &dyn RtcMediaEngine, host: HostOs, intent: &MediaIntent) -> R
             let call = require_call(engine, session)?;
             let shelf = screen_share_shelf(*quality, call.ceiling, *display);
             let (enabled, system_audio) = (*enabled, *include_system_audio);
+            let codec = os.screen_share_codec();
             engine.runtime.spawn(async move {
                 if enabled {
-                    publish_video(engine, call, TrackSource::ScreenShare, shelf, None, system_audio).await;
+                    publish_video(engine, call, TrackSource::ScreenShare, shelf, codec, None, system_audio).await;
                 } else {
                     unpublish_video(engine, &call, TrackSource::ScreenShare).await;
                 }
@@ -888,11 +892,48 @@ pub fn push_local_frame(source: TrackSource, frame: &HostNv12Frame) -> Result<()
     Ok(())
 }
 
+/// why a captured screen picture did not reach the published track
+#[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
+pub enum ScreenFrameDropped {
+    #[error(transparent)]
+    Unreadable(#[from] ScreenCaptureError),
+    #[error(transparent)]
+    Unavailable(#[from] RtcUnavailable),
+}
+
+/// hands one captured screen picture to the published screen track
+/// a surface goes to the encoder as is, planes are copied into a track buffer
+pub fn push_screen_frame(frame: ScreenFrame, stream_id: u64, generation: u64) -> Result<(), ScreenFrameDropped> {
+    let ScreenPixels::Surface(surface) = &frame.pixels else {
+        let host_frame = frame.into_host_frame(stream_id, generation)?;
+        return Ok(push_local_frame(TrackSource::ScreenShare, &host_frame)?);
+    };
+    let engine = engine()?;
+    let call = current_call(engine).ok_or(RtcUnavailable::NotConnected)?;
+    let video = call.video.lock();
+    let Some(local) = video.get(&TrackSource::ScreenShare) else {
+        return Err(RtcUnavailable::NotConnected.into());
+    };
+    if !super::os::capture_surface(&local.source, surface) {
+        return Err(ScreenCaptureError::BadFrame("a surface this host does not encode").into());
+    }
+    local.frames.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+const fn sdk_codec(codec: PublishedVideoCodec) -> SdkVideoCodec {
+    match codec {
+        PublishedVideoCodec::Vp8 => SdkVideoCodec::VP8,
+        PublishedVideoCodec::H264 => SdkVideoCodec::H264,
+    }
+}
+
 async fn publish_video(
     engine: &'static Engine,
     call: Arc<Call>,
     source: TrackSource,
     shelf: VideoShelf,
+    codec: PublishedVideoCodec,
     device_id: Option<String>,
     include_system_audio: bool,
 ) {
@@ -922,6 +963,7 @@ async fn publish_video(
             max_bitrate: encoding.max_bitrate,
             max_framerate: f64::from(encoding.max_fps),
         }),
+        video_codec: sdk_codec(codec),
         simulcast: !screencast,
         ..Default::default()
     };

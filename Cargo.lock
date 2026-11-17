@@ -7312,7 +7312,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-core"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -7342,7 +7342,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-diagnostics"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "rise-core",
  "rise-limits",
@@ -7354,7 +7354,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-energy"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "futures",
  "gpui",
@@ -7366,7 +7366,7 @@ dependencies = [
 
 [[package]]
 name = "rise-engine"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -7413,7 +7413,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-i18n"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "fixed_decimal",
  "gpui",
@@ -7451,7 +7451,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-media"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "anyhow",
  "cc",
@@ -7500,7 +7500,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-navigation"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7528,7 +7528,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-platform"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7607,7 +7607,7 @@ dependencies = [
 
 [[package]]
 name = "rise-theme"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7628,7 +7628,7 @@ dependencies = [
 
 [[package]]
 name = "rise-ui"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "anyhow",
  "futures",
@@ -7662,7 +7662,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rise-widgets"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7686,7 +7686,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -7762,7 +7762,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-base"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -7828,7 +7828,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-data-guides"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -7897,7 +7897,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-data-low"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -7964,7 +7964,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-data-map"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8031,7 +8031,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-data-mid"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8098,7 +8098,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-data-misc"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8165,7 +8165,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-data-rtc"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8232,7 +8232,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-chat"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8301,7 +8301,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-chat-info"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8370,7 +8370,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-media"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8439,7 +8439,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-misc-a"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8508,7 +8508,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-misc-b"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8577,7 +8577,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-misc-c"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8646,7 +8646,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-music"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8715,7 +8715,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-post"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8784,7 +8784,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-pages-user"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8853,7 +8853,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-ui-chat"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8920,7 +8920,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-ui-chat-input"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8987,7 +8987,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-ui-chat-list"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -9054,7 +9054,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-ui-high"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -9121,7 +9121,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-ui-low"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -9188,7 +9188,7 @@ dependencies = [
 
 [[package]]
 name = "riseonly-web-view-helper"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "rise-platform",
 ]

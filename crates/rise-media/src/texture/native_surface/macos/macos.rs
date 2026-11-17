@@ -120,6 +120,14 @@ pub(crate) fn drawable_buffer(surface: &RetainedSurface) -> Result<CVPixelBuffer
     Ok(buffer.clone())
 }
 
+pub(crate) fn pixel_buffer_with_extra_reference(surface: &RetainedSurface) -> Option<*mut c_void> {
+    let HeldPixelBuffer(buffer) = surface.keeper::<HeldPixelBuffer>()?;
+    let owned = buffer.clone();
+    let address = owned.as_concrete_TypeRef();
+    std::mem::forget(owned);
+    Some(address.cast())
+}
+
 pub(crate) const METAL_SURFACE_YCBCR_TO_RGB: [[f32; 4]; 4] = [
     [1.0, 1.0, 1.0, 0.0],
     [0.0, -0.3441, 1.7720, 0.0],

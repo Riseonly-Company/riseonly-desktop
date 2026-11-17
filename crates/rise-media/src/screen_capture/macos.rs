@@ -12,6 +12,7 @@ use parking_lot::{Condvar, Mutex};
 use rise_core::foundation::foundation_date::RiseClock;
 
 use super::screen_capture::*;
+use crate::texture::native_surface::retain_decoder_surface;
 
 const OUTPUT_TYPE_SCREEN: isize = 0;
 const OUTPUT_TYPE_AUDIO: isize = 1;
@@ -23,14 +24,13 @@ const ERROR_USER_STOPPED: isize = -3817;
 const STYLE_WINDOW: isize = 1;
 const STYLE_APPLICATION: isize = 3;
 const PIXEL_FORMAT_420V: u32 = u32::from_be_bytes(*b"420v");
-const LOCK_READ_ONLY: u64 = 1;
 const AUDIO_FORMAT_LINEAR_PCM: u32 = u32::from_be_bytes(*b"lpcm");
 const AUDIO_FORMAT_FLAG_IS_FLOAT: u32 = 1;
 const AUDIO_BUFFER_LIST_ASSURE_ALIGNMENT: u32 = 1;
 const FLOAT_SAMPLE_BITS: u32 = 32;
 const CMTIME_FLAGS_VALID: u32 = 1;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
-const QUEUE_DEPTH: isize = 4;
+const QUEUE_DEPTH: isize = 6;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -132,15 +132,9 @@ unsafe extern "C" {
 
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
-    fn CVPixelBufferLockBaseAddress(buffer: *mut c_void, flags: u64) -> i32;
-    fn CVPixelBufferUnlockBaseAddress(buffer: *mut c_void, flags: u64) -> i32;
     fn CVPixelBufferGetWidth(buffer: *mut c_void) -> usize;
     fn CVPixelBufferGetHeight(buffer: *mut c_void) -> usize;
     fn CVPixelBufferGetPixelFormatType(buffer: *mut c_void) -> u32;
-    fn CVPixelBufferGetPlaneCount(buffer: *mut c_void) -> usize;
-    fn CVPixelBufferGetBaseAddressOfPlane(buffer: *mut c_void, plane: usize) -> *mut c_void;
-    fn CVPixelBufferGetBytesPerRowOfPlane(buffer: *mut c_void, plane: usize) -> usize;
-    fn CVPixelBufferGetHeightOfPlane(buffer: *mut c_void, plane: usize) -> usize;
 }
 
 unsafe extern "C" {
@@ -588,7 +582,7 @@ impl Route {
             Some(status) if status != FRAME_STATUS_COMPLETE => return,
             _ => {}
         }
-        if let Some(frame) = copy_frame(buffer) {
+        if let Some(frame) = held_frame(buffer) {
             (self.frames)(frame);
         }
     }
@@ -619,35 +613,19 @@ fn frame_status(buffer: *mut CmSampleBuffer) -> Option<isize> {
     }
 }
 
-/// copies the nv12 planes out of the pixel buffer, rows kept at their stride
-fn copy_frame(buffer: *mut CmSampleBuffer) -> Option<ScreenFrame> {
+fn held_frame(buffer: *mut CmSampleBuffer) -> Option<ScreenFrame> {
     unsafe {
         let pixels = CMSampleBufferGetImageBuffer(buffer);
         if pixels.is_null() || CVPixelBufferGetPixelFormatType(pixels) != PIXEL_FORMAT_420V {
             return None;
         }
-        if CVPixelBufferGetPlaneCount(pixels) != 2 || CVPixelBufferLockBaseAddress(pixels, LOCK_READ_ONLY) != 0 {
-            return None;
-        }
-        let plane = |index: usize| -> Option<(Arc<[u8]>, u32)> {
-            let base = CVPixelBufferGetBaseAddressOfPlane(pixels, index).cast::<u8>();
-            let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, index);
-            let rows = CVPixelBufferGetHeightOfPlane(pixels, index);
-            if base.is_null() || stride == 0 || rows == 0 {
-                return None;
-            }
-            let bytes = std::slice::from_raw_parts(base, stride * rows);
-            Some((Arc::from(bytes), u32::try_from(stride).ok()?))
-        };
-        let width = u32::try_from(CVPixelBufferGetWidth(pixels)).ok();
-        let height = u32::try_from(CVPixelBufferGetHeight(pixels)).ok();
-        let planes = plane(0).zip(plane(1));
-        CVPixelBufferUnlockBaseAddress(pixels, LOCK_READ_ONLY);
-        let ((luma, luma_stride), (chroma, chroma_stride)) = planes?;
+        let width = u32::try_from(CVPixelBufferGetWidth(pixels)).ok()?;
+        let height = u32::try_from(CVPixelBufferGetHeight(pixels)).ok()?;
+        let surface = retain_decoder_surface(pixels).ok()?;
         Some(ScreenFrame {
-            width: width?,
-            height: height?,
-            pixels: ScreenPixels::Nv12 { luma, luma_stride, chroma, chroma_stride },
+            width,
+            height,
+            pixels: ScreenPixels::Surface(surface),
             captured_at: RiseClock::monotonic(),
         })
     }

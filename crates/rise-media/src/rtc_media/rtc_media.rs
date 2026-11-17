@@ -1138,12 +1138,24 @@ pub fn owns_session(intended: Option<&MediaSessionKey>, active: Option<&MediaSes
 
 pub const NO_RUNTIME: &str = "the engine did not install its tokio runtime for calls";
 
+/// codec a local video track is published with
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PublishedVideoCodec {
+    Vp8,
+    H264,
+}
+
 /// os half of the seam
 /// room and publishing and mixing are the same livekit code on every host
 /// the branch names the audio host whose devices a call opens
+/// and the codec a screen share goes out in, h264 where the host encodes it in hardware
 pub trait RtcMediaEngine {
     fn audio_host_id(&self) -> cpal::HostId {
         cpal::default_host().id()
+    }
+
+    fn screen_share_codec(&self) -> PublishedVideoCodec {
+        PublishedVideoCodec::Vp8
     }
 }
 
