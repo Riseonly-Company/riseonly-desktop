@@ -44,7 +44,7 @@ impl NotifyInteractionsStore {
         let Some(url) = Url::from_string(trimming_whitespaces_and_newlines(action_url)) else {
             return;
         };
-        if let Some(link) = UniversalLinkParser::parse(&url, AppEnvironment::compiled()) {
+        if let Some(link) = UniversalLinkParser::parse(&url, AppEnvironment::current()) {
             PushDeepLinkStore::shared(cx).update(cx, |store, cx| {
                 store.enqueue(link, cx);
             });

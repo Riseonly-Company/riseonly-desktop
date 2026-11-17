@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use crate::core::config::app_environment::AppEnvironment;
 
 static APP_PATHS: LazyLock<Option<AppPaths>> =
-    LazyLock::new(|| AppPaths::resolve(AppEnvironment::compiled().canon()).ok());
+    LazyLock::new(|| AppPaths::resolve(AppEnvironment::current().canon()).ok());
 
 pub fn location_app_paths() -> Option<&'static AppPaths> {
     APP_PATHS.as_ref()

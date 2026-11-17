@@ -17,9 +17,9 @@ export XWIN_ARCH="$arch"
 export XWIN_CACHE_DIR="${XWIN_CACHE_DIR:-/xwin}/$arch"
 
 case "${RISE_ENV:-production}" in
-    staging | stage) app_name="Riseonly Staging" ;;
-    dev | development) app_name="Riseonly Dev" ;;
-    *) app_name="Riseonly" ;;
+    staging | stage) app_name="Riseonly Staging" environment=staging ;;
+    dev | development) app_name="Riseonly Dev" environment=dev ;;
+    *) app_name="Riseonly" environment=production ;;
 esac
 
 ./scripts/vendor-rlottie.sh
@@ -41,10 +41,17 @@ export FFMPEG_PKG_CONFIG_PATH="$PWD/$ffmpeg/lib/pkgconfig"
 export "PKG_CONFIG_ALLOW_CROSS_$triple_env=1"
 export "PKG_CONFIG_LIBDIR_$triple_env=$FFMPEG_PKG_CONFIG_PATH"
 
-export "RC_$triple_env=$PWD/scripts/xwin-llvm-rc.sh"
-cargo xwin build --locked --profile "$profile" --target "$triple" -p riseonly
-
 exe="$target/$triple/$profile/riseonly.exe"
+if [ -n "${PAYLOAD:-}" ]; then
+    mkdir -p "$(dirname "$exe")"
+    cp "$PAYLOAD/riseonly.exe" "$exe"
+else
+    export "RC_$triple_env=$PWD/scripts/xwin-llvm-rc.sh"
+    env -u RISE_ENV cargo xwin build --locked --profile "$profile" --target "$triple" -p riseonly
+    rm -rf "payload/windows-$arch"
+    mkdir -p "payload/windows-$arch"
+    cp "$exe" "payload/windows-$arch/riseonly.exe"
+fi
 [ -f "$exe" ] || { echo "missing $exe" >&2; exit 1; }
 
 stage="build/windows/$profile"
@@ -52,6 +59,7 @@ out_dir="$stage/$app_name"
 rm -rf "$stage"
 mkdir -p "$out_dir"
 cp "$exe" "$out_dir/riseonly.exe"
+printf '%s\n' "$environment" > "$out_dir/environment"
 [ -d assets ] && cp -R assets "$out_dir/assets"
 
 for dll in "$ffmpeg"/bin/*.dll; do

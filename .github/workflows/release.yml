@@ -20,6 +20,9 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.plan.outputs.run }}
       linux: ${{ steps.plan.outputs.linux }}
@@ -35,6 +38,8 @@ jobs:
       slug: ${{ steps.plan.outputs.slug }}
       tag: ${{ steps.plan.outputs.tag }}
       sha: ${{ steps.plan.outputs.sha }}
+      tree: ${{ steps.plan.outputs.tree }}
+      payloads: ${{ steps.plan.outputs.payloads }}
       tools_repo: ${{ steps.plan.outputs.tools_repo }}
       tools_ref: ${{ steps.plan.outputs.tools_ref }}
       rust: ${{ steps.plan.outputs.rust }}
@@ -50,6 +55,8 @@ jobs:
           sparse-checkout-cone-mode: false
       - id: plan
         name: Plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
       - name: The version is new
         if: steps.plan.outputs.run == 'true' && steps.plan.outputs.environment == 'production'
@@ -71,6 +78,9 @@ jobs:
       matrix:
         arch: ${{ fromJSON(needs.plan.outputs.linux_archs) }}
     timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
     env:
       PROFILE: ${{ needs.plan.outputs.profile }}
       RISE_ENV: ${{ needs.plan.outputs.environment }}
@@ -78,6 +88,8 @@ jobs:
       RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
       VERSION: ${{ needs.plan.outputs.version }}
       SLUG: ${{ needs.plan.outputs.slug }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('linux-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-linux-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,6 +103,14 @@ jobs:
           ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
       - if: matrix.arch == 'aarch64'
         name: room for the toolchain image and the target dir on the hosted runner
         run: |
@@ -100,9 +120,17 @@ jobs:
         env:
           DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && format('{0}/desktop-ci', runner.temp) || '' }}
           DESKTOP_CI_MEMORY: ${{ matrix.arch == 'aarch64' && '14g' || '' }}
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
           bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-linux-${{ matrix.arch }}
@@ -120,6 +148,9 @@ jobs:
       matrix:
         arch: ${{ fromJSON(needs.plan.outputs.windows_archs) }}
     timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
     env:
       PROFILE: ${{ needs.plan.outputs.profile }}
       RISE_ENV: ${{ needs.plan.outputs.environment }}
@@ -127,6 +158,8 @@ jobs:
       RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
       VERSION: ${{ needs.plan.outputs.version }}
       SLUG: ${{ needs.plan.outputs.slug }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('windows-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-windows-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -140,12 +173,28 @@ jobs:
           ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
       - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
         env:
           WIN_ARCH: ${{ matrix.arch }}
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
           bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-windows-${{ matrix.arch }}
@@ -162,6 +211,9 @@ jobs:
       matrix:
         arch: ${{ fromJSON(needs.plan.outputs.macos_archs) }}
     timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
     env:
       PROFILE: ${{ needs.plan.outputs.profile }}
       RISE_ENV: ${{ needs.plan.outputs.environment }}
@@ -170,6 +222,8 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       SLUG: ${{ needs.plan.outputs.slug }}
       MACOS_ARCH: ${{ matrix.arch }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('macos-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-macos-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,11 +237,21 @@ jobs:
           ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
+      - if: env.PAYLOAD_RUN == ''
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
           toolchain: ${{ needs.plan.outputs.rust }}
           targets: x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: env.PAYLOAD_RUN == ''
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: riseonly-desktop -> target
           key: ${{ needs.plan.outputs.profile }}-${{ matrix.arch }}
@@ -208,9 +272,17 @@ jobs:
           APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/macos-{0}', matrix.arch) || '' }}
         run: |
           rm -rf dist
           bash scripts/ci/build-macos.sh
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-macos-${{ matrix.arch }}

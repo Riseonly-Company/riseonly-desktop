@@ -41,7 +41,7 @@ impl SaiApiDocsStore {
     }
 
     fn docs_file_url() -> Option<PathBuf> {
-        AppPaths::resolve(AppEnvironment::compiled().canon())
+        AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.data_dir().join("sai_api_docs.json"))
     }

@@ -228,7 +228,7 @@ impl TrayController {
         }
 
         let host = HostOs::current();
-        let name = AppEnvironment::compiled().display_name();
+        let name = AppEnvironment::current().display_name();
         let mut config = TrayConfig::new(name, tray_tooltip(host, name, 0));
 
         if let Some(window) = first_window_handle(cx) {
@@ -285,7 +285,7 @@ impl TrayController {
         let language = cx.observe_global::<LanguageStore>(|cx| Self::sync_menu(cx));
         let tray = Rc::new(RefCell::new(tray));
         let badge_tray = Rc::clone(&tray);
-        let name = AppEnvironment::compiled().display_name();
+        let name = AppEnvironment::current().display_name();
 
         cx.set_global(Self {
             tray,

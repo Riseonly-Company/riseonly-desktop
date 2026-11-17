@@ -806,7 +806,7 @@ static FILE_LOCK: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(|| Mutex
 static SHARED: LazyLock<Arc<RemoteMediaDiskCache>> =
     LazyLock::new(|| Arc::new(RemoteMediaDiskCache::new(RemoteMediaDiskCacheConfiguration::default())));
 static CACHE_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().to_path_buf())
 });

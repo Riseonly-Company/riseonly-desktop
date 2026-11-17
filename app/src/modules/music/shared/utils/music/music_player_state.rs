@@ -3479,7 +3479,7 @@ impl MusicPlayerState {
                 Err(_) => CommandOutcome::Rejected,
             }
         });
-        if let Some(info) = AppInfo::current(AppEnvironment::compiled().as_str()) {
+        if let Some(info) = AppInfo::current(AppEnvironment::current().as_str()) {
             let identity = MediaIdentity::new(info.display_name, info.bundle_identifier);
             match MediaKeys::install(&identity, handler) {
                 Ok(media_keys) => {

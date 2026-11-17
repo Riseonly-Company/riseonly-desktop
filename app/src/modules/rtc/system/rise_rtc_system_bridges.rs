@@ -69,7 +69,7 @@ impl RiseRTCSystemVoIPAPNSEnvironment {
     }
 
     pub fn current() -> Self {
-        if AppEnvironment::compiled() == AppEnvironment::Prod { Self::Production } else { Self::Sandbox }
+        if AppEnvironment::current() == AppEnvironment::Prod { Self::Production } else { Self::Sandbox }
     }
 }
 

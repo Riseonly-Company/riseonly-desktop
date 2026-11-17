@@ -87,6 +87,7 @@ done
 if [ -d "$ROOT/assets" ]; then
     cp -R "$ROOT/assets" "$OUT/Contents/Resources/assets"
 fi
+printf '%s\n' "$ENVIRONMENT" > "$OUT/Contents/Resources/environment"
 
 FFMPEG_LIB_PATTERN='^lib(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale)\.[0-9]+\.dylib$'
 ARCH="$(lipo -archs "$BIN" 2>/dev/null | awk '{print $1}')"

@@ -1952,7 +1952,7 @@ impl RootView {
                 HoldContextMenuPresenter::dismiss(cx);
             }
         });
-        let outcome = resolve_external_url(&url, AppEnvironment::compiled(), |url| {
+        let outcome = resolve_external_url(&url, AppEnvironment::current(), |url| {
             self.handle_shared_send_url(url, cx) || self.handle_shared_story_url(url, cx)
         });
         tracing::warn!(target: "riseonly::X1458", url = %url.absolute_string(), ?outcome, "open url outcome");
@@ -1985,7 +1985,7 @@ impl RootView {
     }
 
     fn parse_universal_link(url: &Url) -> Option<PushDeepLink> {
-        parse_external_link(url, AppEnvironment::compiled())
+        parse_external_link(url, AppEnvironment::current())
     }
 
     /// queues an outside link instead of pushing it

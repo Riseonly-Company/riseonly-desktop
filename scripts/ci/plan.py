@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import urllib.request
 
 PLATFORMS = ("linux", "windows", "macos")
 OS_LABEL = {"linux": "linux", "windows": "win", "macos": "macos"}
@@ -64,6 +65,33 @@ def environment_of(kind, base, labels):
     return "production" if base == "main" else "staging"
 
 
+def github(path):
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/{path}",
+        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def compiled_before(tree, fetch):
+    name = re.compile(rf"payload-{tree}-b(\d+)-([a-z]+-[a-z0-9_]+)")
+    builds = {}
+    for page in range(1, 11):
+        batch = fetch(f"actions/artifacts?per_page=100&page={page}")["artifacts"]
+        for artifact in batch:
+            found = name.fullmatch(artifact["name"])
+            if found and not artifact["expired"]:
+                build, key = int(found.group(1)), found.group(2)
+                builds.setdefault(build, {}).setdefault(key, artifact["workflow_run"]["id"])
+        if len(batch) < 100:
+            break
+    if not builds:
+        return None, {}
+    build = max(builds)
+    return str(build), builds[build]
+
+
 def decide(mode, event):
     pr = event["pull_request"]
     labels = {label["name"] for label in pr.get("labels", [])}
@@ -108,6 +136,12 @@ def main():
         environment = environment_of(kind, pr["base"]["ref"], labels)
         version = workspace_version(root)
         build_number = os.environ.get("GITHUB_RUN_NUMBER", "1")
+        sha = pr.get("merge_commit_sha") if kind == "release" else pr["head"]["sha"]
+        tree, payloads = "", {}
+        if kind == "release" and os.environ.get("GH_TOKEN"):
+            tree = github(f"git/commits/{sha}")["tree"]["sha"][:12]
+            inherited, payloads = compiled_before(tree, github)
+            build_number = inherited or build_number
         out.update({
             "run": "true",
             "platforms": json.dumps(picked),
@@ -121,7 +155,9 @@ def main():
             "build_number": build_number,
             "slug": SLUGS[environment],
             "tag": f"v{version}" if environment == "production" else f"staging-v{version}-{build_number}",
-            "sha": pr.get("merge_commit_sha") if kind == "release" else pr["head"]["sha"],
+            "sha": sha,
+            "tree": tree,
+            "payloads": json.dumps(payloads),
             "tools_repo": env["TOOLS_REPO"],
             "tools_ref": env["TOOLS_REF"],
             "rust": env["RUST_TOOLCHAIN"],

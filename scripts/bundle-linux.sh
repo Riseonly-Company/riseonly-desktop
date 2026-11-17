@@ -75,6 +75,7 @@ fill "$RES/riseonly.metainfo.xml.in" > "$OUT/share/metainfo/$BUNDLE_ID.metainfo.
 if [ -d "$ROOT/assets" ]; then
     cp -R "$ROOT/assets" "$OUT/share/riseonly/assets"
 fi
+printf '%s\n' "$ENVIRONMENT" > "$OUT/share/riseonly/environment"
 
 FFMPEG_LIB_PATTERN='^lib(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale)\.so\.[0-9]+$'
 case "$(uname -m)" in

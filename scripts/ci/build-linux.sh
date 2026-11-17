@@ -10,8 +10,17 @@ arch=$(uname -m)
 export MLN_PRECOMPILE=${MLN_PRECOMPILE:-1}
 
 ./scripts/vendor-rlottie.sh
-cargo build --locked --profile "$profile" -p riseonly
-cargo build --locked --profile "$profile" -p riseonly-web-view-helper --features helper
+if [ -n "${PAYLOAD:-}" ]; then
+    mkdir -p "$target/$profile"
+    cp "$PAYLOAD/riseonly" "$PAYLOAD/riseonly-web-view-helper" "$target/$profile/"
+    chmod +x "$target/$profile/riseonly" "$target/$profile/riseonly-web-view-helper"
+else
+    env -u RISE_ENV cargo build --locked --profile "$profile" -p riseonly
+    env -u RISE_ENV cargo build --locked --profile "$profile" -p riseonly-web-view-helper --features helper
+    rm -rf "payload/linux-$arch"
+    mkdir -p "payload/linux-$arch"
+    cp "$target/$profile/riseonly" "$target/$profile/riseonly-web-view-helper" "payload/linux-$arch/"
+fi
 
 bash scripts/bundle-linux.sh "$profile"
 usr="build/linux/$profile/usr"

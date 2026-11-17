@@ -422,7 +422,7 @@ impl LottieStickerLoader {
     }
 
     pub fn storage_directory_url() -> Option<PathBuf> {
-        AppPaths::resolve(AppEnvironment::compiled().canon())
+        AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.cache_dir().join(STORAGE_DIRECTORY_NAME))
     }

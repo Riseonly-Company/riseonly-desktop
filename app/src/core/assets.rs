@@ -71,6 +71,11 @@ impl AssetSource for RiseAssets {
     }
 }
 
+pub fn packaged_file(name: &str) -> Option<PathBuf> {
+    let file = locate_assets()?.parent()?.join(name);
+    file.is_file().then_some(file)
+}
+
 fn locate_assets() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;

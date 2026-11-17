@@ -26,7 +26,7 @@ use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStor
 static PERSISTENCE_QUEUE: LazyLock<RiseIsolated<u64>> = LazyLock::new(|| RiseIsolated::new(0));
 
 static QUEUES_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().join(EngagementServicesStore::QUEUES_DIRECTORY_NAME))
 });

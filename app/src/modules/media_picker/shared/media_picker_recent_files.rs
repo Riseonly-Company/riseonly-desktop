@@ -25,7 +25,7 @@ use crate::modules::media_picker::api::media_picker_result::{
 };
 
 static APPLICATION_SUPPORT_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.data_dir().to_path_buf())
 });

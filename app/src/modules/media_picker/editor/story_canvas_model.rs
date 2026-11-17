@@ -262,7 +262,7 @@ impl StoryCanvasPhotoStore {
     }
 
     fn new() -> Self {
-        let caches = AppPaths::resolve(AppEnvironment::compiled().canon())
+        let caches = AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.cache_dir().to_path_buf())
             .unwrap_or_else(temporary_directory);

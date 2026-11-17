@@ -133,3 +133,15 @@ fn an_unknown_build_value_is_dev_only_in_a_debug_build() {
         assert_eq!(AppEnvironment::from_build_value(raw, false), AppEnvironment::Prod, "{raw:?}");
     }
 }
+
+#[test]
+fn the_packaged_environment_wins_over_the_build_value() {
+    assert_eq!(AppEnvironment::packaged_or_compiled(Some("staging\n")), AppEnvironment::Staging);
+    assert_eq!(AppEnvironment::packaged_or_compiled(Some(" Production ")), AppEnvironment::Prod);
+}
+
+#[test]
+fn a_package_without_a_known_environment_keeps_the_build_value() {
+    assert_eq!(AppEnvironment::packaged_or_compiled(None), AppEnvironment::compiled());
+    assert_eq!(AppEnvironment::packaged_or_compiled(Some("moon")), AppEnvironment::compiled());
+}

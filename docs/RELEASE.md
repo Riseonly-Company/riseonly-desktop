@@ -27,15 +27,29 @@ later pushes. The labels are created by ci on the first pull request.
 
 - **pull request** (`build.yml`): lint (fmt, boundaries, module tree, canon locales) and a `fast`
   profile build of each picked platform. Into `main` it is a production app, otherwise a staging app.
-- **development -> staging, merged with `deploy`** (`release.yml`): release profile build of the
-  staging app (`Riseonly Staging`, talks to the staging backend), uploaded to the cdn under
-  `staging/`, the staging feed updated, a draft GitHub release.
+- **development -> staging, merged with `deploy`** (`release.yml`): release profile build, packaged
+  as the staging app (`Riseonly Staging`, talks to the staging backend), uploaded to the cdn under
+  `staging/`, the staging feed updated, a draft GitHub release. The compiled binaries stay as
+  `payload-<tree>-b<build>-<platform>-<arch>` artifacts for 90 days.
 - **staging -> main, merged with `deploy`**: the same for production: the production feed, a
   published GitHub release with tag `v<version>`. It fails early when that tag exists, so bump
   `[workspace.package] version` in `Cargo.toml` first. The updater compares versions, so a staging
-  build reaches staging installs only with a higher version too.
+  build reaches staging installs only with a higher version too. When the staging release of the
+  same tree left its binaries, nothing compiles: they are packaged again as the production app
+  under the staging build number, signed and notarized. A platform with no kept binary compiles.
 
 Any other merge into `staging` or `main` (another head branch, no `deploy`) releases nothing.
+
+## One build, two apps
+
+The binary does not carry its environment, the package names it. The file `environment` beside
+`assets` holds the canon name (`Contents/Resources/environment` on macOS, `share/riseonly/environment`
+on Linux, next to `riseonly.exe` on Windows) and the app reads it at start. Without the file the
+build value `RISE_ENV` decides, which is what `cargo run` and the watch loop rely on. ci compiles
+with no `RISE_ENV` and packages for the environment of the pull request or release, so staging and
+production ship one binary. On macOS each package is signed and notarized on its own, the name and
+the bundle id differ. On Windows the product name in the file properties is `Riseonly` in both. On
+Linux and Windows the file is plain and editable; the backend, not the client, decides who gets in.
 
 ## Where the files go
 

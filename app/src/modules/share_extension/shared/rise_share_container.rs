@@ -56,7 +56,7 @@ type ContainerResult<T> = Result<T, RiseShareContainerError>;
 pub type RiseShareStorySourceItem = (PathBuf, RiseShareStoryMediaKind, String, String);
 
 static ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.data_dir().to_path_buf())
 });

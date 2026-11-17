@@ -19,7 +19,7 @@ use rise_platform::paths::temporary_directory;
 use crate::core::config::app_environment::AppEnvironment;
 
 static CACHE_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().to_path_buf())
 });

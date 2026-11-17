@@ -53,7 +53,7 @@ impl PostDownloadCache {
     const PART_MARK: &'static str = ".part-";
 
     pub fn directory() -> Option<PathBuf> {
-        let url = AppPaths::resolve(AppEnvironment::compiled().canon())
+        let url = AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.cache_dir().join(Self::DIRECTORY_NAME))?;
         let _ = FileManager.create_directory(&url, true);
