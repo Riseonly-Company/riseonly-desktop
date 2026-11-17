@@ -44,7 +44,14 @@ if [ -n "${PAYLOAD:-}" ]; then
     cp "$PAYLOAD/riseonly" "$bin"
     chmod +x "$bin"
 else
+    cores=$(sysctl -n hw.ncpu)
+    memory_gb=$(($(sysctl -n hw.memsize) / 1073741824))
+    if [ -z "${CARGO_BUILD_JOBS:-}" ] && [ "$memory_gb" -lt 12 ]; then
+        export CARGO_BUILD_JOBS=2
+    fi
+    echo "host: $cores cores, $memory_gb GB, cargo jobs ${CARGO_BUILD_JOBS:-$cores}"
     env -u RISE_ENV cargo build --locked --profile "$profile" ${target_args[@]+"${target_args[@]}"} -p riseonly
+    echo "swap after the build: $(sysctl -n vm.swapusage)"
     rm -rf "payload/macos-$arch"
     mkdir -p "payload/macos-$arch"
     cp "$bin" "payload/macos-$arch/riseonly"
