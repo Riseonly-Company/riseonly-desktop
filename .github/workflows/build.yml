@@ -71,7 +71,7 @@ jobs:
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
           ref: ${{ needs.plan.outputs.tools_ref }}
-          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
       - name: fmt, boundaries, module tree, canon locales
@@ -98,7 +98,7 @@ jobs:
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
           ref: ${{ needs.plan.outputs.tools_ref }}
-          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
       - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
@@ -133,7 +133,7 @@ jobs:
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
           ref: ${{ needs.plan.outputs.tools_ref }}
-          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
       - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
@@ -168,7 +168,7 @@ jobs:
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
           ref: ${{ needs.plan.outputs.tools_ref }}
-          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
@@ -210,7 +210,7 @@ jobs:
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
           ref: ${{ needs.plan.outputs.tools_ref }}
-          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
       - name: cargo test and clippy

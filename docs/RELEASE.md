@@ -70,7 +70,7 @@ Repository secrets:
 
 | Name | Needed for |
 |---|---|
-| `RISEONLY_TOOLS_TOKEN` | read access to riseonly-tools (the canon crates are path dependencies) |
+| `RISEONLY_TOOLS_SSH_KEY` | read-only deploy key of riseonly-tools (the canon crates are path dependencies) |
 | `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD` | Developer ID Application certificate; without it macOS builds keep an ad hoc signature |
 | `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`, `APPLE_NOTARY_ISSUER_ID` | notarization (App Store Connect api key) |
 | `BUNNY_STORAGE_KEY` | password of the storage zone behind the cdn |
