@@ -8,7 +8,7 @@ use crate::modules::user::stores::subscription::premium_gift_store::PremiumGiftS
 use crate::modules::user::stores::subscription::subscription_services::subscription_services::SubscriptionServicesStore;
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 
-pub(crate) fn install_account_state_reset_user_hooks() {
+pub fn install_account_state_reset_user_hooks() {
     set_account_state_reset_user_hooks(AccountStateResetUserHooks {
         activate_account_state: |cx| {
             RiseUserTabBarPresentation::shared(cx).update(cx, |presentation, cx| presentation.activate_account_state(cx));

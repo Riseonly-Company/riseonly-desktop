@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Ungependa kutupa mabadiliko?",
   "media_editor_discard_confirm": "Tupa mabadiliko",
   "media_editor_discard_keep": "Endelea kuhariri",
-  "story_canvas_photos_limit_reached": "Unaweza kuongeza hadi picha %d"
+  "story_canvas_photos_limit_reached": "Unaweza kuongeza hadi picha %d",
+  "error_rtc_overloaded": "Simu zina msongamano mkubwa kwa sasa. Ili simu zinazoendelea zibaki imara, simu mpya zimesitishwa kwa muda. Jaribu tena baada ya muda mfupi",
+  "overload_modal_title": "Kuna msongamano mkubwa sasa"
 }

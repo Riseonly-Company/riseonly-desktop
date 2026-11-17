@@ -168,7 +168,7 @@ impl SpoilerDustLayer {
 }
 
 /// emitter value with its range, uniform from value minus range to plus range for a unit in 0 to 1
-pub(crate) fn emitter_spread(value: f32, range: f32, unit: f32) -> f32 {
+pub fn emitter_spread(value: f32, range: f32, unit: f32) -> f32 {
     value + (2.0 * unit - 1.0) * range
 }
 

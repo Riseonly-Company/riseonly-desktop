@@ -3,7 +3,7 @@ use gpui::App;
 use crate::core::push_notifications::push_notification_manager::PushNotificationManager;
 use crate::core::push_notifications::push_notification_manager_hooks::PushNotificationManagerHooks;
 
-pub(crate) fn install_push_notification_manager_hooks() {
+pub fn install_push_notification_manager_hooks() {
     PushNotificationManagerHooks::install(PushNotificationManagerHooks {
         device_token: Box::new(|cx: &App| {
             rise_ui::shared::try_read::<PushNotificationManager>(cx)

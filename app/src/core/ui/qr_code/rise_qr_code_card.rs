@@ -183,10 +183,10 @@ pub struct RiseQRCodeCardFace {
 }
 
 impl RiseQRCodeCardFace {
-    pub(crate) const CODE_CAPTION_SPACING: f32 = 14.0;
+    pub const CODE_CAPTION_SPACING: f32 = 14.0;
     pub(crate) const PLACEHOLDER_CORNER_RADIUS: f32 = 12.0;
-    pub(crate) const CAPTION_MINIMUM_SCALE_FACTOR: f32 = 0.5;
-    pub(crate) const CAPTION_LINE_LIMIT: usize = 2;
+    pub const CAPTION_MINIMUM_SCALE_FACTOR: f32 = 0.5;
+    pub const CAPTION_LINE_LIMIT: usize = 2;
 
     pub fn new(image: Option<Arc<RenderImage>>, caption: String, theme: RiseQRCodeTheme, width: f32) -> Self {
         Self { image, caption, theme, width }
@@ -196,7 +196,7 @@ impl RiseQRCodeCardFace {
         hsla(0.0, 0.0, 0.93, 1.0)
     }
 
-    pub(crate) fn caption_font_size(width: f32) -> f32 {
+    pub fn caption_font_size(width: f32) -> f32 {
         15.0_f32.max(width * 0.068)
     }
 
@@ -270,15 +270,15 @@ impl RiseQRCodeAvatar {
         Self { image, title, identity_seed, size }
     }
 
-    pub(crate) fn letter_font_size(size: f32) -> f32 {
+    pub fn letter_font_size(size: f32) -> f32 {
         (size * 0.46).max(11.0)
     }
 
-    pub(crate) fn fill(&self) -> Hsla {
+    pub fn fill(&self) -> Hsla {
         AvatarPalette::color_for_user(self.identity_seed.as_deref(), Some(&self.title))
     }
 
-    pub(crate) fn letter(&self) -> String {
+    pub fn letter(&self) -> String {
         AvatarPalette::display_letter(Some(&self.title))
     }
 }
@@ -339,7 +339,7 @@ impl RiseQRCodeShareCanvas {
         Self { image, avatar, subject, theme, appearance, pattern_intensity, size }
     }
 
-    pub(crate) fn wallpaper(&self) -> ChatWallpaperRasterFrame {
+    pub fn wallpaper(&self) -> ChatWallpaperRasterFrame {
         ChatWallpaperRasterFrame::new(
             self.theme.preset(self.appearance).resolved(self.appearance),
             ChatWallpaperPreset::resolved_pattern_intensity(self.pattern_intensity, self.appearance),
@@ -348,11 +348,11 @@ impl RiseQRCodeShareCanvas {
         )
     }
 
-    pub(crate) fn card_width(&self) -> f32 {
+    pub fn card_width(&self) -> f32 {
         f32::from(self.size.width) * RiseQRCodeCardMetrics::CANVAS_CARD_RATIO
     }
 
-    pub(crate) fn avatar_size(&self) -> f32 {
+    pub fn avatar_size(&self) -> f32 {
         self.card_width() * RiseQRCodeCardMetrics::AVATAR_RATIO
     }
 }

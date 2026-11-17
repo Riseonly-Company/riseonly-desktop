@@ -6,7 +6,7 @@ use crate::modules::user::stores::user::user_actions::user_wire_types_hooks::{
 };
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 
-pub(crate) fn install_user_wire_types_hooks() {
+pub fn install_user_wire_types_hooks() {
     set_user_wire_types_hooks(UserWireTypesHooks { foreign_profile_payload });
 }
 

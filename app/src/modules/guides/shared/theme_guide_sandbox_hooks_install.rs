@@ -6,7 +6,7 @@ use crate::modules::theme::engine::rise_theme_wallpaper_upload::RiseChatWallpape
 use crate::modules::theme::engine::rise_theme_wallpapers_presentation::RiseThemeWallpapersSnapshot;
 use crate::modules::theme::stores::theme_guide_sandbox_hooks::{ThemeGuideSandboxHooks, set_theme_guide_sandbox_hooks};
 
-pub(crate) fn install_theme_guide_sandbox_hooks() {
+pub fn install_theme_guide_sandbox_hooks() {
     let _ = set_theme_guide_sandbox_hooks(ThemeGuideSandboxHooks {
         owns_app_wallpaper_scene,
         app_wallpapers_snapshot,

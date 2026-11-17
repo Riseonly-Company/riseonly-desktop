@@ -22,7 +22,7 @@ use crate::modules::auth::services::keychain_store::KeychainStore;
 use crate::modules::media_picker::editor::editor_image_bake::EditorImageBake;
 
 pub fn install_storage() {
-    let environment = AppEnvironment::compiled();
+    let environment = AppEnvironment::current();
 
     match AppPaths::resolve(environment.canon()) {
         Ok(paths) => {
@@ -88,7 +88,7 @@ pub fn install(cx: &mut App) {
 }
 
 pub fn did_finish_launching(cx: &mut App) {
-    let Some(identity) = identity_for(AppEnvironment::compiled().as_str()) else {
+    let Some(identity) = identity_for(AppEnvironment::current().as_str()) else {
         tracing::error!(target: "riseonly", "this build names no app identity; the launch hooks did not run");
         return;
     };

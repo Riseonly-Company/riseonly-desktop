@@ -30,8 +30,8 @@ use crate::modules::map::engine::rise_map_journeys_repository::{
 };
 use crate::modules::map::engine::rise_map_photos_repository::{RiseMapOpenGridSnapshot, RiseMapPhotosSnapshot};
 use crate::modules::map::recorder::map_track_codec::MapTrackGeometry;
+use crate::modules::map::stores::map_actions::map_interactions_hooks::map_interactions_hooks;
 use crate::modules::map::stores::map_actions::map_photos_types::{MapMediaKind, MapPhoto, MapPhotoGrid};
-use crate::modules::map::stores::map_interactions::map_interactions::MapInteractionsStore;
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerItemKind};
 
 const OPTIMISTIC_TEMPORARY_PREFIX: &str = RiseIdentityCanon::OPTIMISTIC_TEMPORARY_PREFIX;
@@ -84,8 +84,8 @@ impl GuideSandbox {
             return real;
         }
         let mut open_grid = real.open_grid;
-        let interactions = MapInteractionsStore::shared(cx);
-        if let Some(id) = interactions.read(cx).selected_grid_id()
+        let selected_grid_id = map_interactions_hooks().and_then(|hooks| (hooks.selected_grid_id)(cx));
+        if let Some(id) = selected_grid_id.as_deref()
             && let Some(photos) = scene.photos_by_grid.get(id)
         {
             open_grid = Some(RiseMapOpenGridSnapshot {
@@ -388,22 +388,11 @@ impl GuideSandbox {
     }
 
     pub fn withdraw_map_photos(&mut self, cx: &mut Context<Self>) {
-        let interactions = MapInteractionsStore::shared(cx);
-        let (selected, editing) = {
-            let store = interactions.read(cx);
-            (
-                self.owns_map_grid(store.selected_grid_id()),
-                self.owns_map_grid(store.grid_to_edit_id()),
-            )
-        };
-        interactions.update(cx, |interactions, cx| {
-            if selected {
-                interactions.select_grid(None, cx);
-            }
-            if editing {
-                interactions.set_grid_to_edit_id(None, cx);
-            }
-        });
+        if let Some(hooks) = map_interactions_hooks() {
+            let selected = self.owns_map_grid((hooks.selected_grid_id)(cx).as_deref());
+            let editing = self.owns_map_grid((hooks.grid_to_edit_id)(cx).as_deref());
+            (hooks.withdraw_guide_grids)(selected, editing, cx);
+        }
         GuideFacts::set(RiseGuideSignal::MapPhotoPickerOpen, false, cx);
         GuideFacts::set(RiseGuideSignal::MapGridOpen, false, cx);
         GuideFacts::set(RiseGuideSignal::MapGridEditorOpen, false, cx);

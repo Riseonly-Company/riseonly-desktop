@@ -1427,8 +1427,7 @@ impl GuideRunner {
         cx.notify();
     }
 
-    #[cfg(test)]
-    pub(crate) fn hold_guide_for_bridge_test(&mut self, key: &str) {
+    pub fn hold_guide_for_bridge_test(&mut self, key: &str) {
         let guide = RiseGuide {
             id: 0,
             key: key.to_owned(),
@@ -1451,8 +1450,7 @@ impl GuideRunner {
         self.running_guide_key = Some(key.to_owned());
     }
 
-    #[cfg(test)]
-    pub(crate) fn end_held_guide_for_bridge_test(&mut self, cx: &mut Context<Self>) {
+    pub fn end_held_guide_for_bridge_test(&mut self, cx: &mut Context<Self>) {
         self.teardown(false, cx);
     }
 

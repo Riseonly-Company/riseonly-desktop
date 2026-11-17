@@ -7,7 +7,7 @@ use crate::modules::user::stores::user::user_services::user_services_hooks::{
     UserServicesHooks, UserServicesShortsHooks,
 };
 
-pub(crate) fn install_user_services_hooks() {
+pub fn install_user_services_hooks() {
     UserServicesHooks::install_shorts(UserServicesShortsHooks {
         set_author_relationship: Box::new(|author_id: &str, relationship: UserListRelationship, cx: &mut App| {
             ShortsServicesStore::shared(cx).update(cx, |shorts, cx| {

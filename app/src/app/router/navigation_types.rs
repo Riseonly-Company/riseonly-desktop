@@ -5,9 +5,9 @@ use std::mem;
 use rise_canon::rise_key::guide_screen::camel as guide_screen_keys;
 use rise_core::foundation::foundation_url::Url;
 
+use crate::app::router::map_settings_section_hooks::MapSettingsSection;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_screen_refresh::SaiActiveScreen;
 use crate::core::ui::qr_code::rise_qr_code_card::RiseQRCodeSubject;
-use crate::modules::map::shared::map_settings_section::MapSettingsSection;
 use crate::modules::media_picker::api::media_picker_result::MediaPickerTrackSelection;
 use crate::modules::post::engine::rise_post_engine_models::{
     RisePostPageScope, RisePostProfileKind, RisePostSearchKind,
@@ -616,6 +616,37 @@ impl RootRoute {
             RootRoute::MapSettingsSection(section) => return format!("MapSettings.{}", section.raw_value()),
         };
         id.to_owned()
+    }
+}
+
+impl RootRoute {
+    pub fn shows_music_mini_player(&self) -> bool {
+        !matches!(
+            self,
+            RootRoute::Onboarding
+                | RootRoute::SignIn
+                | RootRoute::SignUp
+                | RootRoute::MainTabs(_)
+                | RootRoute::Chat { .. }
+                | RootRoute::ChatTopic { .. }
+                | RootRoute::ChatThread { .. }
+                | RootRoute::ForumAll { .. }
+                | RootRoute::CaseNotes { .. }
+                | RootRoute::RtcRoom { .. }
+                | RootRoute::ShortViewer { .. }
+                | RootRoute::QrScanner
+                | RootRoute::WorldMap
+                | RootRoute::MapJourney { .. }
+                | RootRoute::BotMiniApp { .. }
+                | RootRoute::BotMiniAppLink { .. }
+                | RootRoute::BotStartLink { .. }
+                | RootRoute::CreatePostMedia { .. }
+                | RootRoute::CreatePost { .. }
+                | RootRoute::EditPost { .. }
+                | RootRoute::CreatePostWithAchievement { .. }
+                | RootRoute::EditStory { .. }
+                | RootRoute::MapJourneyComposer
+        )
     }
 }
 

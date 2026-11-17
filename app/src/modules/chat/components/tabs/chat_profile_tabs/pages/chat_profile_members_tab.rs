@@ -34,7 +34,7 @@ use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shar
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_tab_window::{
     ChatProfileTabHost, ChatProfileWindowedRow, ChatProfileWindowedRows,
 };
-use crate::modules::chat::pages::chats::chat::chat_screen::chat_screen_support::ChatHeaderRefreshSchedule;
+use crate::modules::chat::components::tabs::chat_profile_tabs::pages::chat_header_refresh_schedule_hooks::ChatHeaderRefreshSchedule;
 use crate::modules::chat::pages::chats::chat::chat_roles::forum_member_grouping::{
     ForumMemberGrouping, ForumMemberGroupingViewerRights, MemberRoleGroup,
 };

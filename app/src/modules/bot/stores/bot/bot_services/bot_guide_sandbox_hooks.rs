@@ -6,7 +6,7 @@ use crate::modules::bot::stores::bot::bot_actions::bot_types::{
     BotUpdateValues, BotWebhookInfoModel,
 };
 
-pub(crate) struct BotGuideSandboxHooks {
+pub struct BotGuideSandboxHooks {
     pub owns_practice_bot: fn(bot_id: &str, cx: &App) -> bool,
     pub owned_bots_snapshot: fn(real: Vec<BotModel>, cx: &App) -> Vec<BotModel>,
     pub practice_bot: fn(id: &str, cx: &App) -> Option<BotModel>,
@@ -76,10 +76,10 @@ static UNINSTALLED: BotGuideSandboxHooks = BotGuideSandboxHooks {
     practice_mini_app_launch: |_, _, _, _| None,
 };
 
-pub(crate) fn set_bot_guide_sandbox_hooks(hooks: BotGuideSandboxHooks) -> Result<(), BotGuideSandboxHooks> {
+pub fn set_bot_guide_sandbox_hooks(hooks: BotGuideSandboxHooks) -> Result<(), BotGuideSandboxHooks> {
     HOOKS.set(hooks)
 }
 
-pub(crate) fn bot_guide_sandbox_hooks() -> &'static BotGuideSandboxHooks {
+pub fn bot_guide_sandbox_hooks() -> &'static BotGuideSandboxHooks {
     HOOKS.get().unwrap_or(&UNINSTALLED)
 }

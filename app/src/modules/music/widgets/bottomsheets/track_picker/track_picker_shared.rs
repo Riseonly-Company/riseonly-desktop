@@ -30,14 +30,14 @@ const MUSIC_PREFETCH_THRESHOLD: usize = 8;
 /// list model for the sheet rows
 /// gpui keys rows by index so the row ids of the last frame tell which stretch changed
 /// expanding a playlist must not throw the scroll away
-pub(crate) struct TrackPickerListModel {
+pub struct TrackPickerListModel {
     list: ListUi,
     ids: Vec<SharedString>,
     measures_all: bool,
 }
 
 impl TrackPickerListModel {
-    pub(crate) fn new(cx: &App) -> Self {
+    pub fn new(cx: &App) -> Self {
         Self { list: ListUi::new(rise_ui::theme(cx), 0, ListAlignment::Top), ids: Vec::new(), measures_all: false }
     }
 
@@ -49,11 +49,11 @@ impl TrackPickerListModel {
         Self { measures_all: true, ..model }
     }
 
-    pub(crate) fn list(&self) -> &ListUi {
+    pub fn list(&self) -> &ListUi {
         &self.list
     }
 
-    pub(crate) fn sync(&mut self, ids: Vec<SharedString>) {
+    pub fn sync(&mut self, ids: Vec<SharedString>) {
         if ids == self.ids {
             return;
         }
@@ -266,7 +266,7 @@ pub(crate) fn track_list(
 }
 
 /// arrow keys step through the results and stop at both ends
-pub(crate) fn stepped_highlight(current: Option<usize>, delta: isize, count: usize) -> Option<usize> {
+pub fn stepped_highlight(current: Option<usize>, delta: isize, count: usize) -> Option<usize> {
     if count == 0 {
         return None;
     }

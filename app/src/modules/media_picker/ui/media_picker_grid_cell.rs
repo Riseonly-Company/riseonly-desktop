@@ -21,8 +21,8 @@ use crate::core::lib::canon_format::RiseFormat;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::core::media_viewer::media_viewer_image_cache::MediaViewerImageMemoryCache;
 use crate::modules::media_picker::editor::editor_edit_preview_cache::EditorEditPreviewCache;
-use crate::modules::media_picker::editor::media_editor_presentation_host::media_edge_color;
 use crate::modules::media_picker::library::photo_library_fetcher::PhotoLibraryFetcher;
+use crate::modules::media_picker::ui::media_backdrop_hooks::media_edge_color;
 
 pub type MediaPickerGridCellAction = Rc<dyn Fn(&mut Window, &mut App)>;
 

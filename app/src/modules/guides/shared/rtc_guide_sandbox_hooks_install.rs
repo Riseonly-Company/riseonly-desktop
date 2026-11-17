@@ -3,7 +3,7 @@ use gpui::{App, Task};
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 use crate::modules::rtc::shared::rtc_guide_sandbox_hooks::{RtcGuideSandboxHooks, set_rtc_guide_sandbox_hooks};
 
-pub(crate) fn install_rtc_guide_sandbox_hooks() {
+pub fn install_rtc_guide_sandbox_hooks() {
     set_rtc_guide_sandbox_hooks(RtcGuideSandboxHooks {
         forum_chat_id: GuideSandbox::forum_chat_id(),
         voice_room_id: Box::new(GuideSandbox::voice_room_id),

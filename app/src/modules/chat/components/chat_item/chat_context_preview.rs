@@ -20,8 +20,8 @@ use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, 
 use crate::app::router::navigation_types::{MainTab, RootRoute};
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_host::HoldContextMenuWindowPresenter;
-use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_view::RiseListRemovalDiag;
 use crate::modules::chat::components::chat_item::chat_context_preview_hooks::chat_context_preview_hooks;
+use crate::modules::chat::components::chat_item::rise_list_removal_diag_hooks::RiseListRemovalDiag;
 use crate::modules::chat::pages::chats::embedded_forum_transition::EmbeddedForumPresentationStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatInfo;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;

@@ -25,7 +25,6 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws_pending_registry::SaiWsPendin
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_screen_refresh_coordinator::SaiWsScreenRefreshCoordinator;
 use crate::core::lib::sai::sai::Sai;
-use crate::core::media::media_save_coordinator::MediaSaveCoordinator;
 use crate::core::media::remote_media_disk_cache::RemoteMediaDiskCache;
 use crate::core::media::rise_media_range_policy::RiseMediaRangePolicy;
 use crate::core::media::rise_media_stream_session::RiseMediaStreamRegistry;
@@ -36,21 +35,14 @@ use crate::core::media_viewer::media_viewer_image_cache::MediaViewerImageMemoryC
 use crate::core::push_notifications::push_deep_link_store::PushDeepLinkStore;
 use crate::core::restriction::restriction_store::RestrictionStore;
 use crate::core::rise_engine_bridge::rise_engine_app_runtime::RiseEngineAppRuntime;
-use crate::core::storage::rise_chat_media_ledger::RiseChatMediaLedger;
 use crate::core::ui::clever_image_disk_cache::{CleverImageDiskCache, CleverImageDiskPrefetch};
 use crate::core::ui::custom_emoji_resource_warmup::CustomEmojiResourceWarmup;
-use crate::core::ui::emoji_picker_ui::emoji_picker_recents_store::EmojiPickerRecentsStore;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
 use crate::core::ui::lottie_sticker::lottie_sticker_prefetch::LottieStickerPrefetch;
 use crate::core::widgets::notifier::notifier_store::{
     Notifier, NotifierPosition, NotifierSendOptions, NotifierStore, NotifierType,
 };
-use crate::core::widgets::overlay::achievement_earned_store::AchievementEarnedStore;
-use crate::core::widgets::overlay::premium_gift_celebration_store::PremiumGiftCelebrationStore;
-use crate::core::widgets::overlay::premium_promo_store::PremiumPromoStore;
-use crate::core::widgets::overlay::premium_upsell_store::PremiumUpsellStore;
 use crate::core::widgets::overlay::subscription_success_store::SubscriptionSuccessStore;
-use crate::core::widgets::sheets::share_sheet::ShareSheetStore;
 use crate::modules::auth::components::web_login_approval::web_login_approval_store::WebLoginApprovalStore;
 use crate::modules::auth::services::account_state_reset_hooks::{
     account_state_reset_analytics_hooks, account_state_reset_bot_hooks, account_state_reset_chat_hooks,
@@ -63,10 +55,15 @@ use crate::modules::auth::services::account_state_reset_hooks::{
     account_state_reset_storage_hooks, account_state_reset_story_hooks, account_state_reset_user_hooks,
     account_state_reset_user_ui_hooks, account_state_reset_vacancy_hooks,
 };
+use crate::modules::auth::services::account_state_reset_store_hooks::{
+    account_state_reset_achievement_earned_hooks, account_state_reset_chat_media_ledger_hooks,
+    account_state_reset_emoji_picker_recents_hooks, account_state_reset_media_save_hooks,
+    account_state_reset_premium_gift_celebration_hooks, account_state_reset_premium_promo_hooks,
+    account_state_reset_premium_upsell_hooks, account_state_reset_share_sheet_hooks,
+    account_state_reset_sticker_asset_composer_hooks, account_state_reset_sticker_pack_sheet_hooks,
+    account_state_reset_stickers_services_hooks,
+};
 use crate::modules::music::shared::utils::music::music_playback_disk_cache::MusicPlaybackDiskCache;
-use crate::modules::stickers::components::sticker_pack_add_cell::StickerAssetComposerStore;
-use crate::modules::stickers::components::sticker_pack_sheet::sticker_pack_sheet_store::StickerPackSheetStore;
-use crate::modules::stickers::stores::stickers::stickers_services::stickers_services::StickersServicesStore;
 use crate::modules::user::shared::mention_resolver::MentionTapResolver;
 
 /// something that can be reset when the account state resets
@@ -206,7 +203,9 @@ impl AccountStateResetCoordinator {
         if let Some(media_picker) = account_state_reset_media_picker_hooks() {
             (media_picker.activate_account_state)(cx);
         }
-        EmojiPickerRecentsStore::shared(cx).update(cx, |store, cx| store.activate_account_state(cx));
+        if let Some(emoji_picker_recents) = account_state_reset_emoji_picker_recents_hooks() {
+            (emoji_picker_recents.activate_account_state)(cx);
+        }
         if let Some(analytics) = account_state_reset_analytics_hooks() {
             (analytics.activate_account_state)(cx);
         }
@@ -323,12 +322,16 @@ impl AccountStateResetCoordinator {
             (vacancy.remove_persisted_account)(user_id, cx);
         }
         CleverImageDiskCache::remove_persisted_account(user_id);
-        RiseChatMediaLedger::remove_persisted_account(user_id);
+        if let Some(chat_media_ledger) = account_state_reset_chat_media_ledger_hooks() {
+            (chat_media_ledger.remove_persisted_account)(user_id);
+        }
         RemoteMediaDiskCache::remove_persisted_account(user_id);
         if let Some(media_picker) = account_state_reset_media_picker_hooks() {
             (media_picker.remove_persisted_account)(user_id, cx);
         }
-        EmojiPickerRecentsStore::shared(cx).read(cx).remove_persisted_account(user_id);
+        if let Some(emoji_picker_recents) = account_state_reset_emoji_picker_recents_hooks() {
+            (emoji_picker_recents.remove_persisted_account)(user_id, cx);
+        }
         if let Some(gifts) = account_state_reset_gifts_hooks() {
             (gifts.remove_persisted_account)(user_id, cx);
         }
@@ -420,22 +423,42 @@ impl AccountStateResetCoordinator {
             return;
         }
         registry.did_register_stores = true;
-        AccountStateResetRegistry::register(&StickersServicesStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&ShareSheetStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&StickerPackSheetStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&StickerAssetComposerStore::shared(cx), cx);
+        if let Some(stickers_services) = account_state_reset_stickers_services_hooks() {
+            (stickers_services.register)(cx);
+        }
+        if let Some(share_sheet) = account_state_reset_share_sheet_hooks() {
+            (share_sheet.register)(cx);
+        }
+        if let Some(sticker_pack_sheet) = account_state_reset_sticker_pack_sheet_hooks() {
+            (sticker_pack_sheet.register)(cx);
+        }
+        if let Some(sticker_asset_composer) = account_state_reset_sticker_asset_composer_hooks() {
+            (sticker_asset_composer.register)(cx);
+        }
         AccountStateResetRegistry::register(&WebLoginApprovalStore::shared(cx), cx);
         AccountStateResetRegistry::register(&MentionTapResolver::shared(cx), cx);
-        AccountStateResetRegistry::register(&MediaSaveCoordinator::shared(cx), cx);
+        if let Some(media_save) = account_state_reset_media_save_hooks() {
+            (media_save.register)(cx);
+        }
         AccountStateResetRegistry::register(&BlockingLoaderStore::shared(cx), cx);
         AccountStateResetRegistry::register(&NotifierStore::shared(cx), cx);
         AccountStateResetRegistry::register(&SubscriptionSuccessStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&AchievementEarnedStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&PremiumUpsellStore::shared(cx), cx);
+        if let Some(achievement_earned) = account_state_reset_achievement_earned_hooks() {
+            (achievement_earned.register)(cx);
+        }
+        if let Some(premium_upsell) = account_state_reset_premium_upsell_hooks() {
+            (premium_upsell.register)(cx);
+        }
         AccountStateResetRegistry::register(&RestrictionStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&PremiumGiftCelebrationStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&PremiumPromoStore::shared(cx), cx);
-        AccountStateResetRegistry::register(&EmojiPickerRecentsStore::shared(cx), cx);
+        if let Some(premium_gift_celebration) = account_state_reset_premium_gift_celebration_hooks() {
+            (premium_gift_celebration.register)(cx);
+        }
+        if let Some(premium_promo) = account_state_reset_premium_promo_hooks() {
+            (premium_promo.register)(cx);
+        }
+        if let Some(emoji_picker_recents) = account_state_reset_emoji_picker_recents_hooks() {
+            (emoji_picker_recents.register)(cx);
+        }
         AccountStateResetRegistry::register(&PushDeepLinkStore::shared(cx), cx);
     }
 }
@@ -453,21 +476,11 @@ macro_rules! account_resettable {
 }
 
 account_resettable!(
-    StickersServicesStore,
-    ShareSheetStore,
-    StickerPackSheetStore,
-    StickerAssetComposerStore,
     WebLoginApprovalStore,
     MentionTapResolver,
-    MediaSaveCoordinator,
     BlockingLoaderStore,
     NotifierStore,
     SubscriptionSuccessStore,
-    AchievementEarnedStore,
-    PremiumUpsellStore,
     RestrictionStore,
-    PremiumGiftCelebrationStore,
-    PremiumPromoStore,
-    EmojiPickerRecentsStore,
     PushDeepLinkStore,
 );

@@ -21,7 +21,6 @@ use crate::core::widgets::notifier::notifier_store::{NotifierPosition, NotifierS
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::guides::engine::rise_guides_models::RiseGuide;
 use crate::modules::guides::shared::guide_sandbox::{GuideSandbox, SCENE_PARAM};
-use crate::modules::map::components::globe::map_globe_layer::MapCameraRequest;
 use crate::modules::map::components::tracks::map_tracks_panel::MapPanelMode;
 use crate::modules::map::engine::map_track_erasure_geometry::{
     MapEraseStroke, MapErasureMask, MapErasureMaskPreparedStroke,
@@ -34,6 +33,7 @@ use crate::modules::map::engine::rise_map_profiles_repository::{MapProfile, MapP
 use crate::modules::map::engine::rise_map_tracks_repository::RiseMapTracksSnapshot;
 use crate::modules::map::recorder::map_self_location_feed::{MapSelfLocation, MapSelfLocationFeed};
 use crate::modules::map::recorder::map_track_codec::MapTrackGeometry;
+use crate::modules::map::stores::map_actions::map_interactions_hooks::{MapCameraRequest, map_interactions_hooks};
 use crate::modules::map::stores::map_actions::map_photos_types::{MapPhoto, MapPhotoGrid};
 use crate::modules::map::stores::map_actions::map_tracks_types::{
     MapPlace, MapPlaceKind, MapTrackPeriod, MapTrackPeriodStats, MapTrackSummary,
@@ -42,7 +42,6 @@ use crate::modules::map::stores::map_actions::map_types::{
     MapFix, MapFriend, MapFriendPosition, MapFriendRequest, MapLiveFriend, MapMotion, MapRequestStatus, MapSettings,
     MapSettingsPatch, MapState, MapUser, MapVenueKind,
 };
-use crate::modules::map::stores::map_interactions::map_interactions::MapInteractionsStore;
 use crate::modules::post::stores::post_actions::post_types::PostCollaboratorUser;
 
 /// whether a second person is part of the lesson and how
@@ -171,8 +170,9 @@ impl GuideSandbox {
         cx.notify();
         *Self::refused_methods().lock() = MAP_REFUSED_METHODS.clone();
         GuideFacts::set(RiseGuideSignal::MapMember, true, cx);
-        let interactions = MapInteractionsStore::shared(cx);
-        interactions.update(cx, |interactions, cx| interactions.set_panel_mode(MapPanelMode::Friends, cx));
+        if let Some(hooks) = map_interactions_hooks() {
+            (hooks.set_panel_mode)(MapPanelMode::Friends, cx);
+        }
         self.place_map_scene(cx);
     }
 
@@ -200,21 +200,9 @@ impl GuideSandbox {
         GuideFacts::set(RiseGuideSignal::MapFriendCardOpen, false, cx);
         let panda_id = Self::panda_user_id();
         let place_id = Self::map_place_id();
-        let interactions = MapInteractionsStore::shared(cx);
-        interactions.update(cx, |interactions, cx| {
-            if interactions.selected_friend_id() == Some(panda_id.as_str()) {
-                interactions.select_friend(None, cx);
-            }
-            if interactions
-                .place_sheet()
-                .is_some_and(|sheet| sheet.draft.id == place_id)
-            {
-                interactions.set_place_sheet(None, cx);
-            }
-            if interactions.routes_owner().is_some_and(|owner| owner.id == panda_id) {
-                interactions.show_own_routes(cx);
-            }
-        });
+        if let Some(hooks) = map_interactions_hooks() {
+            (hooks.withdraw_guide_scene)(panda_id.as_str(), place_id.as_str(), cx);
+        }
     }
 
     pub fn owns_map_scene(&self) -> bool {
@@ -264,8 +252,9 @@ impl GuideSandbox {
                 zoom_level: 15.0,
                 is_animated: false,
             };
-            MapInteractionsStore::shared(cx)
-                .update(cx, |interactions, cx| interactions.set_camera_request(Some(request), cx));
+            if let Some(hooks) = map_interactions_hooks() {
+                (hooks.set_camera_request)(Some(request), cx);
+            }
         }
         if scene.panda != GuideSandboxMapScenePandaRole::Absent {
             scene.panda_fix = Some(MapFix {
@@ -295,8 +284,9 @@ impl GuideSandbox {
                 zoom_level: 15.5,
                 is_animated: false,
             };
-            MapInteractionsStore::shared(cx)
-                .update(cx, |interactions, cx| interactions.set_camera_request(Some(request), cx));
+            if let Some(hooks) = map_interactions_hooks() {
+                (hooks.set_camera_request)(Some(request), cx);
+            }
         }
         scene.revision = scene.revision.wrapping_add(1);
         self.map = Some(scene);
@@ -775,24 +765,5 @@ impl GuideSandbox {
             return Vec::new();
         }
         self.map.as_ref().map(|scene| scene.demo_tail.clone()).unwrap_or_default()
-    }
-}
-
-impl MapSettingsPatch {
-    /// later patch wins field by field, like two real saves in a row
-    pub fn merged(&self, later: &MapSettingsPatch) -> MapSettingsPatch {
-        MapSettingsPatch {
-            sharing_enabled: later.sharing_enabled.or(self.sharing_enabled),
-            tracks_enabled: later.tracks_enabled.or(self.tracks_enabled),
-            battery_visible: later.battery_visible.or(self.battery_visible),
-            frozen_until: later.frozen_until.or(self.frozen_until),
-            track_cooling_days: later.track_cooling_days.or(self.track_cooling_days),
-            track_heat_walks: later.track_heat_walks.or(self.track_heat_walks),
-            home_track_exclusion_radius_m: later.home_track_exclusion_radius_m.or(self.home_track_exclusion_radius_m),
-            track_merge_enabled: later.track_merge_enabled.or(self.track_merge_enabled),
-            track_merge_radius_m: later.track_merge_radius_m.or(self.track_merge_radius_m),
-            track_merge_lanes: later.track_merge_lanes.or(self.track_merge_lanes),
-            track_precise_recording: later.track_precise_recording.or(self.track_precise_recording),
-        }
     }
 }

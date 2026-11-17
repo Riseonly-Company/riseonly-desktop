@@ -62,13 +62,14 @@ case "$BUILD_NUMBER" in
 esac
 
 OUT="$ROOT/build/macos/$PROFILE/$APP_NAME.app"
+SIGN_ID="${RISE_SIGN_IDENTITY:--}"
 
 [ -x "$BIN" ] || { echo "missing binary: $BIN — run cargo build -p riseonly first" >&2; exit 1; }
 
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 
-cp "$BIN" "$OUT/Contents/MacOS/riseonly"
+cp -c "$BIN" "$OUT/Contents/MacOS/riseonly" 2>/dev/null || cp "$BIN" "$OUT/Contents/MacOS/riseonly"
 
 sed -e "s|@APP_NAME@|$APP_NAME|g" \
     -e "s|@BUNDLE_ID@|$BUNDLE_ID|g" \
@@ -86,6 +87,7 @@ done
 if [ -d "$ROOT/assets" ]; then
     cp -R "$ROOT/assets" "$OUT/Contents/Resources/assets"
 fi
+printf '%s\n' "$ENVIRONMENT" > "$OUT/Contents/Resources/environment"
 
 FFMPEG_LIB_PATTERN='^lib(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale)\.[0-9]+\.dylib$'
 ARCH="$(lipo -archs "$BIN" 2>/dev/null | awk '{print $1}')"
@@ -111,9 +113,10 @@ if [ -n "$(linked_ffmpeg "$EXE")" ]; then
         current="${queue[$next]}"
         next=$((next + 1))
         own="$(basename "$current")"
+        edits=()
         while read -r path base; do
             [ "$base" = "$own" ] && continue
-            install_name_tool -change "$path" "@rpath/$base" "$current"
+            edits+=(-change "$path" "@rpath/$base")
             [ -f "$FRAMEWORKS/$base" ] && continue
             [ -f "$FFMPEG_PREFIX/lib/$base" ] || { echo "missing $FFMPEG_PREFIX/lib/$base" >&2; exit 1; }
             cp -L "$FFMPEG_PREFIX/lib/$base" "$FRAMEWORKS/$base"
@@ -121,11 +124,14 @@ if [ -n "$(linked_ffmpeg "$EXE")" ]; then
             install_name_tool -id "@rpath/$base" "$FRAMEWORKS/$base"
             queue+=("$FRAMEWORKS/$base")
         done < <(linked_ffmpeg "$current")
+        # why: every install_name_tool call rewrites the whole file, and a debug riseonly is ~800 MB
+        if [ "$current" = "$EXE" ] && [ "$(otool -l "$EXE" | grep -c '@executable_path/../Frameworks')" = 0 ]; then
+            edits+=(-add_rpath "@executable_path/../Frameworks")
+        fi
+        [ ${#edits[@]} -eq 0 ] || install_name_tool "${edits[@]}" "$current"
     done
-    otool -l "$EXE" | grep -q '@executable_path/../Frameworks' ||
-        install_name_tool -add_rpath "@executable_path/../Frameworks" "$EXE"
     for dylib in "$FRAMEWORKS"/*.dylib; do
-        codesign --force --sign - --timestamp=none "$dylib" 2>&1 | sed 's/^/codesign: /'
+        codesign --force --sign "$SIGN_ID" --timestamp=none "$dylib" 2>&1 | sed 's/^/codesign: /'
     done
 
     LICENSES="$OUT/Contents/Resources/licenses/ffmpeg"
@@ -164,7 +170,7 @@ else
     echo "warning: no $ICON_MASTER; the bundle will show the generic app icon" >&2
 fi
 
-codesign --force --sign - \
+codesign --force --sign "$SIGN_ID" \
     --entitlements "$RES/Riseonly.entitlements" \
     --options runtime \
     --timestamp=none \

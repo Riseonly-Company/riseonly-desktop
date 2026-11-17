@@ -8,7 +8,7 @@ use rise_core::foundation::foundation_url::{Url, UrlComponents};
 use rise_core::foundation::foundation_uuid::Uuid;
 
 use crate::core::stores::http::http_service::HttpService;
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 
 const PRIVATE_MUSIC_PATH_MAX_UTF8: usize = 1_024;
 const LEGACY_COVER_MARKER: &str = "/public/music/";

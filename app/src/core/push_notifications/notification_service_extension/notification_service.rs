@@ -50,7 +50,7 @@ const COMPOSITE_JPEG_QUALITY: u8 = 90;
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../../resources/macos/AppIcon.png");
 
 static AVATAR_CACHE_DIRECTORY: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().join(AVATAR_CACHE_FOLDER))
 });

@@ -6,7 +6,7 @@ use crate::modules::chat::components::chat::bubble::message_sticker_view_hooks::
 use crate::modules::stickers::components::sticker_pack_sheet::sticker_pack_sheet_store::StickerPackSheetStore;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::PackKind;
 
-pub(crate) fn install_message_sticker_view_pack_sheet_hooks() {
+pub fn install_message_sticker_view_pack_sheet_hooks() {
     set_message_sticker_view_pack_sheet_hooks(MessageStickerViewPackSheetHooks { present });
 }
 

@@ -62,7 +62,7 @@ impl MusicSearchHero {
 /// the field frame is computed from it and the two measured frames
 pub struct MusicSearchHeroNamespace {
     pub(crate) motion: Animated<f32>,
-    pub(crate) collapsed_field_frame: Option<Bounds<Pixels>>,
+    pub collapsed_field_frame: Option<Bounds<Pixels>>,
     pub(crate) overlay_field_frame: Option<Bounds<Pixels>>,
 }
 

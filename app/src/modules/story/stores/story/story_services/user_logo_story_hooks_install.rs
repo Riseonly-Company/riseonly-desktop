@@ -6,7 +6,7 @@ use rise_ui::user_logo_story_hooks::{UserLogoStoryHooks, UserLogoStoryUnavailabl
 use crate::modules::story::stores::story::story_interactions::story_interactions::StoryInteractionsStore;
 use crate::modules::story::stores::story::story_services::story_services::StoryServicesStore;
 
-pub(crate) fn install_user_logo_story_hooks() {
+pub fn install_user_logo_story_hooks() {
     set_user_logo_story_hooks(UserLogoStoryHooks {
         has_active_stories: |user_id: Option<&str>, cx: &mut App| {
             StoryServicesStore::shared(cx).read(cx).has_active_stories(user_id, cx)

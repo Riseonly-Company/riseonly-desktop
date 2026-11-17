@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "மாற்றங்களை நிராகரிக்கவா?",
   "media_editor_discard_confirm": "மாற்றங்களை நிராகரி",
   "media_editor_discard_keep": "திருத்துவதைத் தொடர்",
-  "story_canvas_photos_limit_reached": "அதிகபட்சம் %d படங்களைச் சேர்க்கலாம்"
+  "story_canvas_photos_limit_reached": "அதிகபட்சம் %d படங்களைச் சேர்க்கலாம்",
+  "error_rtc_overloaded": "அழைப்புகள் இப்போது அதிக நெரிசலில் உள்ளன. நடப்பில் உள்ள அழைப்புகள் நிலையாக இருக்க, புதிய அழைப்புகள் சிறிது நேரம் நிறுத்தப்பட்டுள்ளன. சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்",
+  "overload_modal_title": "இப்போது அதிக நெரிசல் உள்ளது"
 }

@@ -25,7 +25,7 @@ const MAX_STORED_PAYLOADS: usize = DIAGNOSTICS_QUEUE_PAYLOADS as usize;
 const MAX_STORED_BYTES: u64 = DIAGNOSTICS_QUEUE_BYTES;
 
 static APPLICATION_SUPPORT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.data_dir().to_path_buf())
 });
@@ -255,7 +255,7 @@ fn write_atomically(url: &Path, data: &[u8]) -> std::io::Result<()> {
 
 /// app version trimmed or 0.0.0 if its missing
 fn app_version() -> String {
-    let value = AppInfo::current(AppEnvironment::compiled().as_str())
+    let value = AppInfo::current(AppEnvironment::current().as_str())
         .map(|info| trimming_whitespaces_and_newlines(&info.short_version).to_owned())
         .unwrap_or_default();
     if value.is_empty() { "0.0.0".to_owned() } else { value }
@@ -263,7 +263,7 @@ fn app_version() -> String {
 
 /// build number from the bundle or 0 if its missing
 fn build_number() -> String {
-    let value = AppInfo::current(AppEnvironment::compiled().as_str())
+    let value = AppInfo::current(AppEnvironment::current().as_str())
         .map(|info| trimming_whitespaces_and_newlines(&info.build).to_owned())
         .unwrap_or_default();
     if value.is_empty() { "0".to_owned() } else { value }

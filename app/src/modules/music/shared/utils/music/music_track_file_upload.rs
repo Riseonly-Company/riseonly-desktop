@@ -24,7 +24,7 @@ use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::lib::sai::modules::sai_fetch::sai_fetch_http_configuration::SaiFetchHttpConfiguration;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_optimistic_update::SaiWsOptimisticLocalFile;
 use crate::core::ui::clever_image_disk_cache::CleverImageBitmapDecoder;
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 use crate::modules::music::shared::utils::music::music_cover_letterbox::MusicCoverLetterbox;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

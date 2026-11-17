@@ -20,10 +20,10 @@ use rise_ui::main_text::IgnoresTextSizeDeltaKey;
 use rise_ui::swiftui::environment::env_scope;
 use rise_ui::{IconUi, MainText, TextAlignT};
 
+use crate::core::ui::animated_tabs_ui::inline_custom_emoji_text_hooks::inline_custom_emoji_text_element;
 use crate::core::ui::formatted_text_ui::{FormattedTextOptions, FormattedTextStyle};
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::chat::components::chat::bubble::inline_custom_emoji_text::InlineCustomEmojiText;
 use crate::modules::chat::components::chat::composer::chat_composer_types::ChatComposerCustomEmojiRun;
 use crate::modules::chat::stores::message::message_actions::message_types::MessageCustomEmojiEntity;
 use crate::modules::post::components::repost::repost_opinion_editor::RepostOpinionEditorPresenter;
@@ -277,7 +277,15 @@ impl RepostSticker {
             .w_full()
             .text_center()
             .line_clamp(3)
-            .child(InlineCustomEmojiText::new(child_id(&self.id, "text"), self.opinion.clone(), style, entities).options(options))
+            .child(inline_custom_emoji_text_element(
+                child_id(&self.id, "text"),
+                self.opinion.clone(),
+                style,
+                entities,
+                options,
+                None,
+                None,
+            ))
             .into_any_element()
     }
 

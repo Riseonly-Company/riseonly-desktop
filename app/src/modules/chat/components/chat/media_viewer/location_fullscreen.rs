@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -10,17 +10,15 @@ use gpui::{
     Render, RenderImage, RenderOnce, ScrollDelta, ScrollWheelEvent, SharedString, Task, Window, canvas, img, point,
     white,
 };
-use image::{Frame, RgbaImage};
 use rise_core::foundation::foundation_date::{Date, RiseClock};
 use rise_core::foundation::foundation_url::{UrlComponents, UrlQueryItem};
 use rise_energy::rise_energy_saving::{RiseEnergySavingFeature, RiseEnergySavingStore};
 use rise_i18n::{I18n, tr};
 use rise_media::map_view::{
-    Camera, CameraCommand, CameraDriver, DragButton, InputModifiers, LatLng, MapEvent, MapFrame, MapHandle, MapInput,
+    Camera, CameraCommand, CameraDriver, DragButton, InputModifiers, LatLng, MapEvent, MapHandle, MapInput,
     MapInputController, MapKey, MapOptions, MapRequest, Projection, ScreenPoint, TILE_SIZE, Viewport, WheelDelta,
     mercator, open_map,
 };
-use rise_platform::AppPaths;
 use rise_theme::theme::theme_environment::theme_store;
 use rise_ui::IconUi;
 use rise_ui::animated_media_playback_scope::is_animated_media_playback_active;
@@ -32,22 +30,14 @@ use rise_ui::swiftui::environment::{EnvKey, ScenePhase, env, reduce_motion, scen
 use rise_ui::swiftui::motion::{CubicBezier, MotionSpec, Spring};
 use rise_ui::swiftui::open_url::open_url;
 use rise_ui::swiftui::prelude::*;
-use smallvec::SmallVec;
 
-use crate::core::config::app_environment::AppEnvironment;
 use crate::core::widgets::navigations::bottom_chrome_insets::BottomChromeInsetsModifiers;
 use crate::modules::chat::components::chat::async_render::rise_message_layout_measurement::is_message_layout_measurement;
 use crate::modules::chat::stores::message::message_actions::message_types::MessageLocationInfo;
+pub use crate::modules::map::components::location_map_hooks::{location_app_paths, location_map_image};
 use crate::modules::map::shared::rise_map_style::RiseMapStyle;
 
 pub const LOCATION_SPAN_DEGREES: f64 = 0.012;
-
-static APP_PATHS: LazyLock<Option<AppPaths>> =
-    LazyLock::new(|| AppPaths::resolve(AppEnvironment::compiled().canon()).ok());
-
-pub fn location_app_paths() -> Option<&'static AppPaths> {
-    APP_PATHS.as_ref()
-}
 
 /// zoom at which the map shows a lat lng region whole in a width by height view
 /// like mapkit fits a region to the view aspect
@@ -66,13 +56,6 @@ pub fn region_zoom(center: LatLng, latitude_delta: f64, longitude_delta: f64, wi
 pub fn location_map_style(cx: &mut App) -> String {
     let appearance = theme_store(cx).read(cx).resolved_appearance();
     RiseMapStyle::json(appearance, I18n::shared().code())
-}
-
-/// bgra picture of a map frame as one gpui image
-pub fn location_map_image(frame: MapFrame) -> Option<Arc<RenderImage>> {
-    let buffer = RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
-    let frames: SmallVec<[Frame; 1]> = SmallVec::from_buf([Frame::new(buffer)]);
-    Some(Arc::new(RenderImage::new(frames)))
 }
 
 pub struct LocationPresentationState {

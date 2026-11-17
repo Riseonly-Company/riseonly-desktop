@@ -14,7 +14,7 @@ use crate::modules::music::stores::music_services::music_guide_sandbox_hooks::{
     set_music_guide_sandbox_hooks,
 };
 
-pub(crate) fn install_music_guide_sandbox_hooks() {
+pub fn install_music_guide_sandbox_hooks() {
     set_music_guide_sandbox_hooks(MusicGuideSandboxHooks {
         playlist_id: GuideSandbox::playlist_id(),
         owns_playlist_id: Box::new(owns_playlist_id),

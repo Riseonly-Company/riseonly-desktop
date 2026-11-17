@@ -10,10 +10,10 @@ use rise_canon::RiseGuideAnchor;
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_engine::desktop_runtime::rise_account_runtime::RiseAccountRuntime;
-use rise_i18n::{FormatArg, tr, tr_args};
+use rise_i18n::tr;
 use rise_platform::file_dialog::{self, FileFilter, FilterLabel, OpenRequest, Selection};
 use rise_platform::photo_library::folder_library::{FOLDER_IMAGE_EXTENSIONS, FOLDER_VIDEO_EXTENSIONS};
-use rise_platform::photo_library::{LibraryAsset, LibraryAssetKind};
+use rise_platform::photo_library::LibraryAsset;
 use rise_theme::ThemeStore;
 use rise_ui::bottom_sheet_ui::bottom_sheet_metrics::BottomSheetMetrics;
 use rise_ui::bottom_sheet_ui::modal_sheet_surface::ModalSheetMetrics;
@@ -43,8 +43,6 @@ use crate::core::ui::hold_context_menu_ui::hold_context_menu_presentation::{
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_tap_presentation::{
     HoldContextMenuTapPresentationModifiers, HoldContextMenuTapSource,
 };
-use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierSendOptions};
-use crate::core::widgets::overlay::premium_upsell_store::PremiumUpsellInteractionsStore;
 use crate::modules::chat::components::chat::composer::chat_composer_types::ChatDraftCustomEmoji;
 use crate::modules::media_picker::api::media_picker_configuration::{
     MediaPickerConfiguration, MediaPickerMediaKind, MediaPickerSendMode,
@@ -52,7 +50,7 @@ use crate::modules::media_picker::api::media_picker_configuration::{
 use crate::modules::media_picker::api::media_picker_presenter_resolver::MediaPickerPresenterResolver;
 use crate::modules::media_picker::api::media_picker_result::MediaPickerViewMode;
 use crate::modules::media_picker::editor::media_editor_presentation_state::MediaEditorPresentationState;
-use crate::modules::media_picker::editor::media_editor_screen::MediaEditorOutcome;
+use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorOutcome;
 use crate::modules::media_picker::library::media_asset::MediaAsset;
 use crate::modules::media_picker::library::photo_library_albums::{
     PhotoLibraryAlbum, PhotoLibraryAlbums, PhotoLibraryAlbumsTitles,
@@ -62,9 +60,9 @@ use crate::modules::media_picker::permissions::photo_library_permissions::{
     PhotoLibraryAccessLevel, PhotoLibraryPermissions,
 };
 use crate::modules::media_picker::selection::media_selection_state::MediaSelectionState;
+use crate::modules::media_picker::ui::media_picker_caption_bar_hooks::media_picker_caption_bar_hooks;
 use crate::modules::media_picker::ui::media_picker_grid_view::MediaPickerGridView;
 use crate::modules::media_picker::ui::media_picker_header_icon_button::MediaPickerHeaderIconButton;
-use crate::modules::media_picker::ui::media_picker_selection_bar::MediaPickerCaptionBar;
 use crate::modules::media_picker::ui::media_picker_permission_denied_view::MediaPickerPermissionDeniedView;
 use crate::modules::media_picker::ui::media_picker_session::{MediaPickerExportProgressPresenter, MediaPickerSession};
 use crate::modules::media_picker::ui::media_picker_sheet::MediaPickerFloatingDoneButton;
@@ -499,21 +497,21 @@ impl MediaPickerScreen {
         if self.shows_floating_caption() {
             let selection = self.selection.clone();
             let on_send_selection = self.on_send_selection.clone();
-            content = content.child(
-                div().absolute().left_0().right_0().bottom_0().child(
-                    MediaPickerCaptionBar::new(
-                        self.child_id("caption-bar"),
-                        self.selection.clone(),
-                        self.theme_store.clone(),
-                        self.caption.clone(),
-                        move |window, cx| {
-                            let send_as_file = selection.read(cx).send_as_file;
-                            on_send_selection(send_as_file, window, cx);
-                        },
-                    )
-                    .caption_custom_emojis(self.caption_custom_emojis.clone()),
-                ),
-            );
+            let caption_bar = media_picker_caption_bar_hooks().map(|hooks| {
+                (hooks.caption_bar)(
+                    self.child_id("caption-bar"),
+                    self.selection.clone(),
+                    self.theme_store.clone(),
+                    self.caption.clone(),
+                    self.caption_custom_emojis.clone(),
+                    None,
+                    Rc::new(move |window: &mut Window, cx: &mut App| {
+                        let send_as_file = selection.read(cx).send_as_file;
+                        on_send_selection(send_as_file, window, cx);
+                    }),
+                )
+            });
+            content = content.child(div().absolute().left_0().right_0().bottom_0().children(caption_bar));
         }
 
         if self.shows_floating_done_button() {
@@ -1346,55 +1344,5 @@ impl RenderOnce for MediaPickerScreen {
                     PageFocus::will_disappear(&leaving_focus, window, cx);
                 }
             })
-    }
-}
-
-impl MediaPickerConfiguration {
-    fn announce_picked_overflow(&self, refused: &LibraryAsset, selection: &Entity<MediaSelectionState>, cx: &mut App) {
-        if self.premium_selection_ceiling.is_some() {
-            self.offer_more_if_count_refused(refused, selection, cx);
-            return;
-        }
-        let message_key = self.selection_limit_message_key.as_deref().unwrap_or("share_error_too_many_items");
-        Notifier::send(tr_args(message_key, &[FormatArg::Int(self.max_selection_count)]), NotifierSendOptions::default(), cx);
-    }
-
-    /// only the count ceiling is a tier, a kind lock or video ceiling is the same on premium
-    /// shared by grid and editor so a refused pick never fails silently
-    pub fn offer_more_if_count_refused(
-        &self,
-        asset: &LibraryAsset,
-        selection: &Entity<MediaSelectionState>,
-        cx: &mut App,
-    ) {
-        let selection = selection.read(cx);
-        let is_kind_locked = selection.is_kind_locked(asset);
-        let is_video_ceiling_reached = selection.is_video_ceiling_reached(asset);
-        let max_reached = selection.max_reached();
-        if self.premium_selection_ceiling.is_none()
-            && let Some(message_key) = &self.selection_limit_message_key
-            && !selection.contains(&asset.id)
-            && !is_kind_locked
-            && !is_video_ceiling_reached
-            && max_reached
-        {
-            let title = tr_args(message_key, &[FormatArg::Int(self.max_selection_count)]);
-            Notifier::send(title, NotifierSendOptions::default(), cx);
-            return;
-        }
-        let Some(premium_ceiling) = self.premium_selection_ceiling else {
-            return;
-        };
-        if selection.locked_kind() == Some(LibraryAssetKind::Video)
-            || is_kind_locked
-            || is_video_ceiling_reached
-            || !max_reached
-        {
-            return;
-        }
-        let maximum = self.max_selection_count;
-        PremiumUpsellInteractionsStore::shared(cx).update(cx, |interactions, cx| {
-            interactions.offer_client_ceiling("media_picker_selection", maximum, Some(premium_ceiling), cx);
-        });
     }
 }

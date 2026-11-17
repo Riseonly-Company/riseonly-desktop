@@ -5965,5 +5965,7 @@
   "media_editor_discard_title": "Renunți la modificări?",
   "media_editor_discard_confirm": "Renunță la modificări",
   "media_editor_discard_keep": "Continuă editarea",
-  "story_canvas_photos_limit_reached": "Poți adăuga cel mult %d fotografii"
+  "story_canvas_photos_limit_reached": "Poți adăuga cel mult %d fotografii",
+  "error_rtc_overloaded": "Apelurile sunt foarte solicitate acum. Pentru ca apelurile în desfășurare să rămână stabile, cele noi sunt în pauză pentru moment. Încearcă din nou în câteva momente",
+  "overload_modal_title": "Încărcare mare în acest moment"
 }

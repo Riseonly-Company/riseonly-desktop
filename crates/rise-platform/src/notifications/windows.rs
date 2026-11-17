@@ -4,22 +4,22 @@ use std::sync::OnceLock;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
-use windows::Data::Xml::Dom::XmlDocument;
-use windows::Foundation::{IPropertyValue, TypedEventHandler};
-use windows::UI::Notifications::{
+use ::windows::Data::Xml::Dom::XmlDocument;
+use ::windows::Foundation::{IPropertyValue, TypedEventHandler};
+use ::windows::UI::Notifications::{
     NotificationSetting, ToastActivatedEventArgs, ToastNotification, ToastNotificationManager,
     ToastNotifier,
 };
-use windows::Win32::Foundation::{
+use ::windows::Win32::Foundation::{
     APPMODEL_ERROR_NO_PACKAGE, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, WIN32_ERROR,
 };
-use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
-use windows::Win32::System::Registry::{
+use ::windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+use ::windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
     RegCreateKeyExW, RegSetValueExW,
 };
-use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
-use windows::core::{HSTRING, IInspectable, Interface as _, PCWSTR};
+use ::windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+use ::windows::core::{HSTRING, IInspectable, Interface as _, PCWSTR};
 
 use crate::app_info::AppIdentity;
 use crate::gpui_shim::PlatformSupport;
@@ -161,7 +161,7 @@ fn authorization_from_setting(setting: NotificationSetting) -> NotificationAutho
     }
 }
 
-fn post(notification: &LocalNotification) -> windows::core::Result<PlatformSupport> {
+fn post(notification: &LocalNotification) -> ::windows::core::Result<PlatformSupport> {
     let Some(notifier) = notifier()? else {
         return Ok(PlatformSupport::Unsupported);
     };
@@ -213,7 +213,7 @@ fn typed_text(arguments: &ToastActivatedEventArgs, action_id: &str) -> Option<St
     typed_reply(&text.to_string())
 }
 
-fn retract(tag: &NotificationTag) -> windows::core::Result<PlatformSupport> {
+fn retract(tag: &NotificationTag) -> ::windows::core::Result<PlatformSupport> {
     let live = POSTED.with(|posted| {
         let mut posted = posted.borrow_mut();
         let toast = posted.live.remove(tag.as_str())?;
@@ -239,7 +239,7 @@ fn retract(tag: &NotificationTag) -> windows::core::Result<PlatformSupport> {
     Ok(PlatformSupport::Performed)
 }
 
-fn clear_all() -> windows::core::Result<PlatformSupport> {
+fn clear_all() -> ::windows::core::Result<PlatformSupport> {
     let (notifier, live) = POSTED.with(|posted| {
         let mut posted = posted.borrow_mut();
         let live: Vec<ToastNotification> = posted.live.drain().map(|(_, toast)| toast).collect();
@@ -263,7 +263,7 @@ fn clear_all() -> windows::core::Result<PlatformSupport> {
     Ok(PlatformSupport::Performed)
 }
 
-fn notifier() -> windows::core::Result<Option<ToastNotifier>> {
+fn notifier() -> ::windows::core::Result<Option<ToastNotifier>> {
     if let Some(notifier) = POSTED.with(|posted| posted.borrow().notifier.clone()) {
         return Ok(Some(notifier));
     }
@@ -276,7 +276,7 @@ fn notifier() -> windows::core::Result<Option<ToastNotifier>> {
 }
 
 /// notifier under the package identity, or under the process aumid once its known
-fn create_notifier() -> windows::core::Result<Option<ToastNotifier>> {
+fn create_notifier() -> ::windows::core::Result<Option<ToastNotifier>> {
     if has_package_identity() {
         return ToastNotificationManager::CreateToastNotifier().map(Some);
     }

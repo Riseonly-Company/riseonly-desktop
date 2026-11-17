@@ -755,3 +755,7 @@ patches/0116-list-paint-under-top-padding.diff (X2370): a list with a top paddin
 item, so content laid under a translucent header over the padding ended at the padding. ListState::paint_under_top_padding
 (off by default) renders the items above the scroll top into the part of the padding the scroll top item leaves
 uncovered and places them above it, so the rows scroll on under the header (emoji and sticker picker pack strip).
+
+patches/0117-owned-surface-device-size.diff (Linux and Windows build): the off macOS arm of the surface element (0001)
+passed the owned frame size in logical pixels to ObjectFit::get_bounds, which takes the image size in device pixels, so
+gpui did not compile for any target but macOS. The frame width and height now go in as DevicePixels, as the macOS arm does.

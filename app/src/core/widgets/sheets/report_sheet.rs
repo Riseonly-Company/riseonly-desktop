@@ -37,12 +37,12 @@ use crate::core::ui::clever_image_ui::{CleverImageUi, ContentMode};
 use crate::core::ui::text_area_ui::TextAreaUi;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
+use crate::core::widgets::sheets::report_evidence_picker_hooks::report_evidence_picker_hooks;
 use crate::modules::diagnostics::engine::core::rise_bug_report_upload::{BugReportAttachment, BugReportAttachmentKind};
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_interactions::bug_report_interactions::BugReportAttachmentFactory;
 use crate::modules::media_picker::api::media_picker_configuration::MediaPickerConfiguration;
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerItemKind, MediaPickerResult};
 use crate::modules::media_picker::export::dropped_video_probe::DroppedVideoProbe;
-use crate::modules::media_picker::ui::media_picker_sheet::MediaPickerSheet;
 use crate::modules::moderation::components::moderation_kit_ui::ModerationTint;
 use crate::modules::moderation::engine::core::rise_report_evidence_upload::RiseReportEvidenceUpload;
 use crate::modules::moderation::engine::rise_moderation_submitter::{ReportDraftPayload, RiseModerationSubmitter};
@@ -493,8 +493,11 @@ impl ReportSheetHost {
         let complete_store = self.store.clone();
         let dismissed_store = self.store.clone();
         let slots_left = self.store.read(cx).slots_left();
-        MediaPickerSheet::new(
-            "report-sheet-evidence-picker",
+        let Some(hooks) = report_evidence_picker_hooks() else {
+            return div().into_any_element();
+        };
+        (hooks.media_picker_sheet)(
+            ElementId::from("report-sheet-evidence-picker"),
             Binding::new(
                 move |cx| presented_store.read(cx).is_picker_presented(),
                 move |presented, _, cx| {
@@ -503,16 +506,14 @@ impl ReportSheetHost {
             ),
             MediaPickerConfiguration::report_evidence_slots_left(slots_left),
             self.theme_store.clone(),
-            move |result: MediaPickerResult, _: &mut Window, cx: &mut App| {
+            Box::new(move |result: MediaPickerResult, _: &mut Window, cx: &mut App| {
                 let store = complete_store.clone();
                 cx.defer(move |cx| store.update(cx, |store, cx| store.attach(result, cx)));
-            },
+            }),
+            Box::new(move |_: &mut Window, cx: &mut App| {
+                dismissed_store.update(cx, |store, cx| store.picker_did_dismiss(cx));
+            }),
         )
-        .experimental_bottom_sheet(true)
-        .on_dismissed(move |_: &mut Window, cx: &mut App| {
-            dismissed_store.update(cx, |store, cx| store.picker_did_dismiss(cx));
-        })
-        .into_any_element()
     }
 }
 

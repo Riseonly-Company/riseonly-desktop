@@ -22,9 +22,9 @@ use rise_ui::swiftui::motion::{CubicBezier, MotionSpec, Spring, duration_from_se
 use rise_ui::swiftui::rich_text::{AttributeContainer, AttributedString, RichFont, RichText};
 use rise_ui::swiftui::stacks::{HorizontalAlignment, StackAlign, hstack, vstack};
 
-use crate::core::ui::formatted_preview_text::FormattedPreviewText;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::navigations::bottom_chrome_insets::{BottomChromeInsets, BottomChromePolicy};
+use crate::core::widgets::notifier::notifier_markup_hooks::notifier_markup_hooks;
 use crate::core::widgets::notifier::notifier_progress::{
     NotifierProgressLiveRing, NotifierProgressStore, NotifierProgressStoreEntry, NotifierProgressTitle,
 };
@@ -33,7 +33,7 @@ use crate::core::widgets::notifier::notifier_store::{
 };
 
 const STACK_SPACING: f32 = 8.0;
-pub(crate) const EDGE_PADDING: f32 = 8.0;
+pub const EDGE_PADDING: f32 = 8.0;
 const ITEMS_MOTION: MotionSpec = MotionSpec::curve(CubicBezier::EASE_OUT, Duration::from_millis(200));
 const DISMISS_MOTION: MotionSpec = MotionSpec::curve(CubicBezier::EASE_OUT, Duration::from_millis(160));
 const RETURN_MOTION: MotionSpec = MotionSpec::spring(Spring::new(0.3, 0.78));
@@ -623,16 +623,17 @@ impl NotifierIsland {
             );
             let lead = self.config.author.as_ref().map(|author| Self::author_lead(author, theme));
             if let Some(content) = content {
-                if self.config.content_is_markup {
-                    column = column.child(FormattedPreviewText::new(
+                if self.config.content_is_markup
+                    && let Some(hooks) = notifier_markup_hooks()
+                {
+                    column = column.child((hooks.preview_text)(
                         ElementId::Name(format!("notifier-markup-{id}").into()),
                         content.clone(),
                         BODY_POINT_SIZE,
                         theme.text.secondary,
                         2,
                         lead,
-                    )
-                    .tail_ellipsis());
+                    ));
                 } else {
                     let text = lead.unwrap_or_default() + AttributedString::new(content.clone());
                     column = column.child(

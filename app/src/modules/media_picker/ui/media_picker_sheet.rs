@@ -43,23 +43,23 @@ use crate::modules::media_picker::api::media_picker_result::{
     MediaPickerItem, MediaPickerResult, MediaPickerTrackSelection,
 };
 use crate::modules::media_picker::editor::media_editor_presentation_state::MediaEditorPresentationState;
-use crate::modules::media_picker::editor::media_editor_presentation_host::{MEDIA_SEND_BACKDROP_BLUR, media_send_backdrop};
-use crate::modules::media_picker::editor::media_editor_screen::{MediaEditorOutcome, MediaEditorScreen};
+use crate::modules::media_picker::editor::media_editor_view_hooks::media_editor_view_hooks;
 use crate::modules::media_picker::editor::media_editor_window_presenter::{
-    MediaEditorWindowLog, MediaEditorWindowPresenter,
+    MediaEditorOutcome, MediaEditorWindowLog, MediaEditorWindowPresenter,
 };
 use crate::modules::media_picker::export::media_picker_export_progress_overlay::MediaPickerExportProgressOverlay;
 use crate::modules::media_picker::library::media_asset::MediaAsset;
 use crate::modules::media_picker::selection::media_selection_state::MediaSelectionState;
 use crate::modules::media_picker::shared::media_picker_recent_files::{MediaPickerRecentFile, MediaPickerRecentKind};
+use crate::modules::media_picker::ui::media_backdrop_hooks::{MEDIA_SEND_BACKDROP_BLUR, media_send_backdrop};
 use crate::modules::media_picker::ui::media_picker_attachment_sources::{
     MediaPickerAudioMetadataEditor, MediaPickerDocumentSourcePage,
 };
+use crate::modules::media_picker::ui::media_picker_caption_bar_hooks::media_picker_caption_bar_hooks;
 use crate::modules::media_picker::ui::media_picker_grid_view::MEDIA_PICKER_REFRESH_CELL_FRAMES;
 use crate::modules::media_picker::ui::media_picker_location_source_page::MediaPickerLocationSourcePage;
 use crate::modules::media_picker::ui::media_picker_poll_composer::MediaPickerPollComposer;
 use crate::modules::media_picker::ui::media_picker_screen::{MediaPickerLayout, MediaPickerScreen};
-use crate::modules::media_picker::ui::media_picker_selection_bar::MediaPickerCaptionBar;
 use crate::modules::media_picker::ui::media_picker_session::{MediaPickerExternalVideoDraft, MediaPickerSession};
 
 const REFRESH_CELL_FRAMES_DELAY_SECONDS: f64 = 0.36;
@@ -1251,31 +1251,25 @@ impl RenderOnce for MediaPickerExternalVideoEditor {
         div()
             .relative()
             .size_full()
-            .child(
-                MediaEditorScreen::new(
+            .children(media_editor_view_hooks().map(|hooks| {
+                (hooks.external_video_screen)(
                     self.child_id("screen"),
                     selection,
                     caption,
                     self.draft.media_asset.clone(),
-                    None,
                     self.theme_store.clone(),
                     self.configuration.clone(),
-                    None,
-                    true,
-                    move |_: &mut Window, cx: &mut App| {
+                    source_url,
+                    Box::new(move |_: &mut Window, cx: &mut App| {
                         on_cancel.update(cx, |session, cx| session.cancel_external_video_edit(cx));
-                    },
-                    move |outcome: MediaEditorOutcome, _: &mut Window, cx: &mut App| {
+                    }),
+                    Box::new(move |outcome: MediaEditorOutcome, _: &mut Window, cx: &mut App| {
                         on_done.update(cx, |session, cx| {
                             session.complete_external_video_edit(&on_done_draft, outcome, cx);
                         });
-                    },
+                    }),
                 )
-                .source_video_url_override(Some(source_url))
-                .enables_standalone_swipe_dismiss(true)
-                .standalone_dismiss_cancels(true)
-                .embed_in_hero_host(false),
-            )
+            }))
             .children(export_overlay)
     }
 }
@@ -1293,18 +1287,17 @@ struct MediaPickerSheetCaptionFooter {
 
 impl RenderOnce for MediaPickerSheetCaptionFooter {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let on_send = self.on_send;
-        let bar = MediaPickerCaptionBar::new(
-            self.id,
-            self.selection,
-            self.theme_store,
-            self.caption,
-            move |window, cx| on_send(window, cx),
-        )
-        .caption_custom_emojis(self.caption_custom_emojis);
-        match self.on_picker_visible_change {
-            Some(on_change) => bar.on_picker_visible_change(move |visible, window, cx| on_change(visible, window, cx)),
-            None => bar,
+        match media_picker_caption_bar_hooks() {
+            Some(hooks) => (hooks.caption_bar)(
+                self.id,
+                self.selection,
+                self.theme_store,
+                self.caption,
+                self.caption_custom_emojis,
+                self.on_picker_visible_change,
+                self.on_send,
+            ),
+            None => Empty.into_any_element(),
         }
     }
 }

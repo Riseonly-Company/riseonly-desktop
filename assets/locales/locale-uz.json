@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "O‘zgarishlar bekor qilinsinmi?",
   "media_editor_discard_confirm": "O‘zgarishlarni bekor qilish",
   "media_editor_discard_keep": "Tahrirlashni davom ettirish",
-  "story_canvas_photos_limit_reached": "Ko‘pi bilan %d ta rasm qo‘shish mumkin"
+  "story_canvas_photos_limit_reached": "Ko‘pi bilan %d ta rasm qo‘shish mumkin",
+  "error_rtc_overloaded": "Qo'ng'iroqlar hozir katta yuklama ostida. Davom etayotgan qo'ng'iroqlar barqaror bo'lishi uchun yangilari qisqa muddatga to'xtatildi. Birozdan keyin urinib ko'ring",
+  "overload_modal_title": "Hozir yuklama katta"
 }

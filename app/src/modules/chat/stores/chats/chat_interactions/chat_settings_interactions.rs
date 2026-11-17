@@ -11,7 +11,7 @@ use super::chat_interactions::ChatInteractionsStore;
 use crate::core::guides::guide_signal_bus::GuideSignalBus;
 use crate::core::lib::canon_errors::CanonErrors;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{
     ChatInfo, ChatPermKey, ChatReactionCatalog, ChatReactionsType, ChatSettingsModel,
@@ -33,11 +33,11 @@ fn notify_info(text: String, cx: &mut App) {
 }
 
 fn guide_invents(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).invents(Some(chat_id)))
+    (chat_guide_sandbox_hooks().invents)(chat_id, cx)
 }
 
 fn guide_owns_discussion(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_discussion(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_discussion)(chat_id, cx)
 }
 
 fn chat_managing_reactions(chat_id: &str, cx: &mut App) -> Option<ChatInfo> {
@@ -265,7 +265,7 @@ impl ChatInteractionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_discussion(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.link_discussion(group_id, cx));
+            (chat_guide_sandbox_hooks().link_discussion)(group_id, cx);
             if let Some(on_result) = on_result {
                 cx.defer(move |cx| on_result(true, cx));
             }
@@ -284,7 +284,7 @@ impl ChatInteractionsStore {
 
     pub fn unlink_discussion(&mut self, chat_id: &str, cx: &mut Context<Self>) {
         if guide_owns_discussion(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.unlink_discussion(cx));
+            (chat_guide_sandbox_hooks().unlink_discussion)(cx);
             return;
         }
         ChatActionsStore::shared(cx).update(cx, |actions, cx| actions.unlink_chat_action(chat_id, cx));

@@ -133,7 +133,7 @@ pub struct ChatEngineRtcHooks {
 
 pub(crate) static CHAT_ENGINE_RTC_HOOKS: FeatureHookSlot<ChatEngineRtcHooks> = FeatureHookSlot::new("CHAT_ENGINE_RTC_HOOKS");
 
-pub(crate) fn set_chat_engine_rtc_hooks(hooks: ChatEngineRtcHooks) {
+pub fn set_chat_engine_rtc_hooks(hooks: ChatEngineRtcHooks) {
     let _ = CHAT_ENGINE_RTC_HOOKS.set(hooks);
 }
 
@@ -148,7 +148,7 @@ pub struct ChatEngineBadgeHooks {
 
 pub(crate) static CHAT_ENGINE_BADGE_HOOKS: FeatureHookSlot<ChatEngineBadgeHooks> = FeatureHookSlot::new("CHAT_ENGINE_BADGE_HOOKS");
 
-pub(crate) fn set_chat_engine_badge_hooks(hooks: ChatEngineBadgeHooks) {
+pub fn set_chat_engine_badge_hooks(hooks: ChatEngineBadgeHooks) {
     let _ = CHAT_ENGINE_BADGE_HOOKS.set(hooks);
 }
 
@@ -163,7 +163,7 @@ pub struct ChatEngineComponentsHooks {
 
 pub(crate) static CHAT_ENGINE_COMPONENTS_HOOKS: FeatureHookSlot<ChatEngineComponentsHooks> = FeatureHookSlot::new("CHAT_ENGINE_COMPONENTS_HOOKS");
 
-pub(crate) fn set_chat_engine_components_hooks(hooks: ChatEngineComponentsHooks) {
+pub fn set_chat_engine_components_hooks(hooks: ChatEngineComponentsHooks) {
     let _ = CHAT_ENGINE_COMPONENTS_HOOKS.set(hooks);
 }
 

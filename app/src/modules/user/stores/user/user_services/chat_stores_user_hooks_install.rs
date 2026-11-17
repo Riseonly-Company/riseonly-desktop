@@ -6,7 +6,7 @@ use crate::modules::chat::stores::chat_stores_hooks::{ChatStoresUserHooks, set_c
 use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 
-pub(crate) fn install_chat_stores_user_hooks() {
+pub fn install_chat_stores_user_hooks() {
     set_chat_stores_user_hooks(ChatStoresUserHooks {
         restore_contact_join_dialogs_from_inbox: |cx: &mut App| {
             UserServicesStore::shared(cx).update(cx, |services, cx| services.restore_contact_join_dialogs_from_inbox(cx));

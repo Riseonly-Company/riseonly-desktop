@@ -23,7 +23,7 @@ use crate::modules::chat::stores::message::message_services::message_poll_voters
     PollOptionVoters, PollOptionVotersLoadState, PollVoterRow, PollVotersPresentation, PollVotersPresentationOption,
     PollVotersStore,
 };
-use crate::modules::post::pages::posts::post_detail::profile_post_list_body::splice_list_rows;
+use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 use crate::modules::user::components::user_list_skeleton::UserListSkeleton;
 use crate::modules::user::components::user_relationship_list_contract::UserRelationshipRowMetrics;
 

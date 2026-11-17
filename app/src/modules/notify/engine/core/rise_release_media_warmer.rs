@@ -153,7 +153,7 @@ impl RiseReleaseMediaWarmer {
     }
 
     fn caches_directory() -> Option<PathBuf> {
-        AppPaths::resolve(AppEnvironment::compiled().canon())
+        AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.cache_dir().to_path_buf())
     }

@@ -8,11 +8,11 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::core::lib::device_info::DeviceInfo;
-use crate::core::ui::emoji_picker_ui::emoji_picker_catalog::EmojiPickerCatalog;
 use crate::modules::auth::services::app_attest_client::{AppAttestClientEnvelope, RiseAttestedBody};
 use crate::modules::auth::shared::device_identity::DeviceIdentity;
-use crate::modules::post::stores::post_actions::post_types::AuthorInfoMore;
-use crate::modules::user::stores::user::user_actions::user_types::{ProfileModel, SubscriptionStatus};
+use crate::modules::auth::stores::auth_actions::author_info_more_hooks::AuthorInfoMore;
+use crate::modules::auth::stores::auth_actions::profile_model_hooks::{ProfileModel, SubscriptionStatus};
+use crate::modules::auth::stores::auth_actions::selectable_emoji_hooks::normalized_selectable_emoji_or_custom_ref;
 
 pub type AuthSendCodeResponse = rise_view::auth::Sent;
 
@@ -300,10 +300,8 @@ impl AuthUserDTO {
             level: m.and_then(|more| more.level),
             streak: m.and_then(|more| more.streak),
             rating: m.and_then(|more| more.rating),
-            quick_reaction: EmojiPickerCatalog::normalized_selectable_emoji_or_custom_ref(
-                self.quick_reaction.as_deref(),
-            )
-            .unwrap_or_else(|| ProfileModel::DEFAULT_QUICK_REACTION.to_owned()),
+            quick_reaction: normalized_selectable_emoji_or_custom_ref(self.quick_reaction.as_deref())
+                .unwrap_or_else(|| ProfileModel::DEFAULT_QUICK_REACTION.to_owned()),
             is_phone_public: self.is_phone_public.unwrap_or(false),
             ..ProfileModel::default()
         }

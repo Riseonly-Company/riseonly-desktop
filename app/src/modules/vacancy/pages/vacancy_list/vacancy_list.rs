@@ -33,6 +33,7 @@ use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, S
 use crate::core::widgets::wrappers::list_shell_ui::{ListShellUi, list_shell_floating_top_inset};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+pub(crate) use crate::modules::rtc::components::sync_rows_hooks::sync_rows;
 use crate::modules::vacancy::components::vacancy_card::VacancyCard;
 use crate::modules::vacancy::shared::vacancy_mocks::VacancyLocalState;
 use crate::modules::vacancy::stores::vacancy_actions::vacancy_actions::VacancyActionsStore;
@@ -77,21 +78,6 @@ fn label_key(options: &[(&'static str, &'static str)], value: &str, empty_key: &
 
 fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
-}
-
-pub(crate) fn sync_rows(list: &ListUi, old_keys: &[String], new_keys: &[String]) {
-    let prefix = old_keys.iter().zip(new_keys).take_while(|(old, new)| old == new).count();
-    if prefix == 0 {
-        list.replaced(new_keys.len());
-        return;
-    }
-    let suffix = old_keys[prefix..]
-        .iter()
-        .rev()
-        .zip(new_keys[prefix..].iter().rev())
-        .take_while(|(old, new)| old == new)
-        .count();
-    list.state().splice(prefix..old_keys.len() - suffix, new_keys.len() - prefix - suffix);
 }
 
 /// the three filters of the body, none when empty

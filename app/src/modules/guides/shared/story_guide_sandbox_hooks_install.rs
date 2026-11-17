@@ -5,7 +5,7 @@ use crate::modules::story::shared::story_guide_sandbox_hooks::{StoryGuideSandbox
 use crate::modules::story::stores::story::story_actions::story_profile_wire_types::StoryProfileScope;
 use crate::modules::story::stores::story::story_actions::story_wire_types::{HighlightDTO, StoryAuthorDTO, StoryDTO};
 
-pub(crate) fn install_story_guide_sandbox_hooks() {
+pub fn install_story_guide_sandbox_hooks() {
     let _ = set_story_guide_sandbox_hooks(StoryGuideSandboxHooks {
         owns_story,
         owns_stories,

@@ -11,9 +11,9 @@ use crate::core::media_viewer::media_viewer_presentation_state::{MediaViewerPres
 use crate::core::shared_element_transition::kernel::shared_element_types::SharedElementSurface;
 use crate::core::shared_element_transition::runtime::shared_element_lift_board::SharedElementSurfaceKey;
 use crate::modules::post::components::collaborators::post_tag_bubbles_overlay::PostMediaTagsState;
+use crate::modules::post::components::post::post_list_player_layer_hooks::post_list_player_layer_hooks;
 use crate::modules::post::components::post::post_media_cache_policy::PostMediaCachePolicy;
 use crate::modules::post::components::post::post_music_playback_controller::PostAmbientMusicDriver;
-use crate::modules::post::pages::posts::post_detail::post_list_shared_element_capture::PostListSharedElementCapture;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::shorts::components::feed_sound_button::FeedSoundButton;
 use crate::modules::shorts::components::shorts_feed_player::{ShortsFeedPlayer, ShortsMusicOverlay, ShortsPlaybackController};
@@ -147,7 +147,9 @@ impl RenderOnce for PostFeedInlineVideoPage {
         };
         if let Some(session) = flight_session {
             let layer = if mounts_player { playback.read(cx).player_layer_view() } else { None };
-            PostListSharedElementCapture::update_player_layer(session, &self.post.id, layer);
+            if let Some(hooks) = post_list_player_layer_hooks() {
+                (hooks.update_player_layer)(session, &self.post.id, layer);
+            }
         }
         let leaving_post_id = self.post.id.clone();
 
@@ -210,7 +212,9 @@ impl RenderOnce for PostFeedInlineVideoPage {
             .on_disappear(disappear_id, move |_, cx| {
                 focus.update(cx, |focus, cx| focus.remove(&focus_token, cx));
                 if let Some(session) = flight_session {
-                    PostListSharedElementCapture::update_player_layer(session, &leaving_post_id, None);
+                    if let Some(hooks) = post_list_player_layer_hooks() {
+                        (hooks.update_player_layer)(session, &leaving_post_id, None);
+                    }
                 }
             })
     }

@@ -8,13 +8,13 @@ use rise_ui::hold_context_menu_ui::hold_context_menu_types::HoldContextMenuActio
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::lib::sai::core::utilities::get_sai_server_id::GetSaiServerId;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
-use crate::core::media::media_save_coordinator::{MediaSaveTargetKind, MessageMediaSaveClassifier};
+use crate::modules::chat::shared::media_save_target_hooks::{MediaSaveTargetKind, MessageMediaSaveClassifier};
 use crate::core::push_notifications::riseonly_public_link::RiseonlyPublicLink;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::engine::chat_engine_hooks::chat_engine_hooks;
 use crate::modules::chat::shared::chat_permission_resolution::ChatPermissionResolution;
 use crate::modules::chat::shared::chat_shared_sparks_hooks::chat_shared_sparks_hooks;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatInfo, ChatPerm, ChatPermExt, ChatType};
 use crate::modules::chat::stores::chats::chat_actions::chat_wire_types::EffectivePermissionsDTOExt;
 use crate::modules::chat::stores::message::message_actions::message_types::{
@@ -195,7 +195,7 @@ impl<'a> MessagePermissions<'a> {
     }
 
     fn guide_sandbox_owns_message(&self, cx: &App) -> bool {
-        GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_message_id(&self.message.id))
+        (chat_guide_sandbox_hooks().owns_message_id)(&self.message.id, cx)
     }
 
     fn has_stable_server_id(&self, cx: &App) -> bool {

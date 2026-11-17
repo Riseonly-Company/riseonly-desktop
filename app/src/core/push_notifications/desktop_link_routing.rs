@@ -20,7 +20,7 @@ pub fn install(cx: &mut App) {
     }
     cx.set_global(DesktopLinkRoutingInstalled);
 
-    let scheme = AppEnvironment::compiled().app_url_scheme();
+    let scheme = AppEnvironment::current().app_url_scheme();
     let support = register_url_scheme(&scheme, cx);
     tracing::debug!(target: "riseonly", scheme, ?support, "URL scheme claim at launch");
     let open_with_support = register_open_with(cx);
@@ -35,7 +35,7 @@ pub fn handle_external_url(url: &Url, cx: &mut App) {
 }
 
 fn open_own_link(url: Url, cx: &mut App) {
-    match own_link_route(&url, AppEnvironment::compiled()) {
+    match own_link_route(&url, AppEnvironment::current()) {
         OwnLinkRoute::Shell => cx.defer(move |cx| handle_external_url(&url, cx)),
         OwnLinkRoute::Browser => cx.open_url(url.absolute_string()),
     }

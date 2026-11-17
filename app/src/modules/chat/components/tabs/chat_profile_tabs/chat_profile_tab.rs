@@ -1,10 +1,10 @@
 use rise_chat::ChatType;
 
 /// alias for the canon profile tab
-pub(crate) type ChatProfileTab = rise_chat::ProfileTab;
+pub type ChatProfileTab = rise_chat::ProfileTab;
 
 /// extra methods for the profile tab
-pub(crate) trait ChatProfileTabExt: Copy {
+pub trait ChatProfileTabExt: Copy {
     /// the wire string of the tab
     fn id(self) -> &'static str;
 

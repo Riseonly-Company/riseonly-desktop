@@ -1,14 +1,14 @@
 use crate::core::feature_hooks::FeatureHookSlot;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatInfo;
 
-pub(crate) struct ChatWallpaperSheetHooks {
-    pub(crate) is_owner: fn(&ChatInfo) -> bool,
+pub struct ChatWallpaperSheetHooks {
+    pub is_owner: fn(&ChatInfo) -> bool,
 }
 
 pub(crate) static CHAT_WALLPAPER_SHEET_HOOKS: FeatureHookSlot<ChatWallpaperSheetHooks> = FeatureHookSlot::new("CHAT_WALLPAPER_SHEET_HOOKS");
 
 /// second install is ignored, first owner keeps the slot
-pub(crate) fn set_chat_wallpaper_sheet_hooks(hooks: ChatWallpaperSheetHooks) {
+pub fn set_chat_wallpaper_sheet_hooks(hooks: ChatWallpaperSheetHooks) {
     let _ = CHAT_WALLPAPER_SHEET_HOOKS.set(hooks);
 }
 

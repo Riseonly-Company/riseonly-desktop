@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Änderungen verwerfen?",
   "media_editor_discard_confirm": "Änderungen verwerfen",
   "media_editor_discard_keep": "Weiter bearbeiten",
-  "story_canvas_photos_limit_reached": "Du kannst bis zu %d Fotos hinzufügen"
+  "story_canvas_photos_limit_reached": "Du kannst bis zu %d Fotos hinzufügen",
+  "error_rtc_overloaded": "Anrufe sind gerade stark ausgelastet. Damit laufende Anrufe stabil bleiben, pausieren wir neue für einen Moment. Versuche es gleich erneut",
+  "overload_modal_title": "Gerade hohe Auslastung"
 }

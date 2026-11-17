@@ -33,7 +33,7 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
 fi
 
 forward=()
-for name in RISE_ENV RISE_BUILD_NUMBER RISE_UPDATE_FEED_PUBLIC_KEY PROFILE VERSION SLUG CARGO_TERM_COLOR; do
+for name in RISE_ENV RISE_BUILD_NUMBER RISE_UPDATE_FEED_PUBLIC_KEY PROFILE VERSION SLUG CARGO_TERM_COLOR WIN_ARCH PAYLOAD; do
     if [ -n "${!name+x}" ]; then
         forward+=(-e "$name=${!name}")
     fi

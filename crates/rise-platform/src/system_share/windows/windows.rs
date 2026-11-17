@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
+use gpui::AppContext as _;
 
 use crate::gpui_shim::PlatformSupport;
 use crate::url_scheme::association_entries::{

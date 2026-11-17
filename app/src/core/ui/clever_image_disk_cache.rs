@@ -78,7 +78,7 @@ static INVALIDATION_TOKENS: LazyLock<Mutex<CleverImageDiskCacheTokens>> = LazyLo
 });
 static ACCOUNT_DIRECTORY_NAMES: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static CACHE_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().to_path_buf())
 });

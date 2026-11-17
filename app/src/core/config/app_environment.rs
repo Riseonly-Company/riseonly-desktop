@@ -3,6 +3,8 @@ use std::fmt;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_deeplink::{ENVIRONMENTS, Environment};
 
+use crate::core::assets::packaged_file;
+
 /// app environment, scheme and host and accepted APP_ENV spellings come from the canon row
 /// so every build of one branch answers to the same links
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -92,6 +94,18 @@ impl AppEnvironment {
 
     pub fn compiled() -> Self {
         Self::from_build_value(option_env!("RISE_ENV"), cfg!(debug_assertions))
+    }
+
+    pub fn packaged_or_compiled(packaged: Option<&str>) -> Self {
+        packaged
+            .map(|value| trimming_whitespaces_and_newlines(value).to_lowercase())
+            .and_then(|value| Self::parse(&value))
+            .unwrap_or_else(Self::compiled)
+    }
+
+    pub fn packaged() -> Self {
+        let packaged = packaged_file("environment").and_then(|path| std::fs::read_to_string(path).ok());
+        Self::packaged_or_compiled(packaged.as_deref())
     }
 }
 

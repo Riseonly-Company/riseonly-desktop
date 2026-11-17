@@ -11,7 +11,7 @@ use crate::modules::stickers::engine::rise_sticker_presentation::RiseStickerPres
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::StickerItem;
 use crate::modules::stickers::stores::stickers::stickers_services::stickers_services::StickersServicesStore;
 
-pub(crate) fn install_custom_emoji_stickers_hooks() {
+pub fn install_custom_emoji_stickers_hooks() {
     set_custom_emoji_stickers_hooks(CustomEmojiStickersHooks {
         resource_revision,
         hydrate_cached_emoji_resources,

@@ -5981,5 +5981,7 @@
   "media_editor_discard_title": "Скасувати зміни?",
   "media_editor_discard_confirm": "Скасувати зміни",
   "media_editor_discard_keep": "Продовжити редагування",
-  "story_canvas_photos_limit_reached": "Можна додати не більше %d фото"
+  "story_canvas_photos_limit_reached": "Можна додати не більше %d фото",
+  "error_rtc_overloaded": "Дзвінки зараз під великим навантаженням. Щоб поточні дзвінки залишалися стабільними, нові ненадовго призупинено. Спробуйте трохи пізніше",
+  "overload_modal_title": "Зараз велике навантаження"
 }

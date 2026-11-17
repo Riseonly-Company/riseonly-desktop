@@ -488,6 +488,7 @@ fn edit_message_body_encodes_explicit_empty_entities() {
         content: Some("updated".to_owned()),
         document: None,
         entities: Some("[]".to_owned()),
+        link_preview_type: None,
         media_items: None,
         message_id: "message".to_owned(),
         reply_markup: None,

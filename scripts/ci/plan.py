@@ -3,11 +3,25 @@ import json
 import os
 import re
 import sys
+import urllib.request
 
 PLATFORMS = ("linux", "windows", "macos")
-LABELS_OF = {"linux": {"linux"}, "windows": {"win"}, "macos": {"macos", "macos-silicon", "macos-intel"}}
-MACOS_ARCHS = (("macos-silicon", "aarch64"), ("macos-intel", "x86_64"))
-REBUILD_LABELS = {"build", "linux", "win", "macos", "macos-silicon", "macos-intel", "tests"}
+OS_LABEL = {"linux": "linux", "windows": "win", "macos": "macos"}
+ARCH_LABELS = {
+    "linux": (("linux-x64", "x86_64"), ("linux-arm64", "aarch64")),
+    "windows": (("win-x64", "x86_64"), ("win-arm64", "aarch64")),
+    "macos": (("macos-silicon", "aarch64"), ("macos-intel", "x86_64")),
+}
+DEFAULT_ARCHS = {"linux": ["x86_64"], "windows": ["x86_64"], "macos": ["aarch64", "x86_64"]}
+LABELS_OF = {p: {OS_LABEL[p]} | {label for label, _ in ARCH_LABELS[p]} for p in PLATFORMS}
+ENV_LABELS = (("env-dev", "dev"), ("env-staging", "staging"), ("env-prod", "production"))
+SLUGS = {"production": "Riseonly", "staging": "Riseonly-Staging", "dev": "Riseonly-Dev"}
+RELEASE_PROFILE_LABEL = "release-profile"
+REBUILD_LABELS = (
+    {"build", "tests", RELEASE_PROFILE_LABEL}
+    | {label for _, label_set in LABELS_OF.items() for label in label_set}
+    | {label for label, _ in ENV_LABELS}
+)
 FLOW = {"staging": "development", "main": "staging"}
 
 
@@ -33,11 +47,49 @@ def ci_env(root):
     return values
 
 
-def macos_archs(labels):
-    picked = [arch for label, arch in MACOS_ARCHS if label in labels]
-    if "macos" in labels or not picked:
-        return [arch for _, arch in MACOS_ARCHS]
-    return picked
+def archs(platform, labels):
+    every = [arch for _, arch in ARCH_LABELS[platform]]
+    if OS_LABEL[platform] in labels:
+        return every
+    picked = [arch for label, arch in ARCH_LABELS[platform] if label in labels]
+    return picked or DEFAULT_ARCHS[platform]
+
+
+def environment_of(kind, base, labels):
+    if kind == "build":
+        picked = [env for label, env in ENV_LABELS if label in labels]
+        if len(picked) > 1:
+            sys.exit(f"pick one environment label, not {', '.join(label for label, _ in ENV_LABELS if label in labels)}")
+        if picked:
+            return picked[0]
+    return "production" if base == "main" else "staging"
+
+
+def github(path):
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/{path}",
+        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def compiled_before(tree, fetch):
+    name = re.compile(rf"payload-{tree}-b(\d+)-([a-z]+-[a-z0-9_]+)")
+    builds = {}
+    for page in range(1, 11):
+        batch = fetch(f"actions/artifacts?per_page=100&page={page}")["artifacts"]
+        for artifact in batch:
+            found = name.fullmatch(artifact["name"])
+            if found and not artifact["expired"]:
+                build, key = int(found.group(1)), found.group(2)
+                builds.setdefault(build, {}).setdefault(key, artifact["workflow_run"]["id"])
+        if len(batch) < 100:
+            break
+    if not builds:
+        return None, {}
+    build = max(builds)
+    return str(build), builds[build]
 
 
 def decide(mode, event):
@@ -71,13 +123,25 @@ def main():
     event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
     pr = event["pull_request"]
     kind, reason, labels = decide(mode, event)
-    out = {"run": "false", "reason": reason, "macos_archs": json.dumps(macos_archs(labels))}
+    out = {
+        "run": "false",
+        "reason": reason,
+        "linux_archs": json.dumps(archs("linux", labels)),
+        "windows_archs": json.dumps(archs("windows", labels)),
+        "macos_archs": json.dumps(archs("macos", labels)),
+    }
     if kind:
         env = ci_env(root)
         picked = [p for p in PLATFORMS if LABELS_OF[p] & labels] or list(PLATFORMS)
-        environment = "production" if pr["base"]["ref"] == "main" else "staging"
+        environment = environment_of(kind, pr["base"]["ref"], labels)
         version = workspace_version(root)
         build_number = os.environ.get("GITHUB_RUN_NUMBER", "1")
+        sha = pr.get("merge_commit_sha") if kind == "release" else pr["head"]["sha"]
+        tree, payloads = "", {}
+        if kind == "release" and os.environ.get("GH_TOKEN"):
+            tree = github(f"git/commits/{sha}")["tree"]["sha"][:12]
+            inherited, payloads = compiled_before(tree, github)
+            build_number = inherited or build_number
         out.update({
             "run": "true",
             "platforms": json.dumps(picked),
@@ -86,12 +150,14 @@ def main():
             "macos": str("macos" in picked).lower(),
             "tests": str(kind == "build" and "tests" in labels).lower(),
             "environment": environment,
-            "profile": "release" if kind == "release" else "fast",
+            "profile": "release" if kind == "release" or RELEASE_PROFILE_LABEL in labels else "fast",
             "version": version,
             "build_number": build_number,
-            "slug": "Riseonly" if environment == "production" else "Riseonly-Staging",
+            "slug": SLUGS[environment],
             "tag": f"v{version}" if environment == "production" else f"staging-v{version}-{build_number}",
-            "sha": pr.get("merge_commit_sha") if kind == "release" else pr["head"]["sha"],
+            "sha": sha,
+            "tree": tree,
+            "payloads": json.dumps(payloads),
             "tools_repo": env["TOOLS_REPO"],
             "tools_ref": env["TOOLS_REF"],
             "rust": env["RUST_TOOLCHAIN"],

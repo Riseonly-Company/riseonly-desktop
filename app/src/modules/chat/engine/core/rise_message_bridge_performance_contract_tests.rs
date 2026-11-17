@@ -25,6 +25,7 @@ use crate::modules::chat::components::chat::async_render::rise_message_list_view
     RiseMessageNativeLayoutReusePolicy, RiseMessageSnapshotReusePolicy,
 };
 use crate::modules::chat::components::chat::message_system_pill::MessageSystemFormatContext;
+use crate::modules::chat::components::chat::media_viewer::chat_media_gallery_builder::ChatViewLimitedDestructionStrings;
 use crate::modules::chat::components::chat_search::chat_search_overlay_store::ChatSearchMessageKind;
 use crate::modules::chat::engine::core::rise_chat_overlay_search_presentation::{
     RiseChatOverlaySearchPresentationPreparer, RiseChatOverlaySearchScope, RiseSearchRequestGenerationPolicy,
@@ -113,6 +114,8 @@ fn request_key(account_epoch: &str, source_version: i64, time_zone_identifier: &
         calendar_identifier: "gregorian".to_owned(),
         time_zone_identifier: time_zone_identifier.to_owned(),
         saved_messages_chat: false,
+        view_limited_opened: HashSet::new(),
+        view_limited_closed: HashSet::new(),
     }
 }
 
@@ -144,6 +147,11 @@ fn localization() -> ChatMessageRenderPreparationSeedLocalization {
         general_topic: "General".to_owned(),
         unknown_topic: "Topic".to_owned(),
         unread_messages: "Unread messages".to_owned(),
+        view_limited: ChatViewLimitedDestructionStrings {
+            photo_timed: "Photo".to_owned(),
+            photo_once: "Photo".to_owned(),
+            video_once: "Video".to_owned(),
+        },
     }
 }
 

@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Wijzigingen verwerpen?",
   "media_editor_discard_confirm": "Wijzigingen verwerpen",
   "media_editor_discard_keep": "Verder bewerken",
-  "story_canvas_photos_limit_reached": "Je kunt maximaal %d foto’s toevoegen"
+  "story_canvas_photos_limit_reached": "Je kunt maximaal %d foto’s toevoegen",
+  "error_rtc_overloaded": "Bellen is nu erg druk. Om lopende gesprekken stabiel te houden, staan nieuwe gesprekken even in de wacht. Probeer het zo opnieuw",
+  "overload_modal_title": "Het is nu erg druk"
 }

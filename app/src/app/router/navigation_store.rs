@@ -9,7 +9,8 @@ use rise_core::foundation::foundation_url::Url;
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_ui::swiftui::environment::EnvKey;
 
-use crate::app::aside::{aside_navigator, aside_registry};
+use crate::app::aside::aside_registry;
+use crate::app::router::navigation_aside_hooks::navigation_aside_hooks;
 use crate::app::router::navigation_types::{MainTab, RootRoute};
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::modules::sai_ws::sai_ws::SaiWs;
@@ -338,7 +339,11 @@ impl NavigationStore {
             self.settings_opened_from_rail = false;
         }
         if self.opens_in_aside(&route) {
-            cx.defer(move |cx| aside_navigator::open(route, cx));
+            cx.defer(move |cx| {
+                if let Some(aside) = navigation_aside_hooks() {
+                    (aside.open)(route, cx);
+                }
+            });
             return;
         }
         self.push_in_centre(route, settling, cx);
@@ -462,12 +467,12 @@ impl NavigationStore {
     }
 
     /// route stack of the window, for the back pan installed on it
-    pub(crate) fn navigation_window_stack(&self) -> Option<Rc<dyn SharedElementNavigationController>> {
+    pub fn navigation_window_stack(&self) -> Option<Rc<dyn SharedElementNavigationController>> {
         Self::navigation_window(&self.navigation_window)
     }
 
     /// true if the stack that owns the path is mid transition, used by back refusals
-    pub(crate) fn navigation_window_has_running_transition(&self, cx: &App) -> bool {
+    pub fn navigation_window_has_running_transition(&self, cx: &App) -> bool {
         Self::navigation_window(&self.navigation_window).is_some_and(|stack| Self::has_running_transition(&stack, cx))
     }
 
@@ -701,7 +706,7 @@ impl NavigationStore {
         }
     }
 
-    pub(crate) fn chat_scope_id(route: &RootRoute) -> Option<&str> {
+    pub fn chat_scope_id(route: &RootRoute) -> Option<&str> {
         match route {
             RootRoute::Chat { chat_id: id }
             | RootRoute::ChatProfile { chat_id: id }

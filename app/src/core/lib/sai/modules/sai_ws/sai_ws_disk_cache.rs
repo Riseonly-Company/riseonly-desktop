@@ -84,7 +84,7 @@ const WS_CACHE_VALUE: &str = "_ws_cache_value";
 const LIMITS: SaiWsDiskCacheLimits = SaiWsDiskCacheLimits::PRODUCTION;
 
 static BASE_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.data_dir().to_path_buf())
 });

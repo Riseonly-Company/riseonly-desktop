@@ -44,7 +44,7 @@ static STAGING_API_BASE_URL: LazyLock<Url> =
 static DEFAULT_DEBUG_API_BASE_URL: LazyLock<Url> =
     LazyLock::new(|| literal_url("http://192.168.31.177:8080/api"));
 
-static CURRENT_APP_ENVIRONMENT: LazyLock<AppEnvironment> = LazyLock::new(AppEnvironment::compiled);
+static CURRENT_APP_ENVIRONMENT: LazyLock<AppEnvironment> = LazyLock::new(AppEnvironment::packaged);
 
 static DEBUG_CACHED_API_BASE_URL: Mutex<Option<Url>> = Mutex::new(None);
 

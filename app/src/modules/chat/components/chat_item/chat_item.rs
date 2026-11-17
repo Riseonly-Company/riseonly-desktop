@@ -21,7 +21,7 @@ use rise_ui::hold_context_menu_ui::bubble_scroll_passthrough::BubbleScrollPassth
 use rise_ui::hold_context_menu_ui::hold_context_menu_types::{HoldContextMenuAction, HoldContextMenuAlignment};
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::drag_gesture::{DragGesture, DragGestureModifiers, DragGestureValue};
-use rise_ui::swiftui::environment::{EnvKey, env};
+use rise_ui::swiftui::environment::env;
 use rise_ui::swiftui::lifecycle::use_task;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::motion::spring;
@@ -50,24 +50,12 @@ use crate::modules::chat::stores::chats::chat_services::chat_profile_permissions
 use crate::modules::notify::components::notifications_hub_sheet_store::NotificationsHubSheetStore;
 use crate::modules::story::stores::story::story_interactions::story_interactions::StoryInteractionsStore;
 use crate::modules::story::stores::story::story_services::story_services::StoryServicesStore;
+pub use crate::modules::user::components::profile_content::pages::plans::chats_list_row_actions_suppressor_hooks::ChatsListRowActionsSuppressorKey;
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 
 const AUTO_DELETE_ONE_DAY: i64 = 86_400;
 const AUTO_DELETE_ONE_WEEK: i64 = 604_800;
 const AUTO_DELETE_ONE_MONTH: i64 = 2_592_000;
-
-/// carrier of the suppression flag, not the flag itself
-/// it is read in the tap handler and nothing draws from it
-/// a bool in the environment would rerender on every folder swipe
-pub struct ChatsListRowActionsSuppressorKey;
-
-impl EnvKey for ChatsListRowActionsSuppressorKey {
-    type Value = Option<Entity<AnimatedTabsPagerLiveState>>;
-
-    fn default_value() -> Self::Value {
-        None
-    }
-}
 
 pub type ChatItemAction = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type ChatItemHoldAction = Rc<dyn Fn(&str, &mut Window, &mut App)>;

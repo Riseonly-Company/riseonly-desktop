@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Annullare le modifiche?",
   "media_editor_discard_confirm": "Annulla modifiche",
   "media_editor_discard_keep": "Continua a modificare",
-  "story_canvas_photos_limit_reached": "Puoi aggiungere fino a %d foto"
+  "story_canvas_photos_limit_reached": "Puoi aggiungere fino a %d foto",
+  "error_rtc_overloaded": "Le chiamate sono sotto forte carico in questo momento. Per mantenere stabili quelle in corso, le nuove sono in pausa per un attimo. Riprova tra poco",
+  "overload_modal_title": "Carico elevato in questo momento"
 }

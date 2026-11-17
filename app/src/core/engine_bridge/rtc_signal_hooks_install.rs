@@ -15,7 +15,7 @@ fn open_signal_stream(
     Box::pin(connect_routed_stream(host, port, secure))
 }
 
-pub(crate) fn install_rtc_signal_hooks() {
+pub fn install_rtc_signal_hooks() {
     let opener: SignalStreamOpener = open_signal_stream;
     set_signal_stream_opener(opener);
 }

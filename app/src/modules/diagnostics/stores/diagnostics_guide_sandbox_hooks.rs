@@ -2,7 +2,7 @@ use gpui::App;
 
 use crate::core::feature_hooks::FeatureHookSlot;
 
-pub(crate) struct DiagnosticsGuideSandboxHooks {
+pub struct DiagnosticsGuideSandboxHooks {
     pub owns_bug_report_scene: fn(cx: &App) -> bool,
 }
 
@@ -10,7 +10,7 @@ pub(crate) static HOOKS: FeatureHookSlot<DiagnosticsGuideSandboxHooks> = Feature
 
 static UNINSTALLED: DiagnosticsGuideSandboxHooks = DiagnosticsGuideSandboxHooks { owns_bug_report_scene: |_| false };
 
-pub(crate) fn set_diagnostics_guide_sandbox_hooks(
+pub fn set_diagnostics_guide_sandbox_hooks(
     hooks: DiagnosticsGuideSandboxHooks,
 ) -> Result<(), DiagnosticsGuideSandboxHooks> {
     HOOKS.set(hooks)

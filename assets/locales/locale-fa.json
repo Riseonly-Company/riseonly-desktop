@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "تغییرات کنار گذاشته شوند؟",
   "media_editor_discard_confirm": "کنار گذاشتن تغییرات",
   "media_editor_discard_keep": "ادامهٔ ویرایش",
-  "story_canvas_photos_limit_reached": "حداکثر %d عکس می‌توانید اضافه کنید"
+  "story_canvas_photos_limit_reached": "حداکثر %d عکس می‌توانید اضافه کنید",
+  "error_rtc_overloaded": "تماس‌ها الان زیر بار سنگینی هستند. برای پایدار ماندن تماس‌های در جریان، تماس‌های جدید موقتاً متوقف شده‌اند. کمی بعد دوباره تلاش کنید",
+  "overload_modal_title": "الان بار زیاد است"
 }

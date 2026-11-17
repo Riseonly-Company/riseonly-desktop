@@ -755,7 +755,7 @@ impl RenderOnce for GiftsKindTabs {
                     .id(ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), format!("tab-{index}").into()))
                     .flex()
                     .flex_col()
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w_0()
                     .justify_center()
                     .px(px(Self::TAB_INSET))

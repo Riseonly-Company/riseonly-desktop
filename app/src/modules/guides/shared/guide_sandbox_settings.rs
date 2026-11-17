@@ -19,7 +19,7 @@ use crate::modules::diagnostics::stores::diagnostics::diagnostics_interactions::
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_services::bug_report_services::BugReportServicesStore;
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 use crate::modules::music::shared::utils::music::featured_profile_track_store::FeaturedProfileTrackStore;
-use crate::modules::notify::components::notifications_hub_sheet::NotificationsHubSheetStore;
+use crate::modules::notify::components::notifications_hub_sheet_store::NotificationsHubSheetStore;
 use crate::modules::notify::stores::notify_actions::notify_profile_settings_wire_types::{
     ProfileNotificationScope, ProfileNotificationSettingsModel,
 };

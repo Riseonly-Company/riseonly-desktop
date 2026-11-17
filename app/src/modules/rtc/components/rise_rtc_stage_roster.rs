@@ -37,7 +37,7 @@ use crate::modules::rtc::shared::rise_rtc_volume_menu_accessory::{
 };
 use crate::modules::rtc::stores::rtc::rtc_services::rtc_services::RTCServicesStore;
 
-pub(crate) const SEPARATOR_HEIGHT: f32 = 0.5;
+pub const SEPARATOR_HEIGHT: f32 = 0.5;
 const OFFSCREEN_ROWS: usize = 8;
 
 pub type RiseRTCStageRosterActionHandler = Rc<dyn Fn(RiseRTCRoomMenuAction, &RiseRTCParticipant, &mut Window, &mut App)>;

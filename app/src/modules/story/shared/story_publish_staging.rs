@@ -257,7 +257,7 @@ impl StoryPublishStaging {
     }
 
     fn ensure_directory() -> Option<PathBuf> {
-        let base = AppPaths::resolve(AppEnvironment::compiled().canon())
+        let base = AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.cache_dir().to_path_buf())?;
 

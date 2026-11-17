@@ -48,7 +48,6 @@ use rise_ui::text_field_alert::TextFieldAlert;
 use rise_ui::view_anchor_probe::{ViewAnchorProbe, ViewAnchorProbeExt};
 use rise_ui::layer_keys::{LayerCancel, LayerKeysExt};
 
-use crate::app::aside::aside_navigator;
 use crate::app::router::main_tab_chrome::{MAIN_TAB_BAR_HEIGHT, main_tab_bar_underlap};
 use crate::app::router::navigation_store::{
     EmbeddedForumRequest, NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush, SaiActiveScreenOverlay,
@@ -58,8 +57,7 @@ use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::lib::sai::core::utilities::get_sai_server_id::GetSaiServerId;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::{SaiSliceState, SaiWsSliceStatus};
-use crate::core::lib::sai::core::websocket::sai_web_socket_manager::SaiWebSocketManagerPhase;
-use crate::core::rise_engine_bridge::rise_transport_status::{RiseTransportLink, RiseTransportShown, RiseTransportStatus};
+use crate::core::rise_engine_bridge::rise_transport_status::RiseTransportStatus;
 use crate::core::lib::sai::modules::sai_data_render::sai_data_render::{
     SaiDataRender, SaiDataRenderDefaultsEmpty, SaiDataRenderDefaultsError,
 };
@@ -106,8 +104,8 @@ use crate::modules::chat::engine::chats::rise_chat_repository::RiseChatRepositor
 use crate::modules::chat::engine::core::rise_conversation_presentation::{
     RiseChatListKind, RiseConversationPresentation, RiseConversationPresentationChange,
 };
-use crate::modules::chat::pages::chats::chat::forum_home::forum_home_screen::ForumMembersSubtitle;
 use crate::modules::chat::pages::chats::chat_list_history_warmup_controller::ChatListHistoryWarmupController;
+use crate::modules::chat::pages::chats::chats_aside_hooks::chats_aside_hooks;
 use crate::modules::chat::pages::chats::chats_archive_pull_gate::ChatsArchivePullEvents;
 use crate::modules::chat::pages::chats::chats_archive_reveal::{
     ChatsArchiveRevealPhase, ChatsArchiveRevealPolicy, ChatsArchiveSettleTarget,
@@ -121,6 +119,7 @@ use crate::modules::chat::pages::chats::embedded_forum_transition::{
     EmbeddedForumRailContext, EmbeddedForumRailContextKey, EmbeddedForumRailFade, EmbeddedForumTransitionLayer,
     EmbeddedForumTransitionMetrics, EmbeddedForumTransitionState,
 };
+use crate::modules::chat::pages::chats::forum_members_subtitle_hooks::ForumMembersSubtitle;
 use crate::modules::chat::pages::chats::rise_chat_native_list::{
     RiseChatNativeList, RiseChatNativeListControl, RiseChatNativeListRow,
 };
@@ -149,6 +148,8 @@ use crate::modules::user::components::premium_badge_picker::premium_badge_picker
 use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 use rise_chat::ChatType;
+
+pub use crate::modules::story::stores::story::story_services::chats_header_status_hooks::ChatsHeaderStatus;
 
 const FIND_KEY: &str = "f";
 const EMBEDDED_FORUM_CLOSE_CLEANUP_DELAY: f64 = 0.48;
@@ -823,79 +824,6 @@ pub struct ChatsListRowLocalState {
     pub pinned: Option<bool>,
     pub unread_cleared: bool,
     pub unread_marked: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ChatsHeaderStatus {
-    Title,
-    Maintenance,
-    WaitingForNetwork,
-    Connecting,
-    Updating,
-}
-
-impl ChatsHeaderStatus {
-    /// maintenance outranks every socket state
-    /// the product being closed means the socket is deliberately off
-    /// so every other rule would say waiting for network and that is wrong
-    pub fn resolve(
-        socket_phase: &SaiWebSocketManagerPhase,
-        is_updating_chats: bool,
-        is_closed_for_maintenance: bool,
-        is_retrying_after_failure: bool,
-    ) -> ChatsHeaderStatus {
-        if is_closed_for_maintenance {
-            return ChatsHeaderStatus::Maintenance;
-        }
-        match socket_phase {
-            SaiWebSocketManagerPhase::Connected(..) => {
-                if is_updating_chats {
-                    ChatsHeaderStatus::Updating
-                } else {
-                    ChatsHeaderStatus::Title
-                }
-            }
-            SaiWebSocketManagerPhase::Connecting(..) => {
-                if is_retrying_after_failure {
-                    ChatsHeaderStatus::WaitingForNetwork
-                } else {
-                    ChatsHeaderStatus::Connecting
-                }
-            }
-            SaiWebSocketManagerPhase::Idle
-            | SaiWebSocketManagerPhase::Disconnected
-            | SaiWebSocketManagerPhase::Failed(..) => ChatsHeaderStatus::WaitingForNetwork,
-        }
-    }
-
-    pub fn resolve_shown(shown: RiseTransportShown, is_updating_chats: bool, is_closed_for_maintenance: bool) -> ChatsHeaderStatus {
-        if is_closed_for_maintenance {
-            return ChatsHeaderStatus::Maintenance;
-        }
-        match shown.link {
-            RiseTransportLink::Connected if is_updating_chats => ChatsHeaderStatus::Updating,
-            RiseTransportLink::Connected => ChatsHeaderStatus::Title,
-            RiseTransportLink::Connecting => ChatsHeaderStatus::Connecting,
-            RiseTransportLink::WaitingForNetwork => ChatsHeaderStatus::WaitingForNetwork,
-        }
-    }
-
-    pub fn text(&self) -> String {
-        match self {
-            ChatsHeaderStatus::Title => tr("chats_title"),
-            ChatsHeaderStatus::Maintenance => tr("chats_status_maintenance"),
-            ChatsHeaderStatus::WaitingForNetwork => tr("chats_status_waiting_for_network"),
-            ChatsHeaderStatus::Connecting => tr("chats_status_connecting"),
-            ChatsHeaderStatus::Updating => tr("chats_status_updating"),
-        }
-    }
-
-    pub fn shows_activity(&self) -> bool {
-        match self {
-            ChatsHeaderStatus::Title | ChatsHeaderStatus::Maintenance => false,
-            ChatsHeaderStatus::WaitingForNetwork | ChatsHeaderStatus::Connecting | ChatsHeaderStatus::Updating => true,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2351,7 +2279,9 @@ impl ChatsActions {
             }
             None => RootRoute::GeneralProfile { chat_id: Some(chat_id.to_owned()) },
         };
-        aside_navigator::follow_topic(chat_id, Some(&open_info), cx);
+        if let Some(hooks) = chats_aside_hooks() {
+            (hooks.follow_topic)(chat_id, Some(&open_info), cx);
+        }
         self.open_chat(RootRoute::ChatTopic { chat_id: Some(chat_id.to_owned()), topic_id }, cx);
     }
 

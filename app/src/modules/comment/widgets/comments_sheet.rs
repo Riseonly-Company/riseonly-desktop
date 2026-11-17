@@ -38,7 +38,6 @@ use rise_ui::swiftui::transition::UnitPoint;
 use rise_ui::swiftui::prelude::*;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
-use crate::app::aside::aside_navigator;
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::lib::canon_identity::RiseIdentity;
@@ -59,7 +58,6 @@ use crate::modules::chat::components::chat::bubble::bubble_tap_router::BubbleTap
 use crate::modules::chat::components::chat::bubble::chat_mention_tap_layer::ChatLinkOpen;
 use crate::modules::chat::components::chat::input_picker::sticker_hold_preview::StickerHoldPreviewPresenter;
 use crate::modules::comment::components::comment::{CommentActionsRow, CommentReplyActionStyle, CommentRow};
-use crate::modules::comment::components::comment_input::CommentInput;
 use crate::modules::comment::components::comment_skeleton::{CommentListSkeleton, CommentRowSkeletonStyle};
 use crate::modules::comment::components::native_list::comment_list_models::{
     CommentListRow, CommentListRowKind, CommentListRowPlacement, CommentRowMetrics,
@@ -74,6 +72,8 @@ use crate::modules::comment::stores::comment_actions::comment_types::{
 use crate::modules::comment::stores::comment_interactions::comment_interactions::CommentInteractionsStore;
 use crate::modules::comment::stores::comment_services::comment_services::CommentServicesStore;
 use crate::modules::comment::stores::comment_services::comments_sheet_motion_relay::CommentsSheetMotionRelay;
+use crate::modules::comment::widgets::comment_input_hooks::comment_input_hooks;
+use crate::modules::comment::widgets::comments_sheet_aside_hooks::comments_sheet_aside_hooks;
 use crate::modules::moderation::stores::moderation_actions::moderation_types::ReportTarget;
 use crate::modules::post::engine::rise_post_engine_models::RisePostSearchKind;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
@@ -237,7 +237,8 @@ impl CommentsSheet {
         let shell = &theme.shell;
         let padding = f32::from(shell.rail_padding);
         let button = f32::from(shell.rail_icon_size + shell.rail_padding) + f32::from(shell.rail_item_gap);
-        let leading = if aside_navigator::steps_back(cx) { padding + button } else { padding };
+        let steps_back = comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.steps_back)(cx));
+        let leading = if steps_back { padding + button } else { padding };
         (leading, padding + button)
     }
 
@@ -1856,9 +1857,10 @@ impl CommentsSheet {
             .relative()
             .w_full()
             .child(Self::footer_chrome(&theme, state.read(cx).footer_height, cx))
-            .child(
-                CommentInput::new("comments-sheet-composer")
-                    .on_keyboard_visibility_change(move |is_keyboard_visible, _, cx| {
+            .children(comment_input_hooks().map(|hooks| {
+                (hooks.composer)(
+                    "comments-sheet-composer",
+                    Box::new(move |is_keyboard_visible: bool, _: f64, cx: &mut App| {
                         if !is_keyboard_visible {
                             return;
                         }
@@ -1866,14 +1868,15 @@ impl CommentsSheet {
                             state.selected_sheet_fraction = EXPANDED_SNAP_FRACTION;
                             cx.notify();
                         });
-                    })
-                    .on_picker_lift_change(move |lift, cx| {
+                    }),
+                    Box::new(move |lift: f32, cx: &mut App| {
                         lift_state.update(cx, |state, cx| {
                             state.picker_lift = lift;
                             cx.notify();
                         });
                     }),
-            )
+                )
+            }))
             .child(measure("comments-sheet-footer-height", move |bounds: Bounds<Pixels>, _, cx| {
                 let mut height = CommentsFooterHeightKey::DEFAULT_VALUE;
                 CommentsFooterHeightKey::reduce(&mut height, f32::from(bounds.size.height));
@@ -1912,7 +1915,7 @@ impl RenderOnce for CommentsSheet {
         let theme = Self::theme(cx);
         let is_preview = self.preview_comments.is_some();
         let docked = self.docked;
-        if !docked && !is_preview && aside_navigator::docks_comments(cx) {
+        if !docked && !is_preview && comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.docks_comments)(cx)) {
             tracing::warn!(target: "riseonly::X1421", "window comments sheet skipped, panel docks");
             return Empty.into_any_element();
         }
@@ -2017,9 +2020,10 @@ impl RenderOnce for CommentsSheet {
             },
             move |window: &mut Window, cx: &mut App| {
                 if footer_scope.preview_comments.is_some() {
-                    Self::hit_testing_disabled(
-                        CommentInput::new("comments-sheet-preview-composer").preview_text(Some(String::new())),
-                    )
+                    Self::hit_testing_disabled(comment_input_hooks().map_or_else(
+                        || Empty.into_any_element(),
+                        |hooks| (hooks.preview_composer)("comments-sheet-preview-composer", Some(String::new())),
+                    ))
                     .w_full()
                     .into_any_element()
                 } else {

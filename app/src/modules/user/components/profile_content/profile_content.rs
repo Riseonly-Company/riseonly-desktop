@@ -49,7 +49,6 @@ use crate::modules::story::stores::story::story_actions::story_profile_wire_type
 use crate::modules::story::stores::story::story_interactions::story_interactions::StoryInteractionsStore;
 use crate::modules::story::stores::story::story_services::story_services::StoryServicesStore;
 use crate::modules::user::components::profile_content::pages::comments::profile_comments::ProfileComments;
-use crate::modules::user::components::profile_content::pages::goals::goals::Goals;
 use crate::modules::user::components::profile_content::pages::grid_favorites::grid_favorites::GridFavorites;
 use crate::modules::user::components::profile_content::pages::grid_mentions::grid_mentions::GridMentions;
 use crate::modules::user::components::profile_content::pages::grid_posts::grid_posts::GridPosts;
@@ -57,6 +56,7 @@ use crate::modules::user::components::profile_content::pages::grid_reposts::grid
 use crate::modules::user::components::profile_content::pages::grid_riffs::grid_riffs::GridRiffs;
 use crate::modules::user::components::profile_content::pages::list_posts::list_posts::ListPosts;
 use crate::modules::user::components::profile_content::pages::plans::plans::Plans;
+use crate::modules::user::components::profile_content::profile_content_goals_hooks::profile_content_goals_hooks;
 use crate::modules::user::components::profile_content::profile_scroll_coordinator::{
     ProfileContentLayoutPolicy, ProfileHorizontalMotionElement, ProfileHorizontalPagerIntrospector,
     ProfileHorizontalPagerPolicy,
@@ -67,7 +67,6 @@ use crate::modules::user::components::profile_content::shared_element_return_scr
     SharedElementReturnScrollerKey, SharedElementReturnScrollerRef,
 };
 use crate::app::router::main_tab_chrome::MainTabChrome;
-use crate::modules::user::pages::profile::profile::ProfileCreateActionMetrics;
 use crate::modules::user::stores::user::user_actions::user_types::{GoalItem, PlanItem};
 use rise_ui::liquid_chrome::LiquidChrome;
 
@@ -139,6 +138,12 @@ impl ProfileContentTab {
             .filter(|tab| is_own_profile || *tab != Self::Favorites)
             .collect()
     }
+}
+
+pub enum ProfileCreateActionMetrics {}
+
+impl ProfileCreateActionMetrics {
+    pub const SIDE: f32 = 54.0;
 }
 
 /// laid out frame of the profile tabs bar and whether it leaves room for the create action
@@ -780,10 +785,11 @@ impl ProfileContent {
                     .into_any_element()
             }
             ProfileContentTab::Gifts => UserGiftsTab::new(self.profile_user_id.clone()).into_any_element(),
-            ProfileContentTab::Goals => Goals::new(tab_id("profile-tab-page", tab))
-                .is_own_profile(self.is_own_profile)
-                .foreign_goals(self.foreign_goals.clone())
-                .into_any_element(),
+            ProfileContentTab::Goals => profile_content_goals_hooks()
+                .map(|hooks| {
+                    (hooks.goals_page)(tab_id("profile-tab-page", tab), self.is_own_profile, self.foreign_goals.clone())
+                })
+                .unwrap_or_else(|| gpui::Empty.into_any_element()),
             ProfileContentTab::Plans => Plans::new(tab_id("profile-tab-page", tab))
                 .is_own_profile(self.is_own_profile)
                 .foreign_plans(self.foreign_plans.clone())

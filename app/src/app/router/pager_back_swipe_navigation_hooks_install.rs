@@ -7,7 +7,7 @@ use crate::app::router::navigation_fullscreen_pop::{
     NavigationFullscreenPop, NavigationFullscreenPopDelegate, NavigationInteractivePopGuard,
 };
 
-pub(crate) fn install_pager_back_swipe_navigation_hooks() {
+pub fn install_pager_back_swipe_navigation_hooks() {
     set_pager_back_swipe_navigation_hooks(PagerBackSwipeNavigationHooks {
         is_media_editor_editing: Rc::new(NavigationInteractivePopGuard::is_media_editor_editing),
         blocks_interactive_pop: Rc::new(blocks_interactive_pop),

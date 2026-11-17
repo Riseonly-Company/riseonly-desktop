@@ -3,7 +3,7 @@ use crate::modules::chat::shared::chat_saved_message_presentation::ChatMessageRe
 use crate::modules::chat::shared::utils::message_preview::MessagePreview;
 use crate::modules::chat::stores::chat_stores_hooks::{ChatStoresComponentsHooks, set_chat_stores_components_hooks};
 
-pub(crate) fn install_chat_stores_components_hooks() {
+pub fn install_chat_stores_components_hooks() {
     set_chat_stores_components_hooks(ChatStoresComponentsHooks {
         can_set: ChatWallpaperPermissions::can_set,
         can_add: ChatMessageReactionPolicy::can_add,

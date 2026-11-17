@@ -8,7 +8,7 @@ use crate::modules::rtc::system::rise_rtc_system_models::{RiseRTCSystemIncomingE
 const CALL_SYSTEM_UNAVAILABLE: &str = "rtc_callkit_unavailable";
 
 /// members of the shared call system coordinator that the engine and stores call
-pub(crate) struct RiseRTCCallSystemHooks {
+pub struct RiseRTCCallSystemHooks {
     pub(crate) report_remote_call_event: fn(&str, RiseRTCSystemVoIPEvent, &mut App),
     pub(crate) report_realtime_incoming_call: fn(RiseRTCSystemIncomingEnvelope, &mut App),
     pub(crate) report_media_connected: fn(&str, &mut App),
@@ -81,7 +81,7 @@ impl RiseRTCCallSystemHooks {
         }
     }
 
-    pub(crate) fn request_end_server_call_id(server_call_id: String, cx: &mut App) -> Task<anyhow::Result<bool>> {
+    pub fn request_end_server_call_id(server_call_id: String, cx: &mut App) -> Task<anyhow::Result<bool>> {
         match rise_rtc_call_system_hooks() {
             Some(hooks) => (hooks.request_end_server_call_id)(server_call_id, cx),
             None => Task::ready(Ok(false)),
@@ -102,7 +102,7 @@ impl RiseRTCCallSystemHooks {
         }
     }
 
-    pub(crate) fn request_muted_server_call_id(is_muted: bool, server_call_id: String, cx: &mut App) -> Task<anyhow::Result<bool>> {
+    pub fn request_muted_server_call_id(is_muted: bool, server_call_id: String, cx: &mut App) -> Task<anyhow::Result<bool>> {
         match rise_rtc_call_system_hooks() {
             Some(hooks) => (hooks.request_muted_server_call_id)(is_muted, server_call_id, cx),
             None => Task::ready(Ok(false)),

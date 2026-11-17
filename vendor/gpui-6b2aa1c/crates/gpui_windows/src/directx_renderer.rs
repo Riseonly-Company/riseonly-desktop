@@ -2141,6 +2141,14 @@ pub(crate) mod shader_resources {
         },
         core::{HSTRING, PCSTR},
     };
+    #[cfg(all(not(debug_assertions), gpui_runtime_shaders))]
+    use windows::{
+        Win32::Graphics::Direct3D::{
+            Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile},
+            ID3DBlob,
+        },
+        core::PCSTR,
+    };
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub(crate) enum ShaderModule {
@@ -2166,17 +2174,17 @@ pub(crate) mod shader_resources {
     pub(crate) struct RawShaderBytes<'t> {
         inner: &'t [u8],
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, gpui_runtime_shaders))]
         _blob: ID3DBlob,
     }
 
     impl<'t> RawShaderBytes<'t> {
         pub(crate) fn new(module: ShaderModule, target: ShaderTarget) -> Result<Self> {
-            #[cfg(not(debug_assertions))]
+            #[cfg(all(not(debug_assertions), not(gpui_runtime_shaders)))]
             {
                 Ok(Self::from_bytes(module, target))
             }
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, gpui_runtime_shaders))]
             {
                 let blob = build_shader_blob(module, target)?;
                 let inner = unsafe {
@@ -2193,7 +2201,7 @@ pub(crate) mod shader_resources {
             self.inner
         }
 
-        #[cfg(not(debug_assertions))]
+        #[cfg(all(not(debug_assertions), not(gpui_runtime_shaders)))]
         fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
             let bytes = match module {
                 ShaderModule::Quad => match target {
@@ -2311,10 +2319,61 @@ pub(crate) mod shader_resources {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(all(not(debug_assertions), gpui_runtime_shaders))]
+    pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
+        const ALPHA_CORRECTION_INCLUDE: &str = "#include \"alpha_correction.hlsl\"";
+        let source = if matches!(entry, ShaderModule::EmojiRasterization) {
+            include_str!("color_text_raster.hlsl")
+        } else {
+            include_str!("shaders.hlsl")
+        }
+        .replace(ALPHA_CORRECTION_INCLUDE, include_str!("alpha_correction.hlsl"));
+        let entry = format!(
+            "{}_{}\0",
+            entry.as_str(),
+            match target {
+                ShaderTarget::Vertex => "vertex",
+                ShaderTarget::Fragment => "fragment",
+            }
+        );
+        let target = match target {
+            ShaderTarget::Vertex => "vs_4_1\0",
+            ShaderTarget::Fragment => "ps_4_1\0",
+        };
+        let mut compile_blob = None;
+        let mut error_blob = None;
+        unsafe {
+            let ret = D3DCompile(
+                source.as_ptr().cast(),
+                source.len(),
+                PCSTR::null(),
+                None,
+                None,
+                PCSTR::from_raw(entry.as_ptr()),
+                PCSTR::from_raw(target.as_ptr()),
+                D3DCOMPILE_OPTIMIZATION_LEVEL3,
+                0,
+                &mut compile_blob,
+                Some(&mut error_blob),
+            );
+            if ret.is_err() {
+                let Some(error_blob) = error_blob else {
+                    return Err(anyhow::anyhow!("{ret:?}"));
+                };
+                let error_string =
+                    std::ffi::CStr::from_ptr(error_blob.GetBufferPointer() as *const i8)
+                        .to_string_lossy();
+                log::error!("Shader compile error: {}", error_string);
+                return Err(anyhow::anyhow!("Compile error: {}", error_string));
+            }
+        }
+        compile_blob.ok_or_else(|| anyhow::anyhow!("D3DCompile returned no blob"))
+    }
+
+    #[cfg(all(not(debug_assertions), not(gpui_runtime_shaders)))]
     include!(concat!(env!("OUT_DIR"), "/shaders_bytes.rs"));
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, gpui_runtime_shaders))]
     impl ShaderModule {
         pub fn as_str(self) -> &'static str {
             match self {

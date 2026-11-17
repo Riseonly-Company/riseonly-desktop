@@ -177,7 +177,7 @@ static LATEST_MEMORY: LazyLock<Mutex<HashMap<String, Weak<RenderImage>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static DISK_QUEUE: Mutex<Option<Duration>> = Mutex::new(None);
 static DISK_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().join("LottieStickerPosters"))
 });

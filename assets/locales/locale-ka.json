@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "გავაუქმოთ ცვლილებები?",
   "media_editor_discard_confirm": "ცვლილებების გაუქმება",
   "media_editor_discard_keep": "რედაქტირების გაგრძელება",
-  "story_canvas_photos_limit_reached": "შეგიძლიათ დაამატოთ მაქსიმუმ %d ფოტო"
+  "story_canvas_photos_limit_reached": "შეგიძლიათ დაამატოთ მაქსიმუმ %d ფოტო",
+  "error_rtc_overloaded": "ზარები ახლა დიდი დატვირთვის ქვეშაა. მიმდინარე ზარების სტაბილურობისთვის ახალი ზარები დროებით შეჩერებულია. სცადეთ ცოტა ხანში",
+  "overload_modal_title": "ახლა დიდი დატვირთვაა"
 }

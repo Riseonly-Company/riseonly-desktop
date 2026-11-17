@@ -282,12 +282,12 @@ fn transfer_ring(progress: f32) -> impl IntoElement {
 /// the glyph is one path here so the pass over layers becomes a stepped dim of the whole glyph
 /// steps fade the painted icon in the frame instead of repainting the window at display rate
 #[derive(IntoElement)]
-pub(crate) struct PlayingWaveform {
+pub struct PlayingWaveform {
     id: ElementId,
 }
 
 impl PlayingWaveform {
-    pub(crate) fn new(id: impl Into<ElementId>) -> Self {
+    pub fn new(id: impl Into<ElementId>) -> Self {
         Self { id: id.into() }
     }
 }

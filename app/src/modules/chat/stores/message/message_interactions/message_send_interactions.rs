@@ -27,7 +27,6 @@ use crate::core::lib::sai::sai::Sai;
 use crate::core::media::rise_media_kind_classifier::{RiseMediaKind, RiseMediaKindClassifier};
 use crate::core::ui::lottie_sticker::sticker_premium_effect::StickerPremiumEffectRegistry;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
-use crate::core::widgets::sheets::share_sheet::ShareSheetDestination;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::chat::composer::chat_link_preview_draft::{
     ChatLinkPreviewSelection, ChatLinkPreviewURL,
@@ -48,6 +47,8 @@ use crate::modules::chat::stores::message::message_actions::message_types::{
 };
 use crate::modules::chat::stores::message::message_actions::message_wire_types::RiseStoredOutgoingMessage;
 use crate::modules::chat::stores::message::message_interactions::message_interactions::MessageInteractionsStore;
+use crate::modules::chat::stores::message::message_interactions::message_send_stickers_hooks::message_send_stickers_hooks;
+use crate::modules::chat::stores::message::message_interactions::share_destination_hooks::ShareSheetDestination;
 use crate::modules::chat::stores::message::message_services::message_services::MessageServicesStore;
 use crate::modules::media_picker::api::media_picker_result::{
     MediaPickerEditedVideo, MediaPickerItem, MediaPickerItemKind,
@@ -60,7 +61,6 @@ use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::share_extension::send_handoff::share_send_handoff_models::RiseStoredSharePayloadResult;
 use crate::modules::share_extension::shared::rise_upload_context_rules::RiseLimitsUploadContextRulesExt;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::{GifItem, PackKind, StickerItem};
-use crate::modules::stickers::stores::stickers::stickers_interactions::stickers_interactions::StickersInteractionsStore;
 use crate::modules::story::stores::story::story_actions::story_wire_types::{StoryAuthorDTO, StoryDTO};
 
 const WEB_APP_BUTTON_TEXT_MAX_CHARACTERS: usize = 64;
@@ -1552,9 +1552,9 @@ impl MessageInteractionsStore {
 
         let user_id = AuthServicesStore::shared(cx).read(cx).effective_user_id_for_wire().unwrap_or_default();
         if !user_id.is_empty() {
-            StickersInteractionsStore::shared(cx).update(cx, |store, cx| {
-                store.write_recent(&user_id, &sticker.id, Some(PackKind::Sticker), cx);
-            });
+            if let Some(stickers) = message_send_stickers_hooks() {
+                (stickers.write_recent)(&user_id, &sticker.id, Some(PackKind::Sticker), cx);
+            }
         }
 
         Some(temp_id)
@@ -1638,9 +1638,9 @@ impl MessageInteractionsStore {
 
         let user_id = AuthServicesStore::shared(cx).read(cx).effective_user_id_for_wire().unwrap_or_default();
         if !user_id.is_empty() {
-            StickersInteractionsStore::shared(cx).update(cx, |store, cx| {
-                store.add_gif_favourite(&user_id, gif, cx);
-            });
+            if let Some(stickers) = message_send_stickers_hooks() {
+                (stickers.add_gif_favourite)(&user_id, gif, cx);
+            }
         }
 
         Some(temp_id)

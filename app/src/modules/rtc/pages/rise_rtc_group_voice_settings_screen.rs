@@ -284,7 +284,7 @@ impl RiseRTCGroupVoiceSettingsScreen {
             .child(
                 vstack(2.0)
                     .min_w_0()
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .items_start()
                     .child(MainText::new(title).px(14.0).font_weight(FontWeight::MEDIUM))
                     .when_some(value, |column, value| {
@@ -305,7 +305,7 @@ impl RiseRTCGroupVoiceSettingsScreen {
             .w_full()
             .px(px(14.0))
             .min_h(px(54.0))
-            .child(div().min_w_0().flex_shrink().child(MainText::new(title).px(14.0).font_weight(FontWeight::MEDIUM)))
+            .child(div().min_w_0().flex_shrink_1().child(MainText::new(title).px(14.0).font_weight(FontWeight::MEDIUM)))
             .child(spacer_min_w(8.0))
             .child(div().flex_none().child(Self::dimmed_control(can_manage, SwitchUi::new(id, value))))
     }

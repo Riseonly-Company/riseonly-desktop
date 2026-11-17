@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use gpui::{
-    AnyView, App, Context, ElementId, Empty, IntoElement, ListAlignment, ListOffset, ListState, ParentElement, Render,
-    RenderOnce, SharedString, Styled, Subscription, Window, div, list, prelude::*, px,
+    AnyView, App, Context, ElementId, Empty, IntoElement, ListAlignment, ListState, ParentElement, Render, RenderOnce,
+    SharedString, Styled, Subscription, Window, div, list, prelude::*, px,
 };
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::environment::{env, env_scope};
@@ -28,6 +28,7 @@ use crate::modules::post::components::post_feed_media_prefetch::PostFeedMediaPre
 use crate::modules::post::engine::rise_post_engine_models::{
     RisePostPagePresentation, RisePostPageScope, RisePostPageStatus, RisePostProfileKind, RisePostViewSurface,
 };
+pub use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 use crate::modules::post::pages::posts::post_detail::post_list_anchor_keeper::PostListAnchorKeeper;
 use crate::modules::post::pages::posts::post_detail::post_list_shared_element_destination::PostListSharedElementDestination;
 use crate::core::shared_element_transition::kernel::shared_element_types::ProfilePostListWindowPolicy;
@@ -36,35 +37,6 @@ use crate::modules::post::stores::post_interactions::post_interactions::PostInte
 use crate::modules::post::stores::post_services::post_services::PostServicesStore;
 
 const LIST_OVERDRAW: f32 = 600.0;
-
-/// tells the list which rows changed by row id, keeps
-/// rows on screen in place when rows arrive above them
-pub(crate) fn splice_list_rows(state: &ListState, rendered: &mut Vec<String>, rows: &[String]) {
-    if rendered.as_slice() == rows {
-        return;
-    }
-    let prefix = rendered.iter().zip(rows).take_while(|(old, new)| old == new).count();
-    let suffix = rendered[prefix..]
-        .iter()
-        .rev()
-        .zip(rows[prefix..].iter().rev())
-        .take_while(|(old, new)| old == new)
-        .count();
-    let top = state.logical_scroll_top();
-    let replaced = prefix..rendered.len() - suffix;
-    state.splice(replaced.clone(), rows.len() - prefix - suffix);
-    if prefix == 0 && suffix == rendered.len() && !rendered.is_empty() {
-        state.scroll_to(ListOffset {
-            item_ix: top.item_ix + rows.len() - suffix,
-            offset_in_item: top.offset_in_item,
-        });
-    } else if replaced.contains(&top.item_ix)
-        && let Some(item_ix) = rendered.get(top.item_ix).and_then(|id| rows.iter().position(|row| row == id))
-    {
-        state.scroll_to(ListOffset { item_ix, offset_in_item: top.offset_in_item });
-    }
-    *rendered = rows.to_vec();
-}
 
 type ConsumeCommentFocus = Rc<dyn Fn(&GetPostFeedResponse, &mut App)>;
 

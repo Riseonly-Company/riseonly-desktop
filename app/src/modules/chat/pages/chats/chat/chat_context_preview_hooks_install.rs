@@ -58,6 +58,6 @@ fn chat_screen_context_preview(
     })
 }
 
-pub(crate) fn install_chat_context_preview_hooks() {
+pub fn install_chat_context_preview_hooks() {
     set_chat_context_preview_hooks(ChatContextPreviewHooks { chat_screen, chat_screen_context_preview });
 }

@@ -73,7 +73,7 @@ impl Drop for ScheduledFlagGuard {
 static LOCK: LazyLock<Mutex<LedgerState>> = LazyLock::new(|| Mutex::new(LedgerState::default()));
 static NOTE_QUEUE: LazyLock<Mutex<NoteQueueState>> = LazyLock::new(|| Mutex::new(NoteQueueState::default()));
 static CACHE_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().to_path_buf())
 });

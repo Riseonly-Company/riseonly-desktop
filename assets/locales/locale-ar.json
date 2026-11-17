@@ -6034,5 +6034,7 @@
   "media_editor_discard_title": "تجاهل التغييرات؟",
   "media_editor_discard_confirm": "تجاهل التغييرات",
   "media_editor_discard_keep": "متابعة التعديل",
-  "story_canvas_photos_limit_reached": "يمكنك إضافة %d صور كحد أقصى"
+  "story_canvas_photos_limit_reached": "يمكنك إضافة %d صور كحد أقصى",
+  "error_rtc_overloaded": "المكالمات تحت ضغط كبير الآن. للحفاظ على استقرار المكالمات الجارية أوقفنا المكالمات الجديدة مؤقتًا. حاول مرة أخرى بعد قليل",
+  "overload_modal_title": "ضغط كبير الآن"
 }

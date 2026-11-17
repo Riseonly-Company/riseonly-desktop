@@ -27,6 +27,8 @@ jobs:
       linux: ${{ steps.plan.outputs.linux }}
       windows: ${{ steps.plan.outputs.windows }}
       macos: ${{ steps.plan.outputs.macos }}
+      linux_archs: ${{ steps.plan.outputs.linux_archs }}
+      windows_archs: ${{ steps.plan.outputs.windows_archs }}
       macos_archs: ${{ steps.plan.outputs.macos_archs }}
       tests: ${{ steps.plan.outputs.tests }}
       environment: ${{ steps.plan.outputs.environment }}
@@ -81,8 +83,12 @@ jobs:
   linux:
     needs: plan
     if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true'
-    runs-on: [self-hosted, linux, x64, riseonly-desktop-linux]
-    timeout-minutes: 120
+    runs-on: ${{ matrix.arch == 'aarch64' && fromJSON(vars.DESKTOP_LINUX_ARM_RUNNER || '"ubuntu-24.04-arm"') || fromJSON('["self-hosted", "linux", "x64", "riseonly-desktop-linux"]') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.linux_archs) }}
+    timeout-minutes: 180
     env:
       PROFILE: ${{ needs.plan.outputs.profile }}
       RISE_ENV: ${{ needs.plan.outputs.environment }}
@@ -102,13 +108,21 @@ jobs:
           ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
-      - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
+      - if: matrix.arch == 'aarch64'
+        name: room for the toolchain image and the target dir on the hosted runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} (${{ needs.plan.outputs.profile }})
+        env:
+          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && format('{0}/desktop-ci', runner.temp) || '' }}
+          DESKTOP_CI_MEMORY: ${{ matrix.arch == 'aarch64' && '14g' || '' }}
         run: |
           rm -rf riseonly-desktop/dist
           bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-linux
+          name: desktop-linux-${{ matrix.arch }}
           path: riseonly-desktop/dist/linux/
           retention-days: 7
           if-no-files-found: error
@@ -117,7 +131,12 @@ jobs:
     needs: plan
     if: needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
     runs-on: [self-hosted, linux, x64, riseonly-desktop-windows]
-    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.windows_archs) }}
+    timeout-minutes: 180
     env:
       PROFILE: ${{ needs.plan.outputs.profile }}
       RISE_ENV: ${{ needs.plan.outputs.environment }}
@@ -137,13 +156,15 @@ jobs:
           ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
-      - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
+      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} (${{ needs.plan.outputs.profile }})
+        env:
+          WIN_ARCH: ${{ matrix.arch }}
         run: |
           rm -rf riseonly-desktop/dist
           bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-windows
+          name: desktop-windows-${{ matrix.arch }}
           path: riseonly-desktop/dist/windows/
           retention-days: 7
           if-no-files-found: error

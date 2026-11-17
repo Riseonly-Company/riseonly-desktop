@@ -50,7 +50,7 @@ use crate::modules::chat::components::chat::composer::chat_composer_types::ChatD
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerItemKind};
 use crate::modules::media_picker::selection::media_selection_state::MediaSelectionState;
 use crate::modules::media_picker::ui::media_picker_selection_bar::MediaPickerCaptionBar;
-use crate::modules::media_picker::editor::media_editor_presentation_host::{
+use crate::modules::media_picker::ui::media_backdrop_hooks::{
     MEDIA_SEND_BACKDROP_BLUR, media_edge_color, media_send_backdrop,
 };
 use rise_ui::bottom_sheet_ui::bottom_sheet_backdrop::backdrop_blur_layer;

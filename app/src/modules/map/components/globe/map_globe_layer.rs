@@ -6,6 +6,7 @@ use rise_media::map_view::LatLng;
 
 use crate::modules::map::components::globe::map_globe_view::{MapGlobePerson, MapGlobeView};
 use crate::modules::map::components::pins::map_friend_pin_view::MapPinPalette;
+pub use crate::modules::map::stores::map_actions::map_interactions_hooks::MapCameraRequest;
 
 /// where the globe opens, a new id is a new entry even on the same spot
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -14,29 +15,6 @@ pub struct MapGlobeEntry {
     pub latitude: f64,
     pub longitude: f64,
     pub zoom_level: Option<f64>,
-}
-
-/// moves the flat map camera once per id, the way back from the globe
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct MapCameraRequest {
-    pub id: Uuid,
-    pub latitude: f64,
-    pub longitude: f64,
-    pub zoom_level: f64,
-    pub is_animated: bool,
-}
-
-impl MapCameraRequest {
-    /// plain init, animated is left at its default
-    pub fn new(id: Uuid, latitude: f64, longitude: f64, zoom_level: f64) -> Self {
-        Self {
-            id,
-            latitude,
-            longitude,
-            zoom_level,
-            is_animated: false,
-        }
-    }
 }
 
 /// back to the flat map with a coordinate and the zoom that matches the globe scale

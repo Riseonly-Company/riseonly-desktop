@@ -4,7 +4,7 @@ use crate::modules::auth::services::account_state_reset_hooks::{
 };
 use crate::modules::notify::engine::rise_notify_unread_presentation::RiseNotifyUnreadPresentation;
 
-pub(crate) fn install_account_state_reset_notify_hooks() {
+pub fn install_account_state_reset_notify_hooks() {
     set_account_state_reset_notify_hooks(AccountStateResetNotifyHooks {
         fence_account_transition: |cx| {
             RiseNotifyUnreadPresentation::shared(cx).update(cx, |presentation, cx| {

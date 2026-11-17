@@ -965,7 +965,7 @@ impl MapGlobeArt {
     }
 
     fn folder() -> Option<PathBuf> {
-        AppPaths::resolve(AppEnvironment::compiled().canon())
+        AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .map(|paths| paths.cache_dir().join("map-globe"))
     }
@@ -996,7 +996,7 @@ impl MapGlobeArt {
                 return Some(stored);
             }
             std::fs::create_dir_all(&folder).ok()?;
-            let paths = AppPaths::resolve(AppEnvironment::compiled().canon()).ok()?;
+            let paths = AppPaths::resolve(AppEnvironment::current().canon()).ok()?;
             let request = SnapshotRequest {
                 style_json,
                 width: Self::TEXTURE_POINTS,

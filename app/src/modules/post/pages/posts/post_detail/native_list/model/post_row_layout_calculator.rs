@@ -845,22 +845,6 @@ impl PostRowLayoutCalculator {
     }
 }
 
-impl PostRowCaptionLayout {
-    /// same blocks with the part frame at origin, block frames stay local
-    pub fn moved_to(&self, origin: Point<Pixels>) -> PostRowCaptionLayout {
-        PostRowCaptionLayout {
-            frame: Bounds {
-                origin,
-                size: self.frame.size,
-            },
-            title: self.title.clone(),
-            paragraphs: self.paragraphs.clone(),
-            hashtags: self.hashtags.clone(),
-            toggle: self.toggle.clone(),
-        }
-    }
-}
-
 impl PostRowSeed {
     pub fn replacing_content(&self, new_content: String) -> PostRowSeed {
         PostRowSeed {

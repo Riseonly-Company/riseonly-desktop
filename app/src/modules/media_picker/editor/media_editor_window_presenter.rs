@@ -13,11 +13,18 @@ use crate::core::ui::bottom_sheet_ui::experimental_bottom_sheet_presentation_hos
 use crate::core::lib::sai::sai::Sai;
 use crate::modules::media_picker::api::media_picker_configuration::MediaPickerConfiguration;
 use crate::modules::media_picker::api::media_picker_presenter_resolver::MediaPickerPresenterResolver;
-use crate::modules::media_picker::editor::media_editor_presentation_host::MediaEditorPresentationHost;
-use crate::modules::media_picker::editor::media_editor_screen::MediaEditorOutcome;
+use crate::modules::media_picker::editor::media_editor_view_hooks::media_editor_view_hooks;
 use crate::modules::media_picker::editor::media_reedit_launcher::MediaReeditLauncher;
 use crate::modules::media_picker::library::media_asset::MediaAsset;
+use crate::modules::media_picker::selection::media_selection_state::MediaSelectionEdit;
 use crate::modules::media_picker::ui::media_picker_session::{MediaPickerExportProgressPresenter, MediaPickerSession};
+
+#[derive(Clone)]
+pub struct MediaEditorOutcome {
+    pub edit: MediaSelectionEdit,
+    pub immediate_send: bool,
+    pub selects_asset: bool,
+}
 
 pub type MediaEditorWindowOutcomeHandler = Rc<dyn Fn(MediaEditorOutcome, MediaAsset, &mut Window, &mut App)>;
 
@@ -282,17 +289,17 @@ struct MediaEditorWindowHostView {
 impl Render for MediaEditorWindowHostView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let session = self.session.read(cx);
-        div().absolute().inset_0().child(
-            MediaEditorPresentationHost::new(
+        div().absolute().inset_0().children(media_editor_view_hooks().map(|hooks| {
+            (hooks.presentation_host)(
                 session.editor_presentation.clone(),
                 self.theme_store.clone(),
                 self.configuration.clone(),
                 session.selection.clone(),
                 session.caption.clone(),
                 self.on_outcome.clone(),
+                session.fetcher.clone(),
             )
-            .fetcher(Some(session.fetcher.clone())),
-        )
+        }))
     }
 }
 

@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "変更を破棄しますか？",
   "media_editor_discard_confirm": "変更を破棄",
   "media_editor_discard_keep": "編集を続ける",
-  "story_canvas_photos_limit_reached": "写真は最大 %d 枚まで追加できます"
+  "story_canvas_photos_limit_reached": "写真は最大 %d 枚まで追加できます",
+  "error_rtc_overloaded": "ただいま通話が大変混み合っています。進行中の通話を安定させるため、新しい通話を一時的に停止しています。少し時間をおいてもう一度お試しください",
+  "overload_modal_title": "ただいま混み合っています"
 }

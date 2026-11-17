@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui::{App, Context, Entity};
 
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::map::engine::map_guide_sandbox_hooks::map_guide_sandbox_hooks;
 use crate::modules::map::engine::core::map_track_tile_store::MapTrackTileStore;
 use crate::modules::map::engine::rise_map_drafts_repository::RiseMapDraftsSnapshot;
 use crate::modules::map::engine::rise_map_engine_models::{
@@ -29,25 +29,25 @@ impl MapServicesStore {
     pub fn state(cx: &mut App) -> RiseMapStateSnapshot {
         let presentation = RiseMapPresentation::shared(cx);
         let real = presentation.read(cx).state.read(cx).snapshot().clone();
-        GuideSandbox::shared(cx).read(cx).map_state(real)
+        (map_guide_sandbox_hooks().map_state)(real, cx)
     }
 
     pub fn friends(cx: &mut App) -> RiseMapFriendsSnapshot {
         let presentation = RiseMapPresentation::shared(cx);
         let real = presentation.read(cx).friends.read(cx).snapshot().clone();
-        GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.map_friends(real, cx))
+        (map_guide_sandbox_hooks().map_friends)(real, cx)
     }
 
     pub fn live(cx: &mut App) -> RiseMapLiveSnapshot {
         let presentation = RiseMapPresentation::shared(cx);
         let real = presentation.read(cx).live.read(cx).snapshot().clone();
-        GuideSandbox::shared(cx).read(cx).map_live(real)
+        (map_guide_sandbox_hooks().map_live)(real, cx)
     }
 
     pub fn tracks(cx: &mut App) -> RiseMapTracksSnapshot {
         let presentation = RiseMapPresentation::shared(cx);
         let real = presentation.read(cx).tracks.read(cx).snapshot().clone();
-        GuideSandbox::shared(cx).read(cx).map_tracks(real)
+        (map_guide_sandbox_hooks().map_tracks)(real, cx)
     }
 
     pub fn privacy(cx: &mut App) -> RiseMapPrivacySnapshot {
@@ -58,7 +58,7 @@ impl MapServicesStore {
     pub fn photos(cx: &mut App) -> RiseMapPhotosSnapshot {
         let presentation = RiseMapPresentation::shared(cx);
         let real = presentation.read(cx).photos.read(cx).snapshot().clone();
-        GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.map_photos(real, cx))
+        (map_guide_sandbox_hooks().map_photos)(real, cx)
     }
 
     pub fn drafts(cx: &mut App) -> RiseMapDraftsSnapshot {

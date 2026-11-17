@@ -28,7 +28,7 @@ fn structural_updates_blocked(cx: &App) -> Option<Rc<dyn Fn(&App) -> bool>> {
     Some(Rc::new(move |cx: &App| transition.read(cx).structural_updates_blocked()))
 }
 
-pub(crate) fn install_chat_decorative_backdrop_hooks() {
+pub fn install_chat_decorative_backdrop_hooks() {
     set_chat_decorative_backdrop_hooks(ChatDecorativeBackdropHooks {
         background_work_retry_interval,
         chat_presentation_epoch,

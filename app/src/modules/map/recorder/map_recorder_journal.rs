@@ -128,7 +128,7 @@ impl MapRecorderJournal {
     }
 
     fn new(account_id: &str) -> Self {
-        let base = AppPaths::resolve(AppEnvironment::compiled().canon())
+        let base = AppPaths::resolve(AppEnvironment::current().canon())
             .ok()
             .filter(|paths| paths.create_all().is_ok())
             .map(|paths| paths.data_dir().to_path_buf());

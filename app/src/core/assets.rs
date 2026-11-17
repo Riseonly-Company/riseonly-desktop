@@ -71,6 +71,11 @@ impl AssetSource for RiseAssets {
     }
 }
 
+pub fn packaged_file(name: &str) -> Option<PathBuf> {
+    let file = locate_assets()?.parent()?.join(name);
+    file.is_file().then_some(file)
+}
+
 fn locate_assets() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
@@ -96,7 +101,7 @@ fn locate_assets() -> Option<PathBuf> {
     }
 
     if cfg!(debug_assertions) {
-        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets");
+        let candidate = PathBuf::from(env!("RISE_WORKSPACE_DIR")).join("assets");
         if candidate.join("locales").is_dir() {
             return std::fs::canonicalize(candidate).ok();
         }
@@ -112,7 +117,7 @@ mod tests {
     fn repo_assets() -> RiseAssets {
         RiseAssets {
             root: std::fs::canonicalize(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets"),
+                PathBuf::from(env!("RISE_WORKSPACE_DIR")).join("assets"),
             )
             .ok(),
         }

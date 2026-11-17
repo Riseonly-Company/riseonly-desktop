@@ -15,10 +15,10 @@ use rise_platform::call_window::{
 use rise_ui::main_text::{MainText, TextAlignT};
 use rise_ui::swiftui::prelude::*;
 
-use crate::app::root_view::RootView;
 use crate::core::ui::clever_image_ui::CleverImageCachePolicy;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, RiseSubscription, UIApplication};
+use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 
 /// current window owner
 /// two screens compete (direct call and voice room) and can both be mounted
@@ -300,7 +300,8 @@ impl RiseRTCCallPictureInPictureController {
         if self.owner != Some(owner) {
             return;
         }
-        let main_window = cx.windows().into_iter().find(|window| window.downcast::<RootView>().is_some());
+        let main_window = rise_rtc_call_window_hooks()
+            .and_then(|hooks| cx.windows().into_iter().find(|window| (hooks.is_main_window)(*window)));
         self.main_window = main_window;
         let display = main_window
             .and_then(|window| window.update(cx, |_, window, cx| window.display(cx)).ok().flatten())
@@ -344,7 +345,7 @@ impl RiseRTCCallPictureInPictureController {
         let generation = self.controller_generation;
         let controller = cx.entity();
         let options = gpui::WindowOptions {
-            app_id: crate::app::shell::window_presenter::WindowPresenter::app_id(),
+            app_id: rise_rtc_call_window_hooks().and_then(|hooks| (hooks.app_id)()),
             ..floating_window_options(visible, display_id)
         };
         cx.defer(move |cx| {

@@ -158,18 +158,18 @@ struct EditorAdjustmentsRendererState {
 }
 
 #[derive(Default)]
-pub(crate) struct EditorAdjustmentsRenderer {
+pub struct EditorAdjustmentsRenderer {
     state_lock: Mutex<EditorAdjustmentsRendererState>,
 }
 
 static SHARED: LazyLock<EditorAdjustmentsRenderer> = LazyLock::new(EditorAdjustmentsRenderer::default);
 
 impl EditorAdjustmentsRenderer {
-    pub(crate) fn shared() -> &'static EditorAdjustmentsRenderer {
+    pub fn shared() -> &'static EditorAdjustmentsRenderer {
         &SHARED
     }
 
-    pub(crate) fn render(&self, source: &Arc<RenderImage>, adjustments: &EditorImageAdjustments) -> Arc<RenderImage> {
+    pub fn render(&self, source: &Arc<RenderImage>, adjustments: &EditorImageAdjustments) -> Arc<RenderImage> {
         let mut state = self.state_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if adjustments.is_identity() {
             return source.clone();
@@ -202,7 +202,7 @@ impl EditorAdjustmentsRenderer {
         source.clone()
     }
 
-    pub(crate) fn reset_account_state(&self) {
+    pub fn reset_account_state(&self) {
         let mut state = self.state_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         state.cached_source = None;
         state.cached_source_ci = None;

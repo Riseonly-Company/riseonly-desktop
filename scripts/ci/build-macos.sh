@@ -38,10 +38,18 @@ if [ ! -d "vendor/ffmpeg/macos-$ffmpeg_arch/lib" ]; then
 fi
 python3 scripts/check-ffmpeg-license.py "vendor/ffmpeg/macos-$ffmpeg_arch"
 
-cargo build --locked --profile "$profile" ${target_args[@]+"${target_args[@]}"} -p riseonly
-bash scripts/bundle-macos.sh "$profile"
-
-app=$(find "build/macos/$profile" -maxdepth 1 -name "*.app" -print -quit)
+bin="${CARGO_TARGET_DIR:-target}/${RISE_MACOS_TARGET:+$RISE_MACOS_TARGET/}$profile/riseonly"
+if [ -n "${PAYLOAD:-}" ]; then
+    mkdir -p "$(dirname "$bin")"
+    cp "$PAYLOAD/riseonly" "$bin"
+    chmod +x "$bin"
+else
+    env -u RISE_ENV cargo build --locked --profile "$profile" ${target_args[@]+"${target_args[@]}"} -p riseonly
+    rm -rf "payload/macos-$arch"
+    mkdir -p "payload/macos-$arch"
+    cp "$bin" "payload/macos-$arch/riseonly"
+fi
+app=$(bash scripts/bundle-macos.sh "$profile" | tee /dev/stderr | sed -n 's/^bundled: \(.*\)  (.*)$/\1/p')
 [ -d "$app" ] || { echo "no bundle under build/macos/$profile" >&2; exit 1; }
 lipo -archs "$app/Contents/MacOS/riseonly" | grep -qw "$([ "$arch" = aarch64 ] && echo arm64 || echo x86_64)" ||
     { echo "the bundle is not $arch" >&2; exit 1; }

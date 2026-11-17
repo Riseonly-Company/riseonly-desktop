@@ -98,14 +98,6 @@ impl MainTabBarMetrics {
     pub const MEDIA_GLASS_WHITE: f32 = 0.17;
 }
 
-impl RiseTabBarSurface {
-    /// glass only where the system draws it, desktop paints the older capsule for every choice
-    pub fn draws_glass(self) -> bool {
-        let _ = self;
-        false
-    }
-}
-
 /// row of the more page, the bar draws only the settings and the command palette lists all
 #[derive(Clone, Copy)]
 pub struct MainTabBarMoreEntry {

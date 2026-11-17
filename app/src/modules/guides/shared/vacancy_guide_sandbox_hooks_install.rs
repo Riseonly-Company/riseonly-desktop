@@ -7,7 +7,7 @@ use crate::modules::vacancy::stores::vacancy_guide_sandbox_hooks::{
     VacancyGuideSandboxHooks, set_vacancy_guide_sandbox_hooks,
 };
 
-pub(crate) fn install_vacancy_guide_sandbox_hooks() {
+pub fn install_vacancy_guide_sandbox_hooks() {
     let _ = set_vacancy_guide_sandbox_hooks(VacancyGuideSandboxHooks {
         owns_jobs_scene,
         hides_real_resumes,

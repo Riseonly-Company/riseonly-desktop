@@ -1165,12 +1165,12 @@ struct RiseOutgoingMediaUploadHintsVideoMetadata {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RiseOutgoingMediaUploadHints {
-    pub(crate) width: Option<i64>,
-    pub(crate) height: Option<i64>,
-    pub(crate) duration: Option<i64>,
-    pub(crate) thumbnail_url: Option<PathBuf>,
-    pub(crate) generated_thumbnail_url: Option<PathBuf>,
+pub struct RiseOutgoingMediaUploadHints {
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration: Option<i64>,
+    pub thumbnail_url: Option<PathBuf>,
+    pub generated_thumbnail_url: Option<PathBuf>,
     pub(crate) is_sole_thumbnail_source: bool,
 }
 
@@ -1185,7 +1185,7 @@ impl RiseOutgoingMediaUploadHints {
         RiseChunkedUploadClient::maximum_inline_video_thumbnail_bytes()
     }
 
-    pub(crate) async fn make(
+    pub async fn make(
         compressed: &OutgoingMediaCompressorResult,
         local_file: &RiseOutgoingMediaFile,
         picker_item: Option<&MediaPickerItem>,
@@ -1408,7 +1408,7 @@ impl Drop for RiseDeferredRenderCancellation {
 pub enum RiseDeferredPhotoImageSource {}
 
 impl RiseDeferredPhotoImageSource {
-    pub(crate) async fn materialize_if_needed(
+    pub async fn materialize_if_needed(
         picker_item: Option<&MediaPickerItem>,
         preserve_reedit_document: bool,
         on_progress: OutgoingMediaProgress,
@@ -1536,7 +1536,7 @@ impl RiseDeferredPhotoImageSource {
 pub enum RiseDeferredPhotoVideoSource {}
 
 impl RiseDeferredPhotoVideoSource {
-    pub(crate) async fn materialize_if_needed(
+    pub async fn materialize_if_needed(
         picker_item: Option<&MediaPickerItem>,
         on_progress: OutgoingMediaProgress,
         is_cancelled: OutgoingMediaIsCancelled,

@@ -13,7 +13,7 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{
     SaiWsCachePreferredLayer, SaiWsDiskCachePolicy,
 };
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::notify::stores::notify_services::notify_guide_sandbox_hooks::notify_guide_sandbox_hooks;
 use crate::modules::notify::stores::notify_actions::notify_profile_settings_wire_types::{
     ProfileNotificationSettingsGatewayDTO, ProfileNotificationSettingsGatewayModel, ProfileNotificationSettingsModel,
     ProfileNotificationSettingsMutation,
@@ -58,7 +58,7 @@ impl NotifyServicesStore {
         target_user_id: &str,
         cx: &mut Context<Self>,
     ) -> Option<ProfileNotificationSettingsModel> {
-        if let Some(practice) = GuideSandbox::shared(cx).read(cx).person_notifications(target_user_id) {
+        if let Some(practice) = (notify_guide_sandbox_hooks().person_notifications)(target_user_id, cx) {
             return Some(practice);
         }
         self.profile_notification_settings_dto(target_user_id, true, cx)

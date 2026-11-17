@@ -6,17 +6,17 @@ use crate::core::feature_hooks::FeatureHookSlot;
 
 /// slot for the upload ring and status label to read the active conversation domain
 /// and its upload progress updates
-pub(crate) struct RiseExactUploadProgressRingHooks {
-    pub(crate) upload_progress_updates:
+pub struct RiseExactUploadProgressRingHooks {
+    pub upload_progress_updates:
         fn(&App, RiseUploadKey) -> Option<LocalBoxFuture<'static, RiseUploadProgressStream<Option<RiseUploadProgress>>>>,
 }
 
 pub(crate) static RISE_EXACT_UPLOAD_PROGRESS_RING_HOOKS: FeatureHookSlot<RiseExactUploadProgressRingHooks> = FeatureHookSlot::new("RISE_EXACT_UPLOAD_PROGRESS_RING_HOOKS");
 
-pub(crate) fn set_rise_exact_upload_progress_ring_hooks(hooks: RiseExactUploadProgressRingHooks) {
+pub fn set_rise_exact_upload_progress_ring_hooks(hooks: RiseExactUploadProgressRingHooks) {
     let _ = RISE_EXACT_UPLOAD_PROGRESS_RING_HOOKS.set(hooks);
 }
 
-pub(crate) fn rise_exact_upload_progress_ring_hooks() -> Option<&'static RiseExactUploadProgressRingHooks> {
+pub fn rise_exact_upload_progress_ring_hooks() -> Option<&'static RiseExactUploadProgressRingHooks> {
     RISE_EXACT_UPLOAD_PROGRESS_RING_HOOKS.get()
 }

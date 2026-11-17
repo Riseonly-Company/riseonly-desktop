@@ -4,8 +4,10 @@ use crate::core::config::app_environment::AppEnvironment;
 use crate::core::push_notifications::push_deep_link_store::PushDeepLink;
 use crate::core::push_notifications::universal_link_parser::UniversalLinkParser;
 use crate::modules::bot::shared::bot_start_payload::BotStartPayload;
+use crate::modules::bot::stores::bot::bot_actions::universal_link_parser_hooks_install::install_universal_link_parser_hooks;
 
 fn parse(string: &str) -> Option<PushDeepLink> {
+    install_universal_link_parser_hooks();
     let url = Url::from_string(string).expect("valid url");
     UniversalLinkParser::parse(&url, AppEnvironment::Prod)
 }

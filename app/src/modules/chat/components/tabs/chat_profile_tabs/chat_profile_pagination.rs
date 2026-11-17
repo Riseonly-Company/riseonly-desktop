@@ -193,7 +193,7 @@ impl RenderOnce for ChatProfilePaginationPrefetchModifier {
 }
 
 /// adds the pagination prefetch modifier to rows, the id is the domain id of the row
-pub(crate) trait ChatProfilePaginationPrefetchModifiers: IntoElement + Sized {
+pub trait ChatProfilePaginationPrefetchModifiers: IntoElement + Sized {
     const DEFAULT_THRESHOLD: i64 = 8;
 
     /// threshold none means the default one

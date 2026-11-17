@@ -1167,7 +1167,7 @@ impl ChatPerformanceTrace {
         scale: f32,
     ) -> HashMap<String, String> {
         let build_configuration = if cfg!(debug_assertions) { "debug" } else { "release" };
-        let app_info = AppInfo::current(AppEnvironment::compiled().as_str());
+        let app_info = AppInfo::current(AppEnvironment::current().as_str());
         let build = app_info.as_ref().map_or_else(|| "unknown".to_owned(), |info| info.build.clone());
         let version = app_info.as_ref().map_or_else(|| "unknown".to_owned(), |info| info.short_version.clone());
         let sampler_refresh =

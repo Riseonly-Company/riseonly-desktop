@@ -359,3 +359,11 @@ impl RiseTabBarSettingsChange {
         }
     }
 }
+
+impl RiseTabBarSurface {
+    /// glass only where the system draws it, desktop paints the older capsule for every choice
+    pub fn draws_glass(self) -> bool {
+        let _ = self;
+        false
+    }
+}

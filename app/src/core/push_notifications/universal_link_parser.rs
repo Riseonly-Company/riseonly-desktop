@@ -11,7 +11,7 @@ use rise_deeplink::{
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::push_notifications::push_deep_link_store::PushDeepLink;
 use crate::core::push_notifications::riseonly_public_link::{DeepLinkForms, RiseonlyPublicLink};
-use crate::modules::bot::stores::bot::bot_actions::bot_types::BotTagRules;
+use crate::core::push_notifications::universal_link_parser_hooks::universal_link_parser_hooks;
 
 pub enum UniversalLinkParser {}
 
@@ -46,14 +46,16 @@ impl UniversalLinkParser {
 
         let routes = DeepLinkForms::routes(&section);
 
-        let is_bot_tag =
-            segments.len() == 2 && BotTagRules::is_valid(&segments[1].to_lowercase());
+        let is_bot_tag = segments.len() == 2
+            && universal_link_parser_hooks()
+                .is_some_and(|hooks| (hooks.is_valid_bot_tag)(&segments[1].to_lowercase()));
         if segments.len() == 2
             && (routes.contains(&RouteKind::BotChat)
                 || (routes.contains(&RouteKind::Chat) && is_bot_tag))
         {
             let tag = RiseonlyPublicLink::normalized_tag(&segments[1])?;
-            if !(routes.contains(&RouteKind::BotChat) || BotTagRules::is_valid(&tag))
+            if !(routes.contains(&RouteKind::BotChat)
+                || universal_link_parser_hooks().is_some_and(|hooks| (hooks.is_valid_bot_tag)(&tag)))
                 || components.percent_encoded_fragment().is_some()
             {
                 return None;

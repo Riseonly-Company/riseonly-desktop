@@ -26,8 +26,9 @@ use crate::core::ui::clever_image_ui::CleverImageCachePolicy;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::modules::media_picker::api::media_picker_configuration::{MediaPickerConfiguration, MediaPickerSourceTab};
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerResult};
-use crate::modules::media_picker::editor::media_editor_screen::MediaEditorOutcome;
-use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorWindowPresenter;
+use crate::modules::media_picker::editor::media_editor_window_presenter::{
+    MediaEditorOutcome, MediaEditorWindowPresenter,
+};
 use crate::modules::media_picker::library::media_asset::MediaAsset;
 use crate::modules::media_picker::ui::media_picker_screen::{MediaPickerLayout, MediaPickerScreen};
 use crate::modules::media_picker::ui::media_picker_session::MediaPickerSession;

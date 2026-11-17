@@ -7,7 +7,7 @@ use crate::modules::music::shared::utils::music::music_external_audio_owner::Mus
 use crate::modules::music::shared::utils::music::music_listening_interruption_gate::MusicListeningInterruptionGate;
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
 
-pub(crate) fn install_chat_music_hooks() {
+pub fn install_chat_music_hooks() {
     set_chat_music_hooks(ChatMusicHooks {
         suspend_for_external_audio: |owner, resume_when_finished, cx| {
             MusicPlayerState::shared(cx)

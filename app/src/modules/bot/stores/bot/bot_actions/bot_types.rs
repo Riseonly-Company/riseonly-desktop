@@ -6,37 +6,7 @@ use rise_validate::CHARSET_TAG;
 
 use crate::core::lib::canon_rules::ValidationSchemaCanonRules;
 use crate::modules::bot::shared::bot_ui_validation::BotFieldRules;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BotModel {
-    pub id: String,
-    pub owner_user_id: String,
-    pub bot_user_id: String,
-    pub private_chat_id: String,
-    pub tag: String,
-    pub name: String,
-    pub description: String,
-    pub avatar_url: String,
-    pub banner_url: String,
-    pub is_active: bool,
-    pub can_join_groups: bool,
-    pub privacy_mode: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub bot_user_chat_id: String,
-    pub is_owned_by_requester: bool,
-    pub moderation_status: String,
-    pub is_system: bool,
-}
-
-impl BotModel {
-    pub const DEFAULT_MODERATION_STATUS: &'static str = "active";
-    const DISABLED_MODERATION_STATUS: &'static str = "disabled";
-
-    pub fn is_moderation_disabled(&self) -> bool {
-        self.moderation_status == Self::DISABLED_MODERATION_STATUS
-    }
-}
+pub use crate::modules::chat::engine::bot_model_hooks::BotModel;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BotCommandModel {

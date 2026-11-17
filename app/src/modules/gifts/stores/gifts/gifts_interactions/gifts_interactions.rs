@@ -16,7 +16,6 @@ use crate::core::widgets::notifier::notifier_store::{
 };
 use crate::core::widgets::notifier::notifier_host::EDGE_PADDING as NOTIFIER_EDGE_PADDING;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::gifts::pages::gift_shop_sheet::GiftShopSheetFooter;
 use crate::modules::gifts::engine::rise_gifts_engine_models::{
     RiseGiftAttributeKind, RiseGiftCatalogItemDTO, RiseGiftCatalogItemExt, RiseGiftInstanceDTO,
     RiseGiftInstanceExt, RiseGiftItemKind, RiseGiftUserDTO,
@@ -24,6 +23,7 @@ use crate::modules::gifts::engine::rise_gifts_engine_models::{
 use crate::modules::gifts::shared::gift_market_kinds::GiftMarketKinds;
 use crate::modules::gifts::shared::gift_people::GiftPeople;
 use crate::modules::gifts::stores::gifts::gifts_actions::gifts_actions::GiftsActionsStore;
+use crate::modules::gifts::stores::gifts::gifts_interactions::gift_shop_footer_hooks::gift_shop_footer_window_lift;
 use crate::modules::gifts::stores::gifts::gifts_services::gifts_services::GiftsServicesStore;
 use crate::modules::sparks::engine::rise_sparks_repository::RiseSparksFailure;
 use crate::modules::sparks::stores::sparks::sparks_actions::sparks_actions::SparksActionsStore;
@@ -331,7 +331,7 @@ impl GiftsInteractionsStore {
         cx.update(|cx| {
             let button_height = f32::from(ThemeStore::shared(cx).read(cx).current_theme().button.height_300);
             let footer_lift = button_height + GIFT_SHOP_SHEET_FOOTER_VERTICAL_PADDING;
-            let footer_lift = GiftShopSheetFooter::window_lift()
+            let footer_lift = gift_shop_footer_window_lift()
                 .map_or(footer_lift, |lift| footer_lift.max(lift - NOTIFIER_EDGE_PADDING));
             Notifier::send(
                 title,

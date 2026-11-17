@@ -2,7 +2,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Entity, IntoElement, Render, RenderOnce, Subscription, Task, Window, div, prelude::*, px,
+    AnyElement, AnyView, App, Context, Entity, IntoElement, Render, RenderOnce, Subscription, Task, Window, div,
+    prelude::*, px,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_ui::swiftui::animated::Animated;
@@ -14,7 +15,7 @@ use rise_ui::swiftui::motion::{Spring, spring};
 use crate::app::router::navigation_types::CreatePostIntent;
 use crate::core::widgets::navigations::bottom_chrome_insets::BottomChromeInsetsModifiers;
 use crate::modules::camera::capture::rise_camera_presenter::RiseCameraPresenter;
-use crate::modules::user::pages::profile::create_post::create_post_media_page::CreatePostMediaPage;
+use crate::modules::camera::components::feed_media_picker_page_hooks::feed_media_picker_page_hooks;
 
 const SETTLE_RESPONSE: f64 = 0.34;
 const SETTLE_DAMPING_FRACTION: f64 = 0.92;
@@ -169,7 +170,7 @@ impl FeedMediaPickerReveal {
 
 pub struct FeedMediaPickerHost {
     reveal: Entity<FeedMediaPickerReveal>,
-    page: Option<Entity<CreatePostMediaPage>>,
+    page: Option<AnyView>,
     close_drag_axis: Rc<Cell<Option<bool>>>,
     width: Rc<Cell<f32>>,
     _reveal_observation: Subscription,
@@ -238,10 +239,13 @@ impl Render for FeedMediaPickerHost {
             self.page = None;
             return host.into_any_element();
         }
-        let page = self
-            .page
-            .get_or_insert_with(|| cx.new(|_| CreatePostMediaPage::new(CreatePostIntent::Publication, None, None)))
-            .clone();
+        if self.page.is_none() {
+            self.page = feed_media_picker_page_hooks()
+                .map(|hooks| (hooks.create_post_media_page)(CreatePostIntent::Publication, None, None, cx));
+        }
+        let Some(page) = self.page.clone() else {
+            return host.into_any_element();
+        };
         let actions = CreatePostMediaHostActions {
             on_dismiss: Rc::new(|_, cx| {
                 FeedMediaPickerReveal::shared(cx).update(cx, |reveal, cx| reveal.close(true, cx));

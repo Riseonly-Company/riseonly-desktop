@@ -1,8 +1,8 @@
 use gpui::{App, Global, actions};
 use rise_canon::RiseBugReportSurface;
 
+use crate::core::desktop_platform::bug_report_surface_hooks::BugReportSurfaceProbe;
 use crate::core::desktop_platform::rise_app_lifecycle::{RiseAppLifecycle, ScenePhase};
-use crate::modules::diagnostics::pages::bug_report::bug_report_sheet_host::BugReportSurfaceProbe;
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_interactions::bug_report_interactions::BugReportInteractionsStore;
 
 actions!(rise_bug_report, [ReportBug]);

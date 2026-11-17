@@ -85,7 +85,7 @@ const AUDIO_SIGNATURES: [&[u8]; 7] = [
 const ISO_MEDIA_FILE_TYPE_BOX: [u8; 4] = [0x66, 0x74, 0x79, 0x70];
 
 static DATA_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    let paths = AppPaths::resolve(AppEnvironment::compiled().canon()).ok()?;
+    let paths = AppPaths::resolve(AppEnvironment::current().canon()).ok()?;
     paths.create_all().ok()?;
     Some(paths.data_dir().to_path_buf())
 });

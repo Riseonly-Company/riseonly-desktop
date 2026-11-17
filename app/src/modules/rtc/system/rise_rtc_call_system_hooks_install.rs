@@ -1,7 +1,7 @@
 use crate::modules::rtc::engine::rise_rtc_call_system_hooks::{RiseRTCCallSystemHooks, set_rise_rtc_call_system_hooks};
 use crate::modules::rtc::system::rise_rtc_call_system_coordinator::RiseRTCCallSystemCoordinator;
 
-pub(crate) fn install_rise_rtc_call_system_hooks() {
+pub fn install_rise_rtc_call_system_hooks() {
     set_rise_rtc_call_system_hooks(RiseRTCCallSystemHooks {
         report_remote_call_event: |server_call_id, event, cx| {
             RiseRTCCallSystemCoordinator::shared(cx)

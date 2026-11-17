@@ -11,7 +11,7 @@ use crate::modules::chat::components::chat::bubble::rise_native_message_image_gr
 };
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomainRegistry;
 
-pub(crate) fn install_rise_upload_progress_hooks() {
+pub fn install_rise_upload_progress_hooks() {
     set_rise_exact_upload_progress_ring_hooks(RiseExactUploadProgressRingHooks {
         upload_progress_updates: |cx: &App, key: RiseUploadKey| {
             let domain = rise_ui::shared::try_read::<RiseConversationDomainRegistry>(cx)?.active()?;

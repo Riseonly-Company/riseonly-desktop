@@ -3676,7 +3676,7 @@ impl RiseRTCRoomScreenView {
         self.call(cx).map(|call| call.call_id)
     }
 
-    pub(crate) fn apply_microphone(enabled: bool, direct_call_id: Option<String>, cx: &mut App) -> Task<anyhow::Result<()>> {
+    pub fn apply_microphone(enabled: bool, direct_call_id: Option<String>, cx: &mut App) -> Task<anyhow::Result<()>> {
         let interactions = RTCInteractionsStore::shared(cx);
         let Some(call_id) = direct_call_id else {
             return interactions.update(cx, |interactions, cx| interactions.set_microphone(enabled, cx));

@@ -9,8 +9,8 @@ use crate::modules::map::engine::rise_map_domain::{RiseMapActionExecutor, RiseMa
 use crate::modules::map::engine::rise_map_engine_models::RiseMapMutationOutcome;
 use crate::modules::map::engine::rise_map_profiles_repository::{MapProfile, MapProfileSnapshot, MapProfileTab};
 use crate::modules::map::stores::map_actions::map_actions::MapActionsStore;
+use crate::modules::map::stores::map_actions::map_interactions_hooks::map_interactions_hooks;
 use crate::modules::map::stores::map_actions::map_photos_types::MapPhotoGrid;
-use crate::modules::map::stores::map_interactions::map_interactions::MapInteractionsStore;
 
 impl MapActionsStore {
     fn profile_domain(cx: &mut App) -> Task<anyhow::Result<Arc<RiseMapDomain>>> {
@@ -104,14 +104,8 @@ impl MapActionsStore {
                 return false;
             };
             let is_focused = cx.update(|cx| {
-                let interactions = MapInteractionsStore::shared(cx);
-                let interactions = interactions.read(cx);
-                interactions.focused_profile_grid_id.as_ref() == Some(&grid.id)
-                    && interactions
-                        .routes_owner
-                        .as_ref()
-                        .map_or(domain.account_id.as_str(), |owner| owner.id.as_str())
-                        == grid.owner_id
+                map_interactions_hooks()
+                    .is_some_and(|hooks| (hooks.is_profile_grid_focused)(&grid, domain.account_id.as_str(), cx))
             });
             if !is_focused {
                 return false;

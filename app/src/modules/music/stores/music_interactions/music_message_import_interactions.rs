@@ -3,7 +3,7 @@ use gpui::Context;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiSliceState;
 use crate::core::lib::sai::modules::sai_ws::sai_ws::SaiWs;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_pagination::SaiWsPaginationEdge;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::music::stores::music_services::music_guide_sandbox_hooks::MusicGuideSandboxHooks;
 use crate::modules::music::stores::music_actions::music_actions::MusicActionsStore;
 use crate::modules::music::stores::music_actions::music_message_import_types::MusicMessageMP3ImportRequest;
 use crate::modules::music::stores::music_interactions::music_interactions::MusicInteractionsStore;
@@ -11,9 +11,8 @@ use crate::modules::music::stores::music_services::music_services::MusicServices
 
 impl MusicInteractionsStore {
     pub fn enqueue_message_mp3_import(&mut self, request: MusicMessageMP3ImportRequest, cx: &mut Context<Self>) {
-        let sandbox = GuideSandbox::shared(cx);
-        if sandbox.read(cx).is_armed() {
-            sandbox.update(cx, |sandbox, cx| sandbox.add_track_to_playlist(cx));
+        if MusicGuideSandboxHooks::is_armed(cx) {
+            MusicGuideSandboxHooks::add_track_to_playlist(cx);
             return;
         }
         MusicServicesStore::shared(cx).update(cx, |service, cx| service.enqueue_message_mp3_import(request, cx));

@@ -12,9 +12,8 @@ use rise_ui::rich_text::document::rise_document::RiseDocument;
 use crate::core::lib::canon_field_rule::RiseFieldRule;
 use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 
-use crate::modules::chat::stores::message::message_actions::message_poll_codec::MessagePollDraft;
-use crate::modules::chat::stores::message::message_actions::message_types::MessageLocationInfo;
 use crate::modules::media_picker::api::media_compression_configuration::MediaCompressionConfiguration;
+use crate::modules::media_picker::api::message_attachment_types_hooks::{MessageLocationInfo, MessagePollDraft};
 use crate::modules::media_picker::editor::editor_crop_auto_fit::EditorCropAutoFitPlanner;
 use crate::modules::media_picker::editor::editor_image_layout::EditorImageLayout;
 use crate::modules::media_picker::editor::editor_state::{EditorImageState, EditorPersonTagEntity, EditorVideoState};

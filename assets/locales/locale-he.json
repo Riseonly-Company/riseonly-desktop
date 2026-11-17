@@ -5977,5 +5977,7 @@
   "media_editor_discard_title": "לבטל את השינויים?",
   "media_editor_discard_confirm": "ביטול השינויים",
   "media_editor_discard_keep": "להמשיך לערוך",
-  "story_canvas_photos_limit_reached": "אפשר להוסיף עד %d תמונות"
+  "story_canvas_photos_limit_reached": "אפשר להוסיף עד %d תמונות",
+  "error_rtc_overloaded": "השיחות בעומס כבד כרגע. כדי לשמור על יציבות השיחות הפעילות, שיחות חדשות מושהות לרגע. נסו שוב בעוד רגע",
+  "overload_modal_title": "עומס כבד כרגע"
 }

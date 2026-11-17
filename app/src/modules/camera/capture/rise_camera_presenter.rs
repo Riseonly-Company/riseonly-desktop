@@ -56,7 +56,7 @@ pub type RiseCameraCaptureSink = Box<dyn FnOnce(RiseCameraShot, &mut App)>;
 /// the feed pager drives progress live while the pointer drags it in from the left edge
 pub struct RiseCameraPresenter {
     pub capture: Entity<RiseCameraCapture>,
-    pub(crate) export_progress: Entity<ExportProgressViewState>,
+    pub export_progress: Entity<ExportProgressViewState>,
 
     progress: f32,
     progress_motion: Animated<f32>,
