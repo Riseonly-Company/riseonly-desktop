@@ -5,7 +5,7 @@ label() {
     gh label create "$1" --repo "$GITHUB_REPOSITORY" --color "$2" --description "$3" >/dev/null 2>&1 || true
 }
 
-label build 0e8a16 "ci builds this pull request (added by ci into staging and main); with no platform label: Linux x64, Windows x64, both macOS"
+label build 0e8a16 "ci builds this PR (auto into staging and main); no platform label: Linux x64, Win x64, both Macs"
 label deploy d93f0b "after the merge the build is released"
 label macos 5319e7 "build macOS for Apple silicon and Intel"
 label macos-silicon 5319e7 "build macOS for Apple silicon (arm64)"
