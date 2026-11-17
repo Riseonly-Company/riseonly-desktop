@@ -51,7 +51,8 @@ def latest_of(releases, latest_base):
         for target, files in release["downloads"].items():
             for ext, entry in files.items():
                 latest.setdefault(target, {})[ext] = {
-                    "url": f"{latest_base.rstrip('/')}/{latest_name(entry['url'])}",
+                    "url": entry["url"],
+                    "stable_url": f"{latest_base.rstrip('/')}/{latest_name(entry['url'])}",
                     "version": release["version"],
                     "build": release["build"],
                     "size": entry["size"],

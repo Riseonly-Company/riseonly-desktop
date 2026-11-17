@@ -8,6 +8,11 @@ dist=${1:?usage: publish.sh <dist dir>}
 host=${BUNNY_STORAGE_HOST:-storage.bunnycdn.com}
 prefix=${STORAGE_PREFIX:-desktop}
 folder="$ENVIRONMENT/$VERSION-$BUILD_NUMBER"
+kept=$(curl -fsS -H "AccessKey: $BUNNY_STORAGE_KEY" "https://$host/$BUNNY_STORAGE_ZONE/$prefix/$folder/" || true)
+case "$kept" in
+    '' | '[]') ;;
+    *) folder="$folder.${GITHUB_RUN_NUMBER:-0}-${GITHUB_RUN_ATTEMPT:-1}" ;;
+esac
 base_url="${DOWNLOADS_BASE%/}/$folder"
 feed_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/feed.json"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
