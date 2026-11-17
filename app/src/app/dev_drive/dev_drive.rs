@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,11 +16,14 @@ use rise_media::audio::sound_mute;
 use rise_platform::system_share::IncomingShare;
 use serde::{Deserialize, Serialize};
 
+use crate::app::dev_drive::dev_drive_hooks::dev_drive_hooks;
+use crate::app::shell::desktop_share_arguments_hooks::{DesktopShareArguments, split_opened_urls};
 use crate::app::shell::handover;
+use crate::app::shell::handover_hooks::handover_hooks;
 use crate::core::engine_bridge::network_transport_config;
+use crate::core::lib::canon_errors::RiseFailure;
+use crate::core::lib::canon_failure_relay::RiseServerRefusalRelay;
 use crate::core::lib::sai::core::websocket::sai_web_socket_manager::SaiWebSocketManager;
-use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
-use crate::modules::system_share::desktop_share_intake::{DesktopShareArguments, split_opened_urls};
 
 pub const MUTE_ARGUMENT: &str = "-riseMuteSound";
 pub const DRIVE_DIR_VARIABLE: &str = "RISE_DEV_DRIVE_DIR";
@@ -438,6 +442,11 @@ pub enum DriveCommand {
     Net {
         state: DriveNetState,
     },
+    Refusal {
+        code: String,
+        #[serde(default)]
+        details: HashMap<String, String>,
+    },
     Drag {
         x1: f32,
         y1: f32,
@@ -774,7 +783,7 @@ fn drive_window(_handle: AnyWindowHandle, _action: DriveWindowAction, _cx: &mut 
 }
 
 fn music_playing(cx: &App) -> bool {
-    MusicPlayerState::try_read(cx).is_some_and(|player| player.is_playing)
+    dev_drive_hooks().is_some_and(|hooks| (hooks.music_playing)(cx))
 }
 
 fn draw_window(handle: AnyWindowHandle, cx: &mut App) -> Result<(), String> {
@@ -1200,6 +1209,11 @@ fn drive_net(state: DriveNetState, cx: &mut App) -> Result<(), String> {
     Ok(())
 }
 
+fn drive_refusal(code: String, details: HashMap<String, String>, cx: &mut App) {
+    tracing::info!(target: "riseonly", code, "dev-drive: server refusal published");
+    RiseServerRefusalRelay::publish(RiseFailure::new(Some(code), String::new(), details), cx);
+}
+
 fn drive_location(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), String> {
     let applied = match (latitude, longitude) {
         (Some(latitude), Some(longitude)) => {
@@ -1221,9 +1235,8 @@ fn drive_location(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), S
 fn drive_open_url(raw: &str, cx: &mut App) -> Result<(), String> {
     let url = parse_link(raw)?;
     let shell = handover::answering_shell(cx).ok_or_else(|| "no shell window".to_owned())?;
-    shell
-        .update(cx, |view, _, cx| view.on_open_url(url, cx))
-        .map_err(|error| error.to_string())
+    let hooks = handover_hooks().ok_or_else(|| "no shell window".to_owned())?;
+    (hooks.open_url)(shell, url, cx)
 }
 
 /// absolute paths pass as they are, anything else has to be a file url like open with sends
@@ -1440,6 +1453,10 @@ async fn run_command(dir: &Path, request: DriveRequest, cx: &AsyncApp) -> Result
         }
         DriveCommand::Net { state } => {
             cx.update(|cx| drive_net(state, cx))?;
+            Ok(DriveReply::default())
+        }
+        DriveCommand::Refusal { code, details } => {
+            cx.update(|cx| drive_refusal(code, details, cx));
             Ok(DriveReply::default())
         }
         DriveCommand::Notifications { op, id, button, text } => {

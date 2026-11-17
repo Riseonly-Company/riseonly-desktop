@@ -25,11 +25,9 @@ use rise_theme::ui_color_system::UIColor;
 use serde_json::Value;
 
 use crate::modules::map::components::globe::map_globe_camera_link::MapGlobeCameraLink;
+use crate::modules::map::components::location_map_hooks::{location_app_paths, location_map_image};
 use crate::modules::map::components::map_zoom_buttons::MapZoomButtons;
 use crate::modules::map::stores::map_interactions::map_interactions::MapInteractionsStore;
-use crate::modules::chat::components::chat::media_viewer::location_fullscreen::{
-    location_app_paths, location_map_image,
-};
 
 const CLICK_SLOP: f64 = 4.0;
 

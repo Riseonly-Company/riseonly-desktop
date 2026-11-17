@@ -94,7 +94,7 @@ impl EditorImageBake {
     const FOREGROUND_LUMINANCE_THRESHOLD: f32 = 0.55;
 
     /// the text system bound at launch, for callers that measure text off the frame
-    pub(crate) fn text_system() -> Option<Arc<TextSystem>> {
+    pub fn text_system() -> Option<Arc<TextSystem>> {
         BAKE_CANVAS.get().map(|canvas| Arc::clone(&canvas.text_system))
     }
 
@@ -1129,7 +1129,7 @@ impl EditorImageBake {
         }
     }
 
-    pub(crate) fn rasterize_svg_rgba(document: &str) -> Option<RgbaImage> {
+    pub fn rasterize_svg_rgba(document: &str) -> Option<RgbaImage> {
         let canvas = BAKE_CANVAS.get()?;
         let rendered = canvas
             .svg_renderer

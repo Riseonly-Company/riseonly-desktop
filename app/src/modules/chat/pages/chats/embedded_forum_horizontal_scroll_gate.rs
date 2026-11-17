@@ -59,7 +59,7 @@ impl EmbeddedForumHorizontalPanIntentPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PanSource {
+pub enum PanSource {
     Wheel,
     Mouse,
 }
@@ -126,7 +126,7 @@ impl EmbeddedForumHorizontalPanRecognizer {
     }
 }
 
-pub(super) enum PanDelivery {
+pub enum PanDelivery {
     None,
     Changed(f32),
     Ended(f32, f32),
@@ -235,7 +235,7 @@ impl EmbeddedForumHorizontalScrollGateCoordinator {
         EmbeddedForumHorizontalPanIntentPolicy::accepts(self.horizontal_pan.translation, self.horizontal_pan.velocity)
     }
 
-    pub(super) fn touches_began(&mut self, location: Point<Pixels>, source: PanSource) {
+    pub fn touches_began(&mut self, location: Point<Pixels>, source: PanSource) {
         if !self.horizontal_pan.is_enabled {
             return;
         }
@@ -246,7 +246,7 @@ impl EmbeddedForumHorizontalScrollGateCoordinator {
         self.horizontal_pan.last_sample = RiseClock::monotonic();
     }
 
-    pub(super) fn mouse_moved(&mut self, location: Point<Pixels>) -> PanOutcome {
+    pub fn mouse_moved(&mut self, location: Point<Pixels>) -> PanOutcome {
         if self.horizontal_pan.source != Some(PanSource::Mouse) {
             return PanOutcome::none();
         }
@@ -282,7 +282,7 @@ impl EmbeddedForumHorizontalScrollGateCoordinator {
         }
     }
 
-    pub(super) fn touches_ended(&mut self, source: PanSource) -> PanOutcome {
+    pub fn touches_ended(&mut self, source: PanSource) -> PanOutcome {
         if self.horizontal_pan.source != Some(source) {
             return PanOutcome::none();
         }
@@ -323,7 +323,7 @@ impl EmbeddedForumHorizontalScrollGateCoordinator {
         if was_active { self.callbacks.clone() } else { None }
     }
 
-    pub(super) fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, hovered: bool) -> PanOutcome {
+    pub fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, hovered: bool) -> PanOutcome {
         let ScrollDelta::Pixels(delta) = event.delta else {
             return PanOutcome::none();
         };

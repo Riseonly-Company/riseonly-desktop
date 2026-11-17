@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "बदलाव रद्द करें?",
   "media_editor_discard_confirm": "बदलाव रद्द करें",
   "media_editor_discard_keep": "संपादन जारी रखें",
-  "story_canvas_photos_limit_reached": "आप अधिकतम %d फ़ोटो जोड़ सकते हैं"
+  "story_canvas_photos_limit_reached": "आप अधिकतम %d फ़ोटो जोड़ सकते हैं",
+  "error_rtc_overloaded": "कॉल पर अभी बहुत ज़्यादा लोड है। चल रही कॉल को स्थिर रखने के लिए नई कॉल थोड़ी देर के लिए रोकी गई हैं। थोड़ी देर में फिर कोशिश करें",
+  "overload_modal_title": "अभी बहुत ज़्यादा लोड है"
 }

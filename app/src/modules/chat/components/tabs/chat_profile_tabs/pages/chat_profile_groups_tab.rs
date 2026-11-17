@@ -24,7 +24,7 @@ use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServi
 
 /// groups shared by the viewer and the peer, only exists for one on one chats
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileGroupsTab {
+pub struct ChatProfileGroupsTab {
     peer_user_id: String,
 }
 
@@ -33,7 +33,7 @@ impl ChatProfileGroupsTab {
     const PREFETCH_THRESHOLD: usize = 8;
     const SKELETON_ROWS: usize = 8;
 
-    pub(crate) fn new(peer_user_id: impl Into<String>) -> Self {
+    pub fn new(peer_user_id: impl Into<String>) -> Self {
         Self { peer_user_id: peer_user_id.into() }
     }
 

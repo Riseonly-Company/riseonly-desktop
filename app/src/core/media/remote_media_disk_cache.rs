@@ -238,7 +238,7 @@ impl RemoteMediaTransferError {
         })
     }
 
-    pub(crate) fn url_error(error: &reqwest::Error) -> URLError {
+    pub fn url_error(error: &reqwest::Error) -> URLError {
         let code = if error.is_timeout() {
             URLErrorCode::TimedOut
         } else if error.is_builder() {
@@ -280,7 +280,7 @@ impl RemoteMediaHttpResponse {
         }
     }
 
-    pub(crate) fn from_reqwest(response: &reqwest::Response, url: Url) -> Self {
+    pub fn from_reqwest(response: &reqwest::Response, url: Url) -> Self {
         let header_fields = response
             .headers()
             .iter()
@@ -2309,7 +2309,7 @@ impl RemoteMediaDiskCache {
         }
     }
 
-    pub(crate) fn file_byte_count(url: &Path) -> i64 {
+    pub fn file_byte_count(url: &Path) -> i64 {
         FileManager.attributes_of_item(url).map_or(0, |attributes| attributes.size)
     }
 

@@ -5,7 +5,7 @@ use crate::modules::chat::pages::chats::embedded_forum_panel_hooks::{
     EmbeddedForumPanelForumTopicListArgs, EmbeddedForumPanelHooks, set_embedded_forum_panel_hooks,
 };
 
-pub(crate) fn install_embedded_forum_panel_hooks() {
+pub fn install_embedded_forum_panel_hooks() {
     set_embedded_forum_panel_hooks(EmbeddedForumPanelHooks { forum_topic_list });
 }
 

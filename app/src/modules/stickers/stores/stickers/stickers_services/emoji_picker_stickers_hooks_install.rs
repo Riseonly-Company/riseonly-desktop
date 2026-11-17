@@ -10,7 +10,7 @@ fn services(cx: &App) -> Option<&StickersServicesStore> {
     rise_ui::shared::try_read::<StickersServicesStore>(cx)
 }
 
-pub(crate) fn install_emoji_picker_stickers_hooks() {
+pub fn install_emoji_picker_stickers_hooks() {
     EmojiPickerStickersHooks::install(EmojiPickerStickersHooks {
         has_resolved_pack: Box::new(|pack_id, cx| services(cx).is_some_and(|store| store.has_resolved_pack(pack_id))),
         is_loading: Box::new(|cx| {

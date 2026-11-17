@@ -16,10 +16,8 @@ use rise_ui::swiftui::rich_text::{AttributeContainer, RichFont};
 use crate::core::ui::rich_text::post_rich_text_render::{
     PostRichTextAttribute, PostRichTextAttributedString, PostRichTextCalibration, PostRichTextStyleRun,
 };
+use crate::core::ui::rich_text::post_text_contracts_hooks::{PostTextLayouting, PostTextToken};
 use crate::modules::media_picker::editor::editor_image_bake::EditorImageBake;
-use crate::modules::post::pages::posts::post_detail::native_list::contracts::post_list_contracts::{
-    PostTextLayouting, PostTextToken,
-};
 
 /// one uniformly sized stretch of a line, gpui shapes one font size per line
 /// so a line with inline code or kerned separators is a row of these
@@ -639,7 +637,7 @@ impl PostTextLayoutBuilder {
     }
 
     /// text system bound at launch, the bake already owns it for off frame measuring
-    pub(crate) fn text_system() -> Option<Arc<TextSystem>> {
+    pub fn text_system() -> Option<Arc<TextSystem>> {
         EditorImageBake::text_system()
     }
 

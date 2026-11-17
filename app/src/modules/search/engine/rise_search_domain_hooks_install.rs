@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::search::engine::rise_search_domain::RiseSearchDomain;
 
-pub(crate) fn install_rise_search_domain_hooks() {
+pub fn install_rise_search_domain_hooks() {
     RiseAppEngineSearchDomainHooks::install(RiseAppEngineSearchDomainHooks {
         prepare: Box::new(|context| {
             async move {

@@ -9,7 +9,7 @@ use crate::modules::media_picker::api::media_picker_configuration::MediaPickerCo
 use crate::modules::media_picker::api::media_picker_result::{
     MediaPickerItem, MediaPickerResult, MediaPickerTrackSelection,
 };
-use crate::modules::media_picker::ui::media_picker_sheet::MediaPickerSheet;
+use crate::modules::story::components::story_composer_picker_hooks::story_composer_picker_hooks;
 use crate::modules::story::components::story_create_sheet::StoryCreateSheet;
 use crate::modules::story::stores::story::story_services::story_services::StoryServicesStore;
 
@@ -292,26 +292,33 @@ impl RenderOnce for StoryComposerHost {
         let complete_state = state.clone();
         let (dismissed_state, dismissed_presented, dismissed_action) =
             (state.clone(), self.is_presented.clone(), self.on_dismissed.clone());
-        let picker = MediaPickerSheet::new(
-            self.child_id("picker"),
-            picker_presented,
-            MediaPickerConfiguration::story(),
-            ThemeStore::shared(cx),
-            move |result: MediaPickerResult, _: &mut Window, cx: &mut App| {
-                tracing::warn!(target: "riseonly::X808", cancelled = result.was_cancelled, items = result.items.len(), "story picker complete");
-                let opened = complete_state.update(cx, |state, cx| {
-                    state.handle_picker_result(result);
-                    let opened = state.open_create_options_on_completion();
-                    cx.notify();
-                    opened
-                });
-                tracing::warn!(target: "riseonly::X808", opened, "story create cover on completion");
-            },
-        )
-        .initial_track(self.initial_track.clone())
-        .experimental_bottom_sheet(true)
-        .on_dismissed(move |window, cx| {
-            Self::handle_picker_dismissed(&dismissed_state, &dismissed_presented, &dismissed_action, window, cx);
+        let picker = story_composer_picker_hooks().map(|hooks| {
+            (hooks.media_picker_sheet)(
+                self.child_id("picker"),
+                picker_presented,
+                MediaPickerConfiguration::story(),
+                ThemeStore::shared(cx),
+                self.initial_track.clone(),
+                Box::new(move |result: MediaPickerResult, _: &mut Window, cx: &mut App| {
+                    tracing::warn!(target: "riseonly::X808", cancelled = result.was_cancelled, items = result.items.len(), "story picker complete");
+                    let opened = complete_state.update(cx, |state, cx| {
+                        state.handle_picker_result(result);
+                        let opened = state.open_create_options_on_completion();
+                        cx.notify();
+                        opened
+                    });
+                    tracing::warn!(target: "riseonly::X808", opened, "story create cover on completion");
+                }),
+                Box::new(move |window: &mut Window, cx: &mut App| {
+                    Self::handle_picker_dismissed(
+                        &dismissed_state,
+                        &dismissed_presented,
+                        &dismissed_action,
+                        window,
+                        cx,
+                    );
+                }),
+            )
         });
 
         let (appear_state, appear_presented, appear_dismissed) =
@@ -319,7 +326,7 @@ impl RenderOnce for StoryComposerHost {
         div()
             .absolute()
             .inset_0()
-            .when(!show_create_options, |root| root.child(picker))
+            .when(!show_create_options, |root| root.children(picker))
             .children(cover)
             .on_appear(self.child_id("appear"), move |window, cx| {
                 if appear_presented.get(cx) {

@@ -10,11 +10,11 @@ use rise_core::foundation::foundation_character::int_from_string;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_core::foundation::foundation_uuid::Uuid;
 
+use crate::app::router::map_settings_section_hooks::MapSettingsSection;
 use crate::app::router::navigation_types::{CreatePostIntent, MainTab, RootRoute};
 use crate::core::guides::core_guides_guide_sandbox_hooks::SCENE_PARAM;
 use crate::core::guides::guide_signal_bus::{GuideEventAwaiter, GuideEventWait};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_screen_refresh::{SaiActiveScreen, SaiNavigationBridge};
-use crate::modules::map::shared::map_settings_section::MapSettingsSection;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::PackKind;
 
 /// where a guide asks the app to go

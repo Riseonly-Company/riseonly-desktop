@@ -405,7 +405,7 @@ impl EmbeddedForumRailMotionDriver {
         self.panel_offset_at(RiseClock::monotonic(), container_width)
     }
 
-    pub(crate) fn panel_offset_at(&self, now: Duration, container_width: f32) -> f32 {
+    pub fn panel_offset_at(&self, now: Duration, container_width: f32) -> f32 {
         let presence = self.presence.borrow().0.value(now);
         let drag_offset = self.drag_offset.borrow().0.value(now);
         let distance = EmbeddedForumTransitionMetrics::travel_distance(container_width);

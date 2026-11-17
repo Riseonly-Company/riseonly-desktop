@@ -27,7 +27,7 @@ use crate::modules::chat::components::chat::composer::chat_link_preview_draft::C
 use crate::modules::chat::engine::messages::rise_message_scope::RiseMessageScope;
 use crate::modules::chat::shared::utils::chat_list_utils::ChatListUtils;
 use crate::modules::chat::shared::utils::voice::voice_message_metadata::VoiceMessageMetadata;
-use crate::modules::chat::shared::utils::message_preview::MessagePreview;
+use crate::modules::chat::stores::chat_stores_hooks::chat_stores_components_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatInfo;
 use crate::modules::chat::stores::message::message_services::message_services::MessageServicesStore;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::StickerItem;
@@ -586,7 +586,10 @@ impl ChatDraftStore {
     /// composer keeps a custom emoji as one placeholder char
     /// left in place it shows as a replacement box in the list row
     fn preview_text(draft: &ChatDraft) -> String {
-        let plain = MessagePreview::plain_custom_emoji(&draft.text);
+        let plain = match chat_stores_components_hooks() {
+            Some(hooks) => (hooks.plain_custom_emoji)(&draft.text),
+            None => draft.text.clone(),
+        };
         let flattened = plain.replace('\n', " ");
         trimming_whitespaces_and_newlines(&flattened).to_owned()
     }

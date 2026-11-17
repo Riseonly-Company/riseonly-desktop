@@ -4,7 +4,7 @@ use crate::core::feature_hooks::FeatureHookSlot;
 use crate::modules::user::engine::core::rise_user_block_wire_models::RiseBlockScope;
 use crate::modules::user::engine::rise_user_achievements_presentation::RiseUserAchievementsSnapshot;
 
-pub(crate) struct UserGuideSandboxHooks {
+pub struct UserGuideSandboxHooks {
     pub owns_user_id: fn(id: &str, cx: &App) -> bool,
     pub owns_theme_scene: fn(cx: &App) -> bool,
     pub owns_profile_look_scene: fn(cx: &App) -> bool,
@@ -36,10 +36,10 @@ static UNINSTALLED: UserGuideSandboxHooks = UserGuideSandboxHooks {
     absorb_mute_overrides: |_, _, _| false,
 };
 
-pub(crate) fn set_user_guide_sandbox_hooks(hooks: UserGuideSandboxHooks) -> Result<(), UserGuideSandboxHooks> {
+pub fn set_user_guide_sandbox_hooks(hooks: UserGuideSandboxHooks) -> Result<(), UserGuideSandboxHooks> {
     HOOKS.set(hooks)
 }
 
-pub(crate) fn user_guide_sandbox_hooks() -> &'static UserGuideSandboxHooks {
+pub fn user_guide_sandbox_hooks() -> &'static UserGuideSandboxHooks {
     HOOKS.get().unwrap_or(&UNINSTALLED)
 }

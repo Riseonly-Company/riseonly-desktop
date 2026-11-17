@@ -1,0 +1,1049 @@
+{
+  "version": 1,
+  "about": "Which crate compiles each file of the app tree (app/src). The files never move: a view crate is a generated lib.rs that names its files in app/src and re-exports the crates below at the same module paths, so crate::modules::... is one path in every crate. 'files' wins over 'rules', a test file follows the file it tests, the first matching rule wins ('*' is one path segment), then the top crate. 'deps' are the crates directly below. gen-mod-tree.py writes each crates/<name>/Cargo.toml and src/lib.rs and the marked block of the top manifest.",
+  "top": "riseonly",
+  "crates": {
+    "riseonly-base": {
+      "dir": "crates/riseonly-base",
+      "deps": []
+    },
+    "riseonly-data-low": {
+      "dir": "crates/riseonly-data-low",
+      "deps": [
+        "riseonly-base"
+      ]
+    },
+    "riseonly-data-mid": {
+      "dir": "crates/riseonly-data-mid",
+      "deps": [
+        "riseonly-data-low"
+      ]
+    },
+    "riseonly-data-rtc": {
+      "dir": "crates/riseonly-data-rtc",
+      "deps": [
+        "riseonly-data-mid"
+      ]
+    },
+    "riseonly-data-map": {
+      "dir": "crates/riseonly-data-map",
+      "deps": [
+        "riseonly-data-mid"
+      ]
+    },
+    "riseonly-data-misc": {
+      "dir": "crates/riseonly-data-misc",
+      "deps": [
+        "riseonly-data-mid"
+      ]
+    },
+    "riseonly-data-guides": {
+      "dir": "crates/riseonly-data-guides",
+      "deps": [
+        "riseonly-data-rtc",
+        "riseonly-data-map",
+        "riseonly-data-misc"
+      ]
+    },
+    "riseonly-pages-chat": {
+      "dir": "crates/riseonly-pages-chat",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-chat-info": {
+      "dir": "crates/riseonly-pages-chat-info",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-user": {
+      "dir": "crates/riseonly-pages-user",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-post": {
+      "dir": "crates/riseonly-pages-post",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-media": {
+      "dir": "crates/riseonly-pages-media",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-music": {
+      "dir": "crates/riseonly-pages-music",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-misc-a": {
+      "dir": "crates/riseonly-pages-misc-a",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-misc-b": {
+      "dir": "crates/riseonly-pages-misc-b",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly-pages-misc-c": {
+      "dir": "crates/riseonly-pages-misc-c",
+      "deps": [
+        "riseonly-ui-chat-list",
+        "riseonly-ui-chat-input",
+        "riseonly-ui-high"
+      ]
+    },
+    "riseonly": {
+      "dir": "app",
+      "deps": [
+        "riseonly-pages-chat",
+        "riseonly-pages-chat-info",
+        "riseonly-pages-user",
+        "riseonly-pages-post",
+        "riseonly-pages-media",
+        "riseonly-pages-music",
+        "riseonly-pages-misc-a",
+        "riseonly-pages-misc-b",
+        "riseonly-pages-misc-c"
+      ]
+    },
+    "riseonly-ui-low": {
+      "dir": "crates/riseonly-ui-low",
+      "deps": [
+        "riseonly-data-guides"
+      ]
+    },
+    "riseonly-ui-chat": {
+      "dir": "crates/riseonly-ui-chat",
+      "deps": [
+        "riseonly-ui-low"
+      ]
+    },
+    "riseonly-ui-chat-list": {
+      "dir": "crates/riseonly-ui-chat-list",
+      "deps": [
+        "riseonly-ui-chat"
+      ]
+    },
+    "riseonly-ui-chat-input": {
+      "dir": "crates/riseonly-ui-chat-input",
+      "deps": [
+        "riseonly-ui-chat"
+      ]
+    },
+    "riseonly-ui-high": {
+      "dir": "crates/riseonly-ui-high",
+      "deps": [
+        "riseonly-ui-low"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "prefix": "modules/chat/components/tabs/chat_profile_tabs/pages",
+      "view": "riseonly-pages-chat-info"
+    },
+    {
+      "prefix": "modules/chat/pages/chats/chat/chat_screen",
+      "view": "riseonly-pages-chat"
+    },
+    {
+      "prefix": "modules/chat/pages/chats/chat/chat_topics",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/user/components/profile_content/pages/goals",
+      "view": "riseonly-pages-user"
+    },
+    {
+      "prefix": "modules/chat/components/chat/async_render",
+      "view": "riseonly-ui-chat-list"
+    },
+    {
+      "prefix": "modules/chat/components/chat/backdrop",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "modules/chat/components/chat/composer",
+      "view": "riseonly-ui-chat-input"
+    },
+    {
+      "prefix": "modules/chat/components/chat/input_picker",
+      "view": "riseonly-ui-chat-input"
+    },
+    {
+      "prefix": "modules/chat/components/chat/native_bubbles",
+      "view": "riseonly-ui-chat-list"
+    },
+    {
+      "prefix": "modules/chat/pages/chats/chat",
+      "view": "riseonly-pages-chat-info"
+    },
+    {
+      "prefix": "modules/music/widgets/bottomsheets/now_playing",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/chat/components/chat_search",
+      "view": "riseonly-ui-chat-input"
+    },
+    {
+      "prefix": "modules/chat/components/folders",
+      "view": "riseonly-ui-chat-input"
+    },
+    {
+      "prefix": "modules/map/pages/map_friends",
+      "view": "riseonly-pages-misc-b"
+    },
+    {
+      "prefix": "modules/map/pages/map_settings",
+      "view": "riseonly-pages-media"
+    },
+    {
+      "prefix": "modules/map/stores/map_interactions",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/music/pages/audio_page",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/post/components/download",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/post/components/repost",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "modules/theme/stores/theme_presets",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/user/shared/debug",
+      "view": "riseonly-pages-user"
+    },
+    {
+      "prefix": "core/ui/animated_tabs_ui",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "core/ui/bottom_sheet_ui",
+      "view": "riseonly-base"
+    },
+    {
+      "prefix": "core/ui/list_engine",
+      "view": "riseonly-ui-chat-list"
+    },
+    {
+      "prefix": "core/ui/lottie_sticker",
+      "view": "riseonly-base"
+    },
+    {
+      "prefix": "core/widgets/notifier",
+      "view": "riseonly-base"
+    },
+    {
+      "prefix": "core/widgets/wrappers",
+      "view": "riseonly-base"
+    },
+    {
+      "prefix": "modules/auth/pages",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/auth/widgets",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/bot/pages",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/camera/capture",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/chat/components",
+      "view": "riseonly-ui-chat"
+    },
+    {
+      "prefix": "modules/chat/pages",
+      "view": "riseonly-pages-chat"
+    },
+    {
+      "prefix": "modules/comment/components",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/comment/widgets",
+      "view": "riseonly-ui-chat-list"
+    },
+    {
+      "prefix": "modules/diagnostics/pages",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/gifts/components",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/gifts/pages",
+      "view": "riseonly-pages-misc-b"
+    },
+    {
+      "prefix": "modules/guides/stores",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/map/components",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/map/pages",
+      "view": "riseonly-pages-music"
+    },
+    {
+      "prefix": "modules/media_picker/editor",
+      "view": "riseonly-pages-media"
+    },
+    {
+      "prefix": "modules/media_picker/ui",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/moderation/pages",
+      "view": "riseonly-pages-misc-b"
+    },
+    {
+      "prefix": "modules/music/pages",
+      "view": "riseonly-pages-music"
+    },
+    {
+      "prefix": "modules/music/widgets",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/notify/components",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/post/components",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/post/engine",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "modules/post/shared",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "modules/post/stores",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "modules/rtc/components",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/rtc/pages",
+      "view": "riseonly-pages-misc-c"
+    },
+    {
+      "prefix": "modules/search/pages",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/share_extension/send_handoff",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/share_extension/services",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/share_extension/shared",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/share_extension/stores",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/shorts/pages",
+      "view": "riseonly-pages-misc-c"
+    },
+    {
+      "prefix": "modules/shorts/stores",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/stickers/components",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/stickers/engine",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "modules/stickers/pages",
+      "view": "riseonly-pages-misc-c"
+    },
+    {
+      "prefix": "modules/story/pages",
+      "view": "riseonly-pages-misc-c"
+    },
+    {
+      "prefix": "modules/story/shared",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/user/components",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/user/pages",
+      "view": "riseonly-pages-user"
+    },
+    {
+      "prefix": "modules/vacancy/components",
+      "view": "riseonly-ui-high"
+    },
+    {
+      "prefix": "modules/vacancy/pages",
+      "view": "riseonly-pages-misc-b"
+    },
+    {
+      "prefix": "app/dev_drive",
+      "view": "riseonly-base"
+    },
+    {
+      "prefix": "app/router",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "core/media_viewer",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "core/shared_element_transition",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "core/storage",
+      "view": "riseonly-data-mid"
+    },
+    {
+      "prefix": "core/ui",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "core/widgets",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/analytics",
+      "view": "riseonly-data-low"
+    },
+    {
+      "prefix": "modules/auth",
+      "view": "riseonly-data-low"
+    },
+    {
+      "prefix": "modules/bot",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/camera",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/comment",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/diagnostics",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/gifts",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/guides",
+      "view": "riseonly-data-guides"
+    },
+    {
+      "prefix": "modules/map",
+      "view": "riseonly-data-map"
+    },
+    {
+      "prefix": "modules/media_picker",
+      "view": "riseonly-data-low"
+    },
+    {
+      "prefix": "modules/moderation",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/music",
+      "view": "riseonly-data-low"
+    },
+    {
+      "prefix": "modules/notify",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/onboarding",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/post",
+      "view": "riseonly-pages-post"
+    },
+    {
+      "prefix": "modules/presence",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/rtc",
+      "view": "riseonly-data-rtc"
+    },
+    {
+      "prefix": "modules/search",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/session",
+      "view": "riseonly-data-guides"
+    },
+    {
+      "prefix": "modules/share_extension",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/shorts",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/sparks",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/stickers",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "modules/story",
+      "view": "riseonly-ui-low"
+    },
+    {
+      "prefix": "modules/system_share",
+      "view": "riseonly-pages-misc-a"
+    },
+    {
+      "prefix": "modules/vacancy",
+      "view": "riseonly-data-misc"
+    },
+    {
+      "prefix": "core",
+      "view": "riseonly-base"
+    },
+    {
+      "prefix": "modules",
+      "view": "riseonly-data-mid"
+    }
+  ],
+  "files": {
+    "app/aside/aside_registry.rs": "riseonly-data-mid",
+    "app/launch_snapshot_tint.rs": "riseonly-base",
+    "app/rise_launch_splash.rs": "riseonly-base",
+    "app/router/main_tabs.rs": "riseonly",
+    "app/router/navigation_fullscreen_pop.rs": "riseonly-ui-low",
+    "app/router/pager_back_swipe_navigation_hooks_install.rs": "riseonly",
+    "app/router/root_route_destination.rs": "riseonly",
+    "app/shell/desktop_share_arguments_hooks.rs": "riseonly-base",
+    "app/shell/file_drop.rs": "riseonly-base",
+    "app/shell/handover.rs": "riseonly-base",
+    "app/shell/handover_hooks.rs": "riseonly-base",
+    "app/shell/shell_actions.rs": "riseonly-pages-misc-b",
+    "core/desktop_platform/app_menu.rs": "riseonly-pages-misc-b",
+    "core/desktop_platform/app_menu_bar.rs": "riseonly-pages-misc-b",
+    "core/desktop_platform/bug_report_surface_hooks.rs": "riseonly-data-mid",
+    "core/desktop_platform/bug_report_trigger.rs": "riseonly-pages-misc-b",
+    "core/guides/guide_screen_resolver.rs": "riseonly-data-misc",
+    "core/lib/sai/modules/sai_debugger/bottom_sheet_debug_catalog.rs": "riseonly",
+    "core/lib/sai/modules/sai_debugger/bottom_sheet_debug_catalog_hooks.rs": "riseonly-ui-high",
+    "core/lib/sai/modules/sai_debugger/bottom_sheet_debug_catalog_hooks_install.rs": "riseonly",
+    "core/lib/sai/modules/sai_debugger/sai_api_docs_panel.rs": "riseonly-data-misc",
+    "core/lib/sai/modules/sai_debugger/sai_bottom_sheet_gallery_panel.rs": "riseonly-pages-music",
+    "core/lib/sai/modules/sai_debugger/sai_debugger_host.rs": "riseonly-pages-music",
+    "core/lib/sai/modules/sai_debugger/sai_music_playback_cache_debug_panel.rs": "riseonly-data-misc",
+    "core/lib/sai/modules/sai_debugger/sai_performance_hud.rs": "riseonly-data-misc",
+    "core/lib/sai/modules/sai_debugger/sai_requester_panel.rs": "riseonly-data-misc",
+    "core/lib/sai/modules/sai_debugger/sai_requester_store.rs": "riseonly-data-misc",
+    "core/lib/sai/modules/sai_debugger/sai_skeleton_gallery_panel.rs": "riseonly-pages-music",
+    "core/lib/sai/modules/sai_debugger/sai_voice_cache_debug_panel.rs": "riseonly-data-misc",
+    "core/lib/sai/sai_tests.rs": "riseonly-data-misc",
+    "core/lib/store_price.rs": "riseonly-data-misc",
+    "core/media/account_state_reset_media_save_hooks_install.rs": "riseonly-data-misc",
+    "core/media/media_save_coordinator.rs": "riseonly-data-misc",
+    "core/media/remote_media_disk_cache_tests.rs": "riseonly-data-misc",
+    "core/media_viewer/media_save_to_library.rs": "riseonly-data-misc",
+    "core/media_viewer/media_viewer_image_cache.rs": "riseonly-base",
+    "core/media_viewer/media_viewer_image_cache_tests.rs": "riseonly-ui-chat",
+    "core/media_viewer/media_viewer_types.rs": "riseonly-data-misc",
+    "core/push_notifications/admin_console_link_tests.rs": "riseonly-data-misc",
+    "core/push_notifications/app_delegate.rs": "riseonly-data-guides",
+    "core/push_notifications/chat_engine_badge_hooks_install.rs": "riseonly-data-misc",
+    "core/push_notifications/push_deep_link_store_tests.rs": "riseonly-data-misc",
+    "core/push_notifications/push_notification_manager.rs": "riseonly-data-misc",
+    "core/push_notifications/push_notification_manager_hooks_install.rs": "riseonly-data-misc",
+    "core/push_notifications/push_notification_presentation.rs": "riseonly-data-misc",
+    "core/push_notifications/rise_app_icon_badge.rs": "riseonly-data-misc",
+    "core/push_notifications/rise_app_icon_badge_hooks_install.rs": "riseonly-data-misc",
+    "core/push_notifications/socket_notification_source.rs": "riseonly-pages-misc-c",
+    "core/shared_element_transition/kernel/profile_post_list_window_policy_tests.rs": "riseonly-ui-low",
+    "core/shared_element_transition/kernel/shared_element_lift_slot_observer_tests.rs": "riseonly-ui-low",
+    "core/shared_element_transition/kernel/shared_element_return_scroll_math_tests.rs": "riseonly-ui-low",
+    "core/shared_element_transition/navigation/shared_element_pop_pan_router.rs": "riseonly-ui-low",
+    "core/shared_element_transition/renderer/shared_element_video_frame_grabber.rs": "riseonly-ui-low",
+    "core/shared_element_transition/runtime/account_state_reset_shared_element_hooks_install.rs": "riseonly-ui-low",
+    "core/storage/account_state_reset_storage_hooks_install.rs": "riseonly-data-misc",
+    "core/storage/rise_storage_usage_models.rs": "riseonly-base",
+    "core/ui/animated_gif_view.rs": "riseonly-base",
+    "core/ui/animated_gif_view_hooks.rs": "riseonly-base",
+    "core/ui/animated_media_playback_coordinator.rs": "riseonly-base",
+    "core/ui/animated_media_playback_coordinator_tests.rs": "riseonly-ui-chat-list",
+    "core/ui/animated_tabs_ui/animated_tabs.rs": "riseonly-ui-low",
+    "core/ui/animated_tabs_ui/inline_custom_emoji_text_hooks.rs": "riseonly-data-mid",
+    "core/ui/animated_tabs_ui/keyboard_docked_bottom_strip.rs": "riseonly-ui-low",
+    "core/ui/bottom_sheet_ui/bottom_sheet_carousel_ui.rs": "riseonly-ui-low",
+    "core/ui/bottom_sheet_ui/bottom_sheet_interaction_policy_tests.rs": "riseonly-pages-misc-a",
+    "core/ui/bottom_sheet_ui/bottom_sheet_page_back_swipe_gate.rs": "riseonly-ui-low",
+    "core/ui/bottom_sheet_ui/bottom_sheet_page_deck.rs": "riseonly-ui-low",
+    "core/ui/bottom_sheet_ui/bottom_sheet_pages_ui.rs": "riseonly-ui-low",
+    "core/ui/clever_image_disk_cache.rs": "riseonly-base",
+    "core/ui/clever_image_ui.rs": "riseonly-base",
+    "core/ui/custom_emoji_glyph.rs": "riseonly-data-mid",
+    "core/ui/custom_emoji_resource_warmup.rs": "riseonly-base",
+    "core/ui/custom_emoji_stickers_hooks.rs": "riseonly-base",
+    "core/ui/emoji_picker_ui/account_state_reset_emoji_picker_recents_hooks_install.rs": "riseonly-data-misc",
+    "core/ui/emoji_picker_ui/emoji_picker_catalog.rs": "riseonly-data-mid",
+    "core/ui/emoji_picker_ui/emoji_picker_recents_store.rs": "riseonly-data-misc",
+    "core/ui/emoji_picker_ui/emoji_picker_stickers_hooks.rs": "riseonly-base",
+    "core/ui/formatted_text_ui.rs": "riseonly-data-mid",
+    "core/ui/formatted_text_ui_tests.rs": "riseonly-ui-chat-list",
+    "core/ui/guide_anchor_ui/guide_anchor_scroller.rs": "riseonly-data-misc",
+    "core/ui/hold_context_menu_ui/hold_context_menu_presenter.rs": "riseonly-base",
+    "core/ui/hold_context_menu_ui/hold_context_menu_presenter_hooks.rs": "riseonly-base",
+    "core/ui/hold_context_menu_ui/hold_context_menu_scroll_lock.rs": "riseonly-base",
+    "core/ui/hold_context_menu_ui/hold_context_menu_touch_tracker.rs": "riseonly-base",
+    "core/ui/link_preview_card_ui.rs": "riseonly-base",
+    "core/ui/lottie_sticker/chat_performance_trace_hooks.rs": "riseonly-data-mid",
+    "core/ui/lottie_sticker/editor_sticker_lottie_hooks_install.rs": "riseonly-data-mid",
+    "core/ui/lottie_sticker/lottie_sticker_playback_hub.rs": "riseonly-data-mid",
+    "core/ui/lottie_sticker/lottie_sticker_view.rs": "riseonly-data-mid",
+    "core/ui/lottie_sticker/rise_lottie_display_driver.rs": "riseonly-data-mid",
+    "core/ui/lottie_sticker/sticker_premium_effect.rs": "riseonly-data-mid",
+    "core/ui/media_blur_fill_ui.rs": "riseonly-data-mid",
+    "core/ui/message_bubble_geometry_tests.rs": "riseonly-ui-chat",
+    "core/ui/pager_back_swipe_yield.rs": "riseonly-data-misc",
+    "core/ui/premium_auth_hooks.rs": "riseonly-data-mid",
+    "core/ui/premium_diamond.rs": "riseonly-data-misc",
+    "core/ui/premium_name_color.rs": "riseonly-data-mid",
+    "core/ui/profile_grid_date_scrubber.rs": "riseonly-ui-low",
+    "core/ui/purchase_celebration.rs": "riseonly-base",
+    "core/ui/qr_code/rise_qr_code_card.rs": "riseonly-data-mid",
+    "core/ui/qr_code/rise_qr_code_modal.rs": "riseonly-ui-chat",
+    "core/ui/qr_code/rise_qr_code_page.rs": "riseonly-ui-chat",
+    "core/ui/qr_code/rise_qr_scanner.rs": "riseonly-ui-chat",
+    "core/ui/qr_code/rise_qr_scanner_page.rs": "riseonly-ui-chat",
+    "core/ui/reaction_emoji_glyph.rs": "riseonly-data-mid",
+    "core/ui/rich_text/code_block_view.rs": "riseonly-data-mid",
+    "core/ui/rich_text/post_rich_text_render_tests.rs": "riseonly-pages-post",
+    "core/ui/rich_text/rich_text_view.rs": "riseonly-data-mid",
+    "core/ui/sai_pagination_prefetch.rs": "riseonly-base",
+    "core/ui/select_media_ui.rs": "riseonly-ui-high",
+    "core/ui/shedding_hero_art.rs": "riseonly-data-misc",
+    "core/ui/spoiler_dust.rs": "riseonly-data-mid",
+    "core/ui/user_logo_ui.rs": "riseonly-base",
+    "core/widgets/inputs/composer_reply_bar.rs": "riseonly-ui-low",
+    "core/widgets/navigations/bottom_chrome_insets.rs": "riseonly-base",
+    "core/widgets/navigations/main_bottom_navigation.rs": "riseonly-ui-low",
+    "core/widgets/navigations/main_tab_bar_canvas.rs": "riseonly-ui-low",
+    "core/widgets/navigations/main_tab_bar_rtc_hooks.rs": "riseonly-base",
+    "core/widgets/navigations/main_tab_bar_settings.rs": "riseonly-data-mid",
+    "core/widgets/navigations/main_tab_bottom_chrome.rs": "riseonly-ui-chat",
+    "core/widgets/navigations/main_tab_chrome_metrics_hooks.rs": "riseonly-base",
+    "core/widgets/overlay/account_state_reset_achievement_earned_hooks_install.rs": "riseonly-data-mid",
+    "core/widgets/overlay/account_state_reset_premium_upsell_hooks_install.rs": "riseonly-data-mid",
+    "core/widgets/overlay/achievement_earned_host.rs": "riseonly-ui-low",
+    "core/widgets/overlay/achievement_earned_store.rs": "riseonly-data-mid",
+    "core/widgets/overlay/download_limit_help_modal.rs": "riseonly-ui-low",
+    "core/widgets/overlay/music_premium_upsell_hooks_install.rs": "riseonly-data-mid",
+    "core/widgets/overlay/premium_gift_celebration_host.rs": "riseonly-ui-low",
+    "core/widgets/overlay/premium_promo_host.rs": "riseonly-ui-low",
+    "core/widgets/overlay/premium_upsell_host.rs": "riseonly-ui-low",
+    "core/widgets/overlay/premium_upsell_store.rs": "riseonly-data-mid",
+    "core/widgets/overlay/purchase_continue_host.rs": "riseonly-pages-user",
+    "core/widgets/overlay/subscription_success_host.rs": "riseonly-ui-low",
+    "core/widgets/overlay/subscription_success_store.rs": "riseonly-base",
+    "core/widgets/sheets/account_state_reset_core_widgets_hooks_install.rs": "riseonly-ui-low",
+    "core/widgets/sheets/music_deep_link_tests.rs": "riseonly-ui-low",
+    "core/widgets/sheets/people_picker_sheet.rs": "riseonly-ui-low",
+    "core/widgets/sheets/report_evidence_picker_hooks.rs": "riseonly-ui-low",
+    "core/widgets/sheets/report_sheet.rs": "riseonly-ui-low",
+    "modules/analytics/stores/engagement/account_state_reset_analytics_hooks_install.rs": "riseonly-data-misc",
+    "modules/auth/components/web_login_approval/web_login_approval_sheet.rs": "riseonly-ui-low",
+    "modules/auth/pages/blocked_account/blocked_account_page.rs": "riseonly-pages-user",
+    "modules/auth/services/access_token_user_id.rs": "riseonly-base",
+    "modules/auth/services/account_state_reset_coordinator_tests.rs": "riseonly",
+    "modules/auth/services/keychain_store.rs": "riseonly-base",
+    "modules/auth/shared/debug/auth_bottom_sheet_previews.rs": "riseonly-ui-low",
+    "modules/auth/stores/auth_services/premium_auth_hooks_install.rs": "riseonly-data-mid",
+    "modules/bot/components/bot_ui_components.rs": "riseonly-ui-high",
+    "modules/bot/shared/debug/bot_bottom_sheet_previews.rs": "riseonly-ui-high",
+    "modules/camera/capture/media_picker_camera_hooks_install.rs": "riseonly-ui-low",
+    "modules/camera/capture/rise_camera_presenter.rs": "riseonly-ui-low",
+    "modules/camera/components/rise_camera_host.rs": "riseonly-pages-user",
+    "modules/camera/components/rise_camera_screen.rs": "riseonly-pages-user",
+    "modules/chat/components/chat/async_render/async_text_bubble_types.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/async_render/async_text_bubble_types_tests.rs": "riseonly-ui-chat-list",
+    "modules/chat/components/chat/async_render/chat_message_render_snapshot.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/async_render/chat_performance_trace.rs": "riseonly-base",
+    "modules/chat/components/chat/async_render/rise_async_text_message_row.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/async_render/rise_message_fallback_height_cache.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/async_render/rise_message_layout_measurement.rs": "riseonly-base",
+    "modules/chat/components/chat/async_render/rise_message_viewport_policy_tests.rs": "riseonly-pages-chat",
+    "modules/chat/components/chat/backdrop/chat_wallpaper_sheet.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/backdrop/chat_wallpaper_sheet_hooks.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/backdrop/chat_wallpaper_store_tests.rs": "riseonly",
+    "modules/chat/components/chat/bot_chat_menu_sheet.rs": "riseonly-ui-high",
+    "modules/chat/components/chat/bubble/bubble_tap_router.rs": "riseonly-base",
+    "modules/chat/components/chat/bubble/chat_audio_track_adapter.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/chat_mention_tap_layer.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/chat_prepared_text_layout.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/message_media_upload_overlay.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/message_shared_post_card.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/message_sticker_view.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/message_sticker_view_hooks.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/bubble/rise_exact_upload_progress_ring_hooks.rs": "riseonly-base",
+    "modules/chat/components/chat/bubble/rise_native_message_image_grid_hooks.rs": "riseonly-base",
+    "modules/chat/components/chat/bubble/web_m_sticker_playback.rs": "riseonly-base",
+    "modules/chat/components/chat/chat_message_feed.rs": "riseonly-ui-chat-list",
+    "modules/chat/components/chat/chat_music_player_sheet.rs": "riseonly-ui-high",
+    "modules/chat/components/chat/composer/chat_composer_text_view.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/composer/chat_composer_types.rs": "riseonly-base",
+    "modules/chat/components/chat/composer/chat_draft_store.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/composer/chat_link_preview_draft.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/composer/chat_link_preview_draft_hooks.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/composer/remote_media_url_type_hooks.rs": "riseonly-base",
+    "modules/chat/components/chat/input_picker/chat_input_picker_kit.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/input_picker/chat_input_picker_kit_hooks.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/input_picker/sticker_hold_preview.rs": "riseonly-base",
+    "modules/chat/components/chat/message_system_content_parser.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/native_bubbles/media/rise_native_media_viewer_opening.rs": "riseonly-ui-chat",
+    "modules/chat/components/chat/scroll/chat_scroll_position_store.rs": "riseonly-base",
+    "modules/chat/components/chat/topic_icon_glyph.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/video_note/music_player_state_video_note_hooks_install.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/video_note/video_note_player_store.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/voice/chat_voice_message_player.rs": "riseonly-data-mid",
+    "modules/chat/components/chat/voice/music_player_state_voice_hooks_install.rs": "riseonly-data-mid",
+    "modules/chat/components/chat_search/chat_search_overlay_presenter.rs": "riseonly-base",
+    "modules/chat/components/chat_search/chat_search_overlay_store.rs": "riseonly-data-mid",
+    "modules/chat/components/folders/account_state_reset_chat_folders_hooks.rs": "riseonly-ui-chat",
+    "modules/chat/components/folders/account_state_reset_chat_ui_hooks_install.rs": "riseonly-ui-chat-list",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_grid_return_positioner.rs": "riseonly-pages-chat-info",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_section_list.rs": "riseonly-pages-chat-info",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_shared_ui.rs": "riseonly-base",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_shared_ui_hooks.rs": "riseonly-base",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_source.rs": "riseonly-data-mid",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_tab.rs": "riseonly-base",
+    "modules/chat/components/tabs/chat_profile_tabs/chat_profile_tabs.rs": "riseonly-pages-chat-info",
+    "modules/chat/components/tabs/chat_profile_tabs/pages/chat_header_refresh_schedule_hooks.rs": "riseonly-ui-chat",
+    "modules/chat/components/tabs/chat_profile_tabs/pages/chat_profile_fav_tab.rs": "riseonly-ui-chat",
+    "modules/chat/components/tabs/chat_profile_tabs/pages/chat_profile_groups_tab.rs": "riseonly-ui-chat",
+    "modules/chat/components/tabs/chat_profile_tabs/pages/chat_profile_link_tab.rs": "riseonly-ui-chat",
+    "modules/chat/engine/core/rise_conversation_upload_support.rs": "riseonly-data-low",
+    "modules/chat/engine/core/rise_message_bridge_performance_contract_tests.rs": "riseonly-ui-chat-list",
+    "modules/chat/engine/messages/rise_message_scope.rs": "riseonly-base",
+    "modules/chat/pages/chats/chat/chat_context_preview_hooks_install.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/chat/chat_profile/chat_contact_profile_policy.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/chat/chat_profile/chat_tile_color.rs": "riseonly-base",
+    "modules/chat/pages/chats/chat/chat_roles/forum_member_grouping.rs": "riseonly-data-misc",
+    "modules/chat/pages/chats/chat/chat_roles/role_mention_composer.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/chat/chat_roles/topic_mention_composer.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/chat/chat_roles/topic_mention_composer_hooks.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/chat/chat_settings/chat_settings.rs": "riseonly-pages-user",
+    "modules/chat/pages/chats/chat/chat_statistics/chat_statistics.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/chat/chat_tests.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/chat/chat_topic_presentation_contract_tests.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/chat/chat_topics/channel_kind_editor.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/chat/chat_topics/chat_topic_bar.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/chat/chat_topics/chat_topics_screen.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/chat/forum_home/forum_section_name_sheet.rs": "riseonly-ui-chat-input",
+    "modules/chat/pages/chats/chat_list_history_warmup_controller.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/chats_reorder_toggle_button.rs": "riseonly-ui-high",
+    "modules/chat/pages/chats/embedded_forum_horizontal_scroll_gate.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/embedded_forum_panel_hooks.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/embedded_forum_transition.rs": "riseonly-data-mid",
+    "modules/chat/pages/chats/embedded_forum_transition_tests.rs": "riseonly-pages-chat",
+    "modules/chat/pages/chats/forum_members_subtitle_hooks.rs": "riseonly-ui-high",
+    "modules/chat/shared/chat_music_hooks.rs": "riseonly-data-low",
+    "modules/chat/shared/chat_profile_report_hooks.rs": "riseonly-data-misc",
+    "modules/chat/shared/chat_saved_message_presentation.rs": "riseonly-ui-chat",
+    "modules/chat/shared/debug/chat_bottom_sheet_previews.rs": "riseonly-pages-chat-info",
+    "modules/chat/shared/utils/message_preview.rs": "riseonly-ui-chat",
+    "modules/chat/stores/chat_stores_push_hooks_install.rs": "riseonly-data-misc",
+    "modules/chat/stores/chats/chat_actions/chat_archive_types_tests.rs": "riseonly-pages-chat",
+    "modules/chat/stores/chats/chat_actions/chat_types_tests.rs": "riseonly-ui-chat",
+    "modules/chat/stores/chats/chat_actions/chat_wire_types_tests.rs": "riseonly",
+    "modules/chat/stores/chats/chat_actions/rise_rtc_chat_contract_tests.rs": "riseonly-data-rtc",
+    "modules/chat/stores/chats/chat_actions/sticky_message_avatar_layout_tests.rs": "riseonly-ui-chat-list",
+    "modules/chat/stores/message/message_actions/chat_inline_composer_contract_tests.rs": "riseonly-ui-chat-input",
+    "modules/chat/stores/message/message_actions/media_save_policy_tests.rs": "riseonly-data-misc",
+    "modules/chat/stores/message/message_actions/message_types_auth_hooks.rs": "riseonly-data-low",
+    "modules/chat/stores/message/message_services/message_presentation_window_projector_tests.rs": "riseonly-ui-chat-list",
+    "modules/chat/widgets/bottomsheets/chat_moderation_sheet/chat_moderation_sheet.rs": "riseonly-ui-chat",
+    "modules/chat/widgets/bottomsheets/create_chat_sheet/create_chat_sheet.rs": "riseonly-ui-high",
+    "modules/comment/components/comment.rs": "riseonly-ui-low",
+    "modules/comment/components/comment_input.rs": "riseonly-ui-chat-input",
+    "modules/comment/components/comment_input_hooks_install.rs": "riseonly-ui-chat-input",
+    "modules/comment/components/native_list/comment_hosted_row_view.rs": "riseonly-ui-chat-list",
+    "modules/comment/components/native_list/comment_list_controller.rs": "riseonly-ui-chat-list",
+    "modules/comment/components/native_list/comment_native_list_view.rs": "riseonly-ui-chat-list",
+    "modules/comment/engine/rise_comment_engine_models.rs": "riseonly-data-mid",
+    "modules/comment/engine/rise_comment_photo_upload.rs": "riseonly-data-mid",
+    "modules/comment/stores/comment_actions/comment_types.rs": "riseonly-data-mid",
+    "modules/comment/stores/comment_actions/comment_types_tests.rs": "riseonly-ui-chat-list",
+    "modules/comment/stores/comment_actions/comment_wire_types.rs": "riseonly-data-mid",
+    "modules/comment/widgets/comment_input_hooks.rs": "riseonly-ui-chat",
+    "modules/comment/widgets/comment_photo_picker_host.rs": "riseonly-ui-high",
+    "modules/comment/widgets/comments_sheet_progress_fade.rs": "riseonly-ui-low",
+    "modules/diagnostics/shared/bug_report_surface_mapping.rs": "riseonly-data-mid",
+    "modules/event/stores/event_interactions/event_interactions.rs": "riseonly-ui-low",
+    "modules/gifts/components/gift_cosmetic_files.rs": "riseonly-data-misc",
+    "modules/gifts/components/gift_sheets_host.rs": "riseonly-pages-misc-b",
+    "modules/gifts/components/user_gifts_tab.rs": "riseonly-ui-low",
+    "modules/guides/engine/guide_auto_start.rs": "riseonly-ui-high",
+    "modules/guides/engine/guide_runner.rs": "riseonly-ui-high",
+    "modules/guides/engine/rise_guides_models.rs": "riseonly-base",
+    "modules/guides/engine/rise_guides_wire_models.rs": "riseonly-base",
+    "modules/guides/pages/guides/guides_catalogue.rs": "riseonly-pages-misc-b",
+    "modules/map/components/location_map_hooks.rs": "riseonly-ui-low",
+    "modules/map/components/map_cooling_card.rs": "riseonly-base",
+    "modules/map/components/map_editing_controls.rs": "riseonly-pages-music",
+    "modules/map/components/map_editing_session.rs": "riseonly-data-map",
+    "modules/map/components/tracks/map_tracks_panel.rs": "riseonly-data-map",
+    "modules/map/engine/core/rise_map_photo_upload.rs": "riseonly-data-guides",
+    "modules/map/engine/map_journey_geometry_tests.rs": "riseonly-data-guides",
+    "modules/map/shared/debug/map_bottom_sheet_previews.rs": "riseonly-ui-high",
+    "modules/media_picker/api/media_compression_configuration.rs": "riseonly-base",
+    "modules/media_picker/api/media_picker_configuration.rs": "riseonly-data-mid",
+    "modules/media_picker/api/media_picker_coordinator.rs": "riseonly-data-mid",
+    "modules/media_picker/api/media_picker_overflow_hooks.rs": "riseonly-data-mid",
+    "modules/media_picker/api/media_picker_result_tests.rs": "riseonly",
+    "modules/media_picker/editor/bot_mini_app_url_policy_hooks.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_adjustments_renderer.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_color_picker_bridge.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_crop_auto_fit.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_crop_auto_fit_log.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_edit_preview_cache.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_entity_snapping.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_image_bake.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_image_layout.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_image_rect.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_link_backdrop_hooks.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_link_entity.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_mode.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_music_plate.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_state.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_state_codable.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_sticker_entity.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_sticker_lottie_hooks.rs": "riseonly-data-low",
+    "modules/media_picker/editor/editor_thickness_track.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_two_finger_transform.rs": "riseonly-base",
+    "modules/media_picker/editor/editor_video_composition_builder.rs": "riseonly-data-low",
+    "modules/media_picker/editor/media_editor_presentation_state.rs": "riseonly-data-misc",
+    "modules/media_picker/editor/media_editor_view_hooks.rs": "riseonly-data-misc",
+    "modules/media_picker/editor/media_editor_window_presenter.rs": "riseonly-data-misc",
+    "modules/media_picker/editor/media_reedit_launcher.rs": "riseonly-data-misc",
+    "modules/media_picker/editor/media_reedit_store.rs": "riseonly-data-low",
+    "modules/media_picker/editor/story_canvas_model.rs": "riseonly-base",
+    "modules/media_picker/editor/story_canvas_renderer.rs": "riseonly-data-low",
+    "modules/media_picker/export/dropped_video_probe_tests.rs": "riseonly-data-misc",
+    "modules/media_picker/export/media_exporter.rs": "riseonly-data-mid",
+    "modules/media_picker/library/photo_library_albums.rs": "riseonly-data-mid",
+    "modules/media_picker/library/photo_library_fetcher.rs": "riseonly-data-mid",
+    "modules/media_picker/library/photos_image_request.rs": "riseonly-base",
+    "modules/media_picker/shared/debug/media_bottom_sheet_previews.rs": "riseonly-ui-high",
+    "modules/media_picker/ui/media_backdrop_hooks.rs": "riseonly-ui-low",
+    "modules/media_picker/ui/media_picker_camera_cell.rs": "riseonly-base",
+    "modules/media_picker/ui/media_picker_camera_hooks.rs": "riseonly-data-misc",
+    "modules/media_picker/ui/media_picker_caption_bar_hooks.rs": "riseonly-ui-low",
+    "modules/media_picker/ui/media_picker_caption_bar_hooks_install.rs": "riseonly-ui-chat-input",
+    "modules/media_picker/ui/media_picker_date_scrubber.rs": "riseonly-base",
+    "modules/media_picker/ui/media_picker_header_icon_button.rs": "riseonly-base",
+    "modules/media_picker/ui/media_picker_permission_denied_view.rs": "riseonly-base",
+    "modules/media_picker/ui/media_picker_selection_bar.rs": "riseonly-ui-chat-input",
+    "modules/media_picker/ui/media_picker_session.rs": "riseonly-data-misc",
+    "modules/moderation/components/admin_ban_entry.rs": "riseonly-ui-high",
+    "modules/moderation/components/moderation_case_ui.rs": "riseonly-ui-high",
+    "modules/moderation/pages/moderation_case_sheets.rs": "riseonly-ui-low",
+    "modules/moderation/shared/debug/moderation_bottom_sheet_previews.rs": "riseonly-ui-low",
+    "modules/music/pages/now_playing/music_live_playback_seek_bar.rs": "riseonly-ui-low",
+    "modules/music/pages/now_playing/now_playing.rs": "riseonly-ui-high",
+    "modules/music/pages/now_playing/now_playing_aside_hooks.rs": "riseonly-ui-high",
+    "modules/music/pages/playlist_collaboration/playlist_collaboration_components.rs": "riseonly-ui-low",
+    "modules/music/pages/playlist_detail/music_playlist_listener_cluster.rs": "riseonly-data-low",
+    "modules/music/pages/track/track_context_menu_row.rs": "riseonly-ui-high",
+    "modules/music/pages/track/track_row.rs": "riseonly-ui-low",
+    "modules/music/shared/debug/music_bottom_sheet_previews.rs": "riseonly-ui-high",
+    "modules/music/shared/utils/music/music_track_waveform.rs": "riseonly-data-mid",
+    "modules/music/stores/music_actions/rise_music_local_track_edit_tests.rs": "riseonly-ui-high",
+    "modules/music/stores/music_services/music_message_import_queue_services_tests.rs": "riseonly-ui-chat",
+    "modules/music/widgets/bottomsheets/playlists/add_to_playlist_sheet.rs": "riseonly-ui-high",
+    "modules/music/widgets/bottomsheets/playlists/create_playlist_sheet.rs": "riseonly-ui-high",
+    "modules/music/widgets/bottomsheets/playlists/playlist_visibility.rs": "riseonly-base",
+    "modules/music/widgets/music_global_player_bar.rs": "riseonly-pages-music",
+    "modules/music/widgets/music_marquee_title.rs": "riseonly-ui-low",
+    "modules/music/widgets/music_playback_seek_bar.rs": "riseonly-ui-low",
+    "modules/notify/components/notification_avatar_stack.rs": "riseonly-data-misc",
+    "modules/notify/components/notifications_hub_sheet.rs": "riseonly-pages-chat-info",
+    "modules/notify/components/notifications_hub_sheet_store.rs": "riseonly-data-misc",
+    "modules/notify/engine/core/rise_release_media_warmer.rs": "riseonly-data-mid",
+    "modules/notify/engine/core/rise_release_notes_seen_store.rs": "riseonly-data-low",
+    "modules/notify/engine/core/rise_release_notes_wire_models.rs": "riseonly-data-mid",
+    "modules/notify/pages/notifications/notifications.rs": "riseonly-pages-misc-b",
+    "modules/notify/shared/debug/notification_bottom_sheet_previews.rs": "riseonly-ui-high",
+    "modules/notify/stores/notify_actions/rise_rtc_system_bridges_hooks.rs": "riseonly-data-mid",
+    "modules/onboarding/pages/onboarding/onboarding_progress.rs": "riseonly-base",
+    "modules/post/components/download/post_download_policy.rs": "riseonly-data-mid",
+    "modules/post/components/download/post_download_sheet.rs": "riseonly-ui-low",
+    "modules/post/components/post/post_media_cache_policy.rs": "riseonly-data-mid",
+    "modules/post/components/post/post_music_plate_overlay.rs": "riseonly-ui-low",
+    "modules/post/components/post/post_music_playback_controller.rs": "riseonly-data-mid",
+    "modules/post/components/post_view_dwell_session.rs": "riseonly-data-mid",
+    "modules/post/components/post_visibility_reader.rs": "riseonly-data-mid",
+    "modules/post/pages/post_view_history/post_view_history.rs": "riseonly-pages-misc-a",
+    "modules/post/pages/posts/account_state_reset_post_hooks_install.rs": "riseonly-data-mid",
+    "modules/post/pages/posts/post_detail/list_rows_splice_hooks.rs": "riseonly-ui-low",
+    "modules/post/pages/posts/post_detail/native_list/behaviour/post_list_refresh_control.rs": "riseonly-ui-chat-list",
+    "modules/post/pages/posts/post_detail/native_list/post_list_engine_policy.rs": "riseonly-base",
+    "modules/post/pages/posts/post_detail/profile_post_list_window_policy.rs": "riseonly-data-mid",
+    "modules/post/shared/debug/post_bottom_sheet_previews.rs": "riseonly-ui-low",
+    "modules/rtc/components/main_tab_bar_rtc_hooks_install.rs": "riseonly-data-rtc",
+    "modules/rtc/components/rise_rtc_local_speaking_ring.rs": "riseonly-data-rtc",
+    "modules/rtc/components/rise_rtc_participants_panel.rs": "riseonly-pages-misc-c",
+    "modules/rtc/components/rise_rtc_rail_call_card.rs": "riseonly-pages-misc-c",
+    "modules/rtc/components/rise_rtc_speaking_ring.rs": "riseonly-data-rtc",
+    "modules/rtc/engine/rise_rtc_call_trace.rs": "riseonly-ui-low",
+    "modules/rtc/engine/rise_rtc_engine_models.rs": "riseonly-data-mid",
+    "modules/rtc/engine/rise_rtc_engine_models_tests.rs": "riseonly-data-rtc",
+    "modules/rtc/engine/rise_rtc_stage_queue_policy_tests.rs": "riseonly-data-guides",
+    "modules/rtc/pages/rise_rtc_voice_invite_sheet.rs": "riseonly-data-misc",
+    "modules/rtc/pages/shell_window_actions_hooks.rs": "riseonly-data-rtc",
+    "modules/rtc/shared/rise_rtc_room_menu.rs": "riseonly-data-guides",
+    "modules/rtc/shared/rise_rtc_screen_safe_area.rs": "riseonly-data-misc",
+    "modules/rtc/shared/rise_rtc_settings_accent.rs": "riseonly-data-mid",
+    "modules/rtc/shared/rise_rtc_volume_menu_accessory.rs": "riseonly-data-guides",
+    "modules/search/components/global_search_result_rows.rs": "riseonly-ui-low",
+    "modules/search/engine/rise_search_engine_models.rs": "riseonly-data-mid",
+    "modules/search/stores/search_actions/search_types.rs": "riseonly-data-mid",
+    "modules/search/stores/search_actions/search_wire_types.rs": "riseonly-data-mid",
+    "modules/session/stores/session_actions/session_types.rs": "riseonly-data-misc",
+    "modules/session/stores/session_actions/session_wire_types.rs": "riseonly-data-misc",
+    "modules/share_extension/send_handoff/share_send_handoff_host.rs": "riseonly-ui-low",
+    "modules/share_extension/send_handoff/share_send_handoff_models.rs": "riseonly-data-mid",
+    "modules/share_extension/shared/rise_outgoing_media.rs": "riseonly-base",
+    "modules/share_extension/shared/rise_upload_context_rules.rs": "riseonly-base",
+    "modules/shorts/components/feed_sound_button.rs": "riseonly-data-mid",
+    "modules/shorts/components/shared_element_player_layer_hooks.rs": "riseonly-data-mid",
+    "modules/shorts/components/shorts_audio_cover_button.rs": "riseonly-ui-low",
+    "modules/shorts/components/shorts_feed_cell.rs": "riseonly-pages-misc-c",
+    "modules/shorts/components/shorts_feed_player.rs": "riseonly-data-mid",
+    "modules/shorts/components/shorts_inline_feed_cell.rs": "riseonly-data-mid",
+    "modules/shorts/components/shorts_media_prefetch.rs": "riseonly-data-mid",
+    "modules/shorts/components/shorts_zoom_namespace.rs": "riseonly-data-mid",
+    "modules/shorts/stores/shorts/shorts_services/account_state_reset_shorts_hooks_install.rs": "riseonly-ui-low",
+    "modules/shorts/stores/shorts/shorts_services/shorts_services.rs": "riseonly-data-mid",
+    "modules/shorts/stores/shorts/shorts_services/shorts_services_hooks.rs": "riseonly-data-mid",
+    "modules/sparks/components/sparks_icon_view.rs": "riseonly-ui-low",
+    "modules/sparks/components/sparks_sheets.rs": "riseonly-ui-high",
+    "modules/sparks/engine/rise_sparks_engine_models.rs": "riseonly-data-mid",
+    "modules/sparks/pages/my_sparks/my_sparks_page.rs": "riseonly-pages-misc-b",
+    "modules/stickers/components/account_state_reset_sticker_asset_composer_hooks_install.rs": "riseonly-data-misc",
+    "modules/stickers/components/sticker_asset_composer_emoji_hooks.rs": "riseonly-ui-low",
+    "modules/stickers/components/sticker_pack_add_cell.rs": "riseonly-data-misc",
+    "modules/stickers/components/sticker_pack_sheet/account_state_reset_sticker_pack_sheet_hooks_install.rs": "riseonly-data-misc",
+    "modules/stickers/components/sticker_pack_sheet/sticker_pack_sheet_store.rs": "riseonly-data-misc",
+    "modules/stickers/stores/stickers/stickers_actions/stickers_types.rs": "riseonly-base",
+    "modules/stickers/stores/stickers/stickers_actions/stickers_wire_types.rs": "riseonly-base",
+    "modules/stickers/stores/stickers/stickers_actions/stickers_wire_types_tests.rs": "riseonly-data-misc",
+    "modules/story/components/story_music_media_renderer.rs": "riseonly-data-misc",
+    "modules/story/components/story_player/story_media_view.rs": "riseonly-data-misc",
+    "modules/story/components/story_share_handoff_host.rs": "riseonly-pages-media",
+    "modules/story/pages/story_edit/story_edit_page.rs": "riseonly-pages-media",
+    "modules/story/shared/debug/story_bottom_sheet_previews.rs": "riseonly-ui-low",
+    "modules/story/shared/story_download_store.rs": "riseonly-ui-low",
+    "modules/story/shared/story_media_reedit.rs": "riseonly-pages-media",
+    "modules/story/shared/story_publish_staging.rs": "riseonly-ui-low",
+    "modules/story/stores/story/story_actions/story_failure_text.rs": "riseonly-data-low",
+    "modules/story/stores/story/story_actions/story_profile_wire_types.rs": "riseonly-data-misc",
+    "modules/story/stores/story/story_actions/story_types.rs": "riseonly-data-misc",
+    "modules/story/stores/story/story_actions/story_wire_types.rs": "riseonly-data-mid",
+    "modules/story/stores/story/story_actions/story_wire_types_tests.rs": "riseonly-ui-low",
+    "modules/story/stores/story/story_services/chats_header_status_hooks.rs": "riseonly-data-misc",
+    "modules/story/stores/story/story_services/story_share_handoff_models.rs": "riseonly-data-misc",
+    "modules/theme/components/theme_preview_sheet/theme_preview_sheet.rs": "riseonly-ui-chat",
+    "modules/theme/components/theme_replace_saved_sheet/theme_replace_saved_sheet.rs": "riseonly-ui-low",
+    "modules/theme/engine/rise_theme_domain_hooks_install.rs": "riseonly-data-misc",
+    "modules/user/components/achievements/achievement_artwork.rs": "riseonly-ui-low",
+    "modules/user/components/achievements/achievement_rarity_chip.rs": "riseonly-ui-low",
+    "modules/user/components/user_relationship_list_contract_tests.rs": "riseonly-ui-chat-input",
+    "modules/user/engine/core/rise_user_block_wire_models.rs": "riseonly-data-low",
+    "modules/user/pages/profile/settings/customization_settings/settings/color_picker_well.rs": "riseonly-base",
+    "modules/user/pages/profile/settings/settings.rs": "riseonly-pages-misc-a",
+    "modules/user/shared/contact_device_book.rs": "riseonly-data-low",
+    "modules/user/shared/debug/debug_native_alert_previews.rs": "riseonly-ui-low",
+    "modules/user/shared/mention_resolver.rs": "riseonly-data-low",
+    "modules/user/stores/account_state_reset_user_hooks_install.rs": "riseonly-ui-low",
+    "modules/user/stores/subscription/premium_gift_store.rs": "riseonly-data-misc",
+    "modules/user/stores/subscription/subscription_actions/subscription_actions.rs": "riseonly-data-misc",
+    "modules/user/stores/subscription/subscription_interactions/subscription_interactions.rs": "riseonly-data-misc",
+    "modules/user/stores/subscription/subscription_services/subscription_services.rs": "riseonly-data-misc",
+    "modules/user/stores/user/user_actions/user_contact_types.rs": "riseonly-data-low",
+    "modules/user/stores/user/user_actions/user_contact_wire_types.rs": "riseonly-data-low",
+    "modules/user/stores/user/user_actions/user_contact_wire_types_tests.rs": "riseonly-data-mid",
+    "modules/user/stores/user_storage/user_storage_interactions/user_storage_interactions.rs": "riseonly-ui-chat",
+    "modules/vacancy/pages/create_resume/local_image_file_hooks.rs": "riseonly-data-misc",
+    "modules/vacancy/shared/debug/vacancy_bottom_sheet_previews.rs": "riseonly-ui-high"
+  }
+}

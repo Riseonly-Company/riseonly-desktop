@@ -56,7 +56,7 @@ use crate::modules::chat::engine::messages::rise_message_scope::{
 use crate::modules::chat::engine::rise_conversation_domain::{RiseConversationDomain, RiseConversationDomainRegistry};
 use crate::modules::chat::shared::chat_permission_resolution::ChatPermissionResolution;
 use crate::modules::chat::shared::utils::voice::voice_message_metadata::VoiceMessageMetadata;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::chat_stores_share_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatType;
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
@@ -103,7 +103,7 @@ where
 }
 
 pub(super) fn guide_sandbox_owns_chat(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_chat_id(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_chat_id)(chat_id, cx)
 }
 
 pub(super) fn log_message_failure(text: String, cx: &mut App) {

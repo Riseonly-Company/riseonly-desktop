@@ -39,7 +39,7 @@ use crate::modules::chat::engine::core::rise_conversation_presentation::{
 };
 use crate::modules::chat::engine::core::rise_undeliverable_direct_draft_loader::RiseUndeliverableDirectDraftLoaderOperation;
 use crate::modules::chat::shared::utils::chat_list_utils::ChatListUtils;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::chat_stores_user_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_archive_wire_types::RiseStoredArchivedChatPage;
@@ -177,12 +177,12 @@ pub struct ChatServicesStore {
     pub(crate) get_chat_by_id_sai: Rc<SaiTypedSlice<RiseStoredChatDetail>>,
     pub(crate) get_message_requests_sai: Rc<SaiTypedSlice<RiseStoredMessageRequestPage>>,
 
-    pub(crate) temp_chat_id_to_real: HashMap<String, String>,
+    pub temp_chat_id_to_real: HashMap<String, String>,
     pub(crate) pending_create_chat_temp_id: Option<String>,
     pub(crate) fetched_chat_by_id_set: HashSet<String>,
     pub(crate) community_preview_by_chat_id: HashMap<String, ChatInfo>,
     opening_hint_slot: Option<ChatInfo>,
-    pub(crate) draft_direct_chat_by_id: HashMap<String, ChatInfo>,
+    pub draft_direct_chat_by_id: HashMap<String, ChatInfo>,
     engine_contact_join_chats: Vec<ChatInfo>,
     pub(crate) draft_direct_chat_order: Vec<String>,
     pub(crate) undeliverable_draft_direct_chat_ids: HashSet<String>,
@@ -197,11 +197,11 @@ pub struct ChatServicesStore {
     pub(crate) direct_chat_waiters_by_target: HashMap<String, Vec<DirectChatWaiter>>,
     pub(crate) membership_refetch_in_flight: HashSet<String>,
     pub(crate) left_chat_ids: HashSet<String>,
-    pub(crate) confirmed_removed_chat_ids: HashSet<String>,
-    pub(crate) pending_delete_chat_ids: HashSet<String>,
+    pub confirmed_removed_chat_ids: HashSet<String>,
+    pub pending_delete_chat_ids: HashSet<String>,
     pub(crate) archive_mutations_by_chat: HashMap<String, ChatArchiveMutationSnapshot>,
     pub folders: Vec<ChatFolder>,
-    pub(crate) contact_ids: HashSet<String>,
+    pub contact_ids: HashSet<String>,
     pub topics_enabled_override: HashSet<String>,
     pub topics_disabled_override: HashSet<String>,
     pub(crate) forced_unread_topic_keys: HashSet<String>,
@@ -211,11 +211,11 @@ pub struct ChatServicesStore {
     pub(crate) join_request_decisions_in_flight: HashMap<String, i64>,
     pub(crate) wallpaper_catalogs: HashMap<String, ChatWallpaperCatalogState>,
     pub join_link_sheet: Option<JoinLinkSheetState>,
-    pub(crate) removed_topic_notice: Option<ChatRemovedTopicNotice>,
+    pub removed_topic_notice: Option<ChatRemovedTopicNotice>,
     pub(crate) deleted_topic_unread: HashMap<(String, String), i64>,
     pub removed_from_chat_notice: Option<ChatRemovedFromChatNotice>,
     pub(crate) settings_by_chat: HashMap<String, ChatSettingsModel>,
-    pub(crate) slow_mode_until: HashMap<String, Date>,
+    pub slow_mode_until: HashMap<String, Date>,
     pub(crate) slow_mode_server_wait_end: HashMap<String, Date>,
     pub(crate) latest_own_server_send_at: HashMap<String, f64>,
     pub(crate) linked_chat_by_chat: HashMap<String, LinkedChatInfo>,
@@ -238,7 +238,7 @@ pub struct ChatServicesStore {
     chats_disk_persistence_token: Uuid,
     chats_disk_persistence_quit: Option<QuitLease>,
     pub(crate) chat_info_index_stamp: RefCell<Option<ChatServicesStoreChatInfoIndexStamp>>,
-    pub(crate) chat_info_index: RefCell<HashMap<String, ChatInfo>>,
+    pub chat_info_index: RefCell<HashMap<String, ChatInfo>>,
     chats_inbox_infos_memo: RefCell<Option<ChatsInboxInfosMemo>>,
     chats_disk_fallback_memo: RefCell<HashMap<String, ChatsDiskFallbackMemo>>,
 }
@@ -907,7 +907,7 @@ impl ChatServicesStore {
 
     pub fn wallpaper_catalog(&self, chat_id: &str, topic_id: Option<&str>, cx: &App) -> ChatWallpaperCatalogState {
         if topic_id.is_none()
-            && let Some(invented) = GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).wallpaper_catalog(chat_id))
+            && let Some(invented) = (chat_guide_sandbox_hooks().wallpaper_catalog)(chat_id, cx)
         {
             return invented;
         }

@@ -24,7 +24,7 @@ pub struct CommentPhotoUploadResult {
 }
 
 impl CommentMedia {
-    pub(crate) fn from_photo(photo: &CommentPhotoUploadResult) -> Self {
+    pub fn from_photo(photo: &CommentPhotoUploadResult) -> Self {
         Self {
             width: photo.width,
             height: photo.height,

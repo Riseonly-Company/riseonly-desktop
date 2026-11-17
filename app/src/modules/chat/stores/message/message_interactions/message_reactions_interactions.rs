@@ -6,7 +6,7 @@ use crate::core::guides::guide_signal_bus::GuideSignalBus;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::core::rise_engine_bridge::rise_transport_status::RiseTransportStatus;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::chat_stores_components_hooks;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::chat::stores::message::message_actions::message_actions::MessageActionHandler;
@@ -15,7 +15,7 @@ use crate::modules::chat::stores::message::message_interactions::message_interac
 use crate::modules::chat::stores::message::message_services::message_services::MessageServicesStore;
 
 fn guide_sandbox_owns_chat(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_chat_id(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_chat_id)(chat_id, cx)
 }
 
 fn reaction_park_key(scope: &str, message_id: &str, reaction: &str) -> String {

@@ -49,7 +49,6 @@ use crate::core::storage::rise_chat_media_ledger::RiseChatMediaLedger;
 use crate::core::ui::custom_emoji_glyph::CustomEmojiGlyphMetrics;
 use crate::core::ui::custom_emoji_resource_warmup::CustomEmojiResourceWarmup;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
-use crate::modules::chat::components::chat::async_render::rise_native_text_message_cell::OWN_SELECTION_OPACITY;
 use crate::core::ui::formatted_text_ui::{
     FormattedText, FormattedTextInlinePreparation, FormattedTextOptions, FormattedTextPreparedGeometry, FormattedTextRenderSeed,
     FormattedTextSelection, FormattedTextStyle, FormattedTextUi, RoleMentionSpan,
@@ -126,6 +125,7 @@ pub type MessageContentStringAction = Rc<dyn Fn(&str, &mut App)>;
 const DEFAULT_MESSAGE_VIEWPORT_WIDTH: f32 = 393.0;
 const COUNTER_ESTIMATED_GLYPH_WIDTH: f32 = 6.5;
 const DETACHED_PLATE_INSET_X: f32 = 8.0;
+pub const OWN_SELECTION_OPACITY: f32 = 0.35;
 
 pub struct ChatMessageViewportWidthKey;
 

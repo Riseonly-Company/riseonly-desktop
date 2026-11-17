@@ -5,9 +5,9 @@ use rise_canon::RiseGuideSignal;
 use rise_core::foundation::foundation_uuid::Uuid;
 
 use crate::core::guides::guide_facts::GuideFacts;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
-use crate::modules::map::components::reactions::map_reaction_stage::MapReactionStage;
+use crate::modules::map::engine::map_guide_sandbox_hooks::map_guide_sandbox_hooks;
 use crate::modules::map::engine::core::map_track_tile_store::MapTrackTileStore;
+use crate::modules::map::engine::map_reaction_stage_hooks::map_reaction_stage_hooks;
 use crate::modules::map::engine::rise_map_drafts_repository::RiseMapDraftsSnapshot;
 use crate::modules::map::engine::rise_map_engine_models::{
     RiseMapFriendsSnapshot, RiseMapLiveSnapshot, RiseMapStateSnapshot,
@@ -244,7 +244,7 @@ impl RiseMapPresentation {
             state.snapshot = snapshot;
             cx.notify();
         });
-        let owns_map_scene = GuideSandbox::shared(cx).read(cx).owns_map_scene();
+        let owns_map_scene = (map_guide_sandbox_hooks().owns_map_scene)(cx);
         cx.defer(move |cx| GuideFacts::set(RiseGuideSignal::MapMember, is_member || owns_map_scene, cx));
     }
 
@@ -378,7 +378,9 @@ impl RiseMapPresentation {
             reactions.inbox = entries;
             cx.notify();
         });
-        MapReactionStage::shared(cx).update(cx, |stage, cx| stage.set_unread(&unread, cx));
+        if let Some(hooks) = map_reaction_stage_hooks() {
+            (hooks.set_unread)(&unread, cx);
+        }
     }
 
     fn accepts(&self, session: &RiseMapSessionIdentity) -> bool {
@@ -412,7 +414,9 @@ impl RiseMapPresentation {
             reactions.revision = 0;
             cx.notify();
         });
-        MapReactionStage::shared(cx).update(cx, |stage, cx| stage.reset(cx));
+        if let Some(hooks) = map_reaction_stage_hooks() {
+            (hooks.reset)(cx);
+        }
         self.tracks.update(cx, |tracks, cx| {
             if tracks.snapshot != RiseMapTracksSnapshot::EMPTY {
                 tracks.snapshot = RiseMapTracksSnapshot::EMPTY;

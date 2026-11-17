@@ -249,8 +249,7 @@ fn a_maximized_window_offers_restore_instead_of_maximize() {
 
 #[test]
 fn the_linux_button_drawings_ship_with_the_app() {
-    let lucide = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
+    let lucide = std::path::Path::new(env!("RISE_WORKSPACE_DIR"))
         .join("assets")
         .join("icons")
         .join("lucide");

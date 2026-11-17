@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::notify::engine::rise_notify_domain::RiseNotifyDomain;
 
-pub(crate) fn install_rise_notify_domain_hooks() {
+pub fn install_rise_notify_domain_hooks() {
     RiseAppEngineNotifyDomainHooks::install(RiseAppEngineNotifyDomainHooks {
         prepare: Box::new(|context| {
             async move {

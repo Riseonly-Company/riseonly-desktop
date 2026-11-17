@@ -36,7 +36,6 @@ use rise_ui::swiftui::lifecycle::LifecycleModifiers;
 use smallvec::SmallVec;
 
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
-use crate::core::media_viewer::media_viewer_presentation_state::chat_media_presentation;
 use crate::core::media::remote_media_disk_cache::{
     RemoteMediaDiskCache, RemoteMediaDownloadProgress, RemoteMediaDownloadRetryPolicy,
     RemoteMediaHttpResponse,
@@ -44,6 +43,7 @@ use crate::core::media::remote_media_disk_cache::{
 use crate::core::media::rise_progressive_data_fetcher::{
     RiseProgressiveDataFetcher, RiseProgressiveDataFetcherLane,
 };
+use crate::core::ui::animated_gif_view_hooks::animated_gif_view_hooks;
 use crate::core::ui::animated_media_playback_coordinator::{
     AnimatedMediaParticipantId, AnimatedMediaPlaybackCoordinator, AnimatedMediaPlaybackKind,
     AnimatedMediaPlaybackPolicy,
@@ -537,13 +537,21 @@ impl AnimatedGifImageView {
             return false;
         }
         if self.media_viewer_cover_observer.is_none() {
-            let presentation = chat_media_presentation(cx);
-            self.media_viewer_cover_observer = Some(cx.observe(&presentation, |view, presentation, cx| {
-                view.apply_media_viewer_cover(presentation.read(cx).covers_page(), cx);
-            }));
+            let Some(hooks) = animated_gif_view_hooks() else {
+                return self.is_covered_by_media_viewer;
+            };
+            let observer = cx.entity().downgrade();
+            self.media_viewer_cover_observer = Some((hooks.observe_media_viewer_cover)(
+                Box::new(move |covers: bool, cx: &mut App| {
+                    if let Some(observer) = observer.upgrade() {
+                        observer.update(cx, |view, cx| view.apply_media_viewer_cover(covers, cx));
+                    }
+                }),
+                cx,
+            ));
             let this = cx.entity().downgrade();
             cx.defer(move |cx| {
-                let covers = chat_media_presentation(cx).read(cx).covers_page();
+                let covers = (hooks.media_viewer_covers_page)(cx);
                 if let Some(this) = this.upgrade() {
                     this.update(cx, |view, cx| view.apply_media_viewer_cover(covers, cx));
                 }

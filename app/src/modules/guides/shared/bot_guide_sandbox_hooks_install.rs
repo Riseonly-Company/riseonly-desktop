@@ -9,7 +9,7 @@ use crate::modules::bot::stores::bot::bot_services::bot_guide_sandbox_hooks::{
 };
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 
-pub(crate) fn install_bot_guide_sandbox_hooks() {
+pub fn install_bot_guide_sandbox_hooks() {
     let _ = set_bot_guide_sandbox_hooks(BotGuideSandboxHooks {
         owns_practice_bot,
         owned_bots_snapshot,

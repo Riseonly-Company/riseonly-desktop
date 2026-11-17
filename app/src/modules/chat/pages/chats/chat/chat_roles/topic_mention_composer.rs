@@ -11,11 +11,11 @@ use crate::core::config::app_environment::AppEnvironment;
 use crate::core::push_notifications::riseonly_public_link::RiseonlyPublicLink;
 use crate::core::ui::formatted_text_ui::{FormattedTextStyle, RoleMentionSpan};
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
+use crate::modules::chat::pages::chats::chat::chat_roles::topic_mention_composer_hooks::topic_mention_composer_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatPermExt, ChatTopic, ChatVoiceConnectGateDecision};
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::chat::stores::message::message_actions::message_types::MessageTopicMentionEntity;
-use crate::modules::rtc::stores::rtc::rtc_interactions::rtc_interactions::RTCInteractionsStore;
 
 /// in a forum # names a channel the way @ names a person
 /// the list and topic_mention entity and bubble span and tap live here
@@ -171,7 +171,9 @@ impl TopicMentionComposer {
                     &tr("chat_topic_mention_join"),
                     move |cx| {
                         let target = RiseRTCRoomTarget::Topic { chat_id: room_chat_id, topic_id: room_topic_id };
-                        RTCInteractionsStore::shared(cx).update(cx, |store, cx| store.present_room(target, cx));
+                        if let Some(hooks) = topic_mention_composer_hooks() {
+                            (hooks.present_room)(target, cx);
+                        }
                     },
                     cx,
                 );

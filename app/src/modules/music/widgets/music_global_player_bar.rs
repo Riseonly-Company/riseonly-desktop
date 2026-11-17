@@ -12,7 +12,7 @@ use rise_ui::main_text::MainText;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 
-use crate::app::aside::aside_navigator;
+use crate::app::router::navigation_aside_hooks::navigation_aside_hooks;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::canon_format::RiseFormat;
@@ -366,8 +366,8 @@ impl MusicGlobalPlayerBar {
             div().children(glyph("list.bullet", 18.0, theme.text.secondary)),
             true,
             |_, cx| {
-                if aside_navigator::has_frontmost(cx) {
-                    aside_navigator::open(RootRoute::MusicNowPlaying, cx);
+                if let Some(aside) = navigation_aside_hooks() && (aside.has_frontmost)(cx) {
+                    (aside.open)(RootRoute::MusicNowPlaying, cx);
                 } else {
                     MusicPlayerState::shared(cx).update(cx, |player, cx| {
                         player.show_queue_sheet = true;

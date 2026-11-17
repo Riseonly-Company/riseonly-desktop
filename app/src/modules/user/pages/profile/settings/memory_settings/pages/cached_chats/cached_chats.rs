@@ -19,7 +19,7 @@ use crate::core::storage::rise_storage_usage_models::{RiseStorageChatUsage, Rise
 use crate::core::storage::rise_storage_usage_presentation::RiseStorageUsagePresentation;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::wrappers::list_shell_ui::{SettingsWrapperUi, list_shell_under_chrome_box};
-use crate::modules::post::pages::posts::post_detail::profile_post_list_body::splice_list_rows;
+use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 use crate::modules::user::stores::user_storage::user_storage_interactions::user_storage_interactions::UserStorageInteractionsStore;
 use crate::modules::user::stores::user_storage::user_storage_services::user_storage_services::UserStorageServicesStore;
 

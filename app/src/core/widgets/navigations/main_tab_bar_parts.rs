@@ -10,9 +10,9 @@ use rise_ui::unread_count_badge_ui::UnreadCountBadgeUi;
 use crate::app::router::navigation_types::MainTab;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::navigations::main_tab_bar::{MainTabBarItem, MainTabBarMetrics};
+use crate::core::widgets::navigations::main_tab_bar_rtc_hooks::main_tab_bar_rtc_hooks;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
-use crate::modules::rtc::components::rise_rtc_local_speaking_ring::RiseRTCLocalSpeakingRing;
 
 /// one button, the tinted copy is what the pill reveals
 #[derive(IntoElement)]
@@ -146,6 +146,6 @@ impl RenderOnce for MainTabBarAvatar {
                     .border(px(1.6))
                     .border_color(if self.ringed { self.ring } else { gpui::transparent_black() }),
             )
-            .child(RiseRTCLocalSpeakingRing::shared(cx))
+            .children(main_tab_bar_rtc_hooks().map(|hooks| (hooks.local_speaking_ring)(cx)))
     }
 }

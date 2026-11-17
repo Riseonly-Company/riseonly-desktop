@@ -11,7 +11,7 @@ use crate::modules::chat::engine::messages::rise_call_history_message::RiseCallH
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomain;
 use crate::modules::rtc::engine::rise_rtc_domain::{RiseRTCCallHistorySink, RiseRTCDomain};
 
-pub(crate) fn install_rise_rtc_domain_hooks() {
+pub fn install_rise_rtc_domain_hooks() {
     RiseAppEngineRtcDomainHooks::install(RiseAppEngineRtcDomainHooks {
         prepare: Box::new(|context| {
             async move {

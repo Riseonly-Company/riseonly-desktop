@@ -4,7 +4,7 @@ use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 
 use crate::core::feature_hooks::FeatureHookSlot;
 
-pub(crate) struct SaiAuthHooks {
+pub struct SaiAuthHooks {
     pub access_token: Box<dyn Fn(&App) -> Option<String> + Send + Sync>,
     pub is_expired: Box<dyn Fn(&str, f64) -> bool + Send + Sync>,
     pub extract_user_id: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
@@ -28,11 +28,11 @@ pub(crate) struct SaiAuthHooks {
 pub(crate) static SAI_AUTH_HOOKS: FeatureHookSlot<SaiAuthHooks> = FeatureHookSlot::new("SAI_AUTH_HOOKS");
 
 /// installed once, a second install keeps the first
-pub(crate) fn set_sai_auth_hooks(hooks: SaiAuthHooks) {
+pub fn set_sai_auth_hooks(hooks: SaiAuthHooks) {
     let _ = SAI_AUTH_HOOKS.set(hooks);
 }
 
-pub(crate) fn sai_auth_hooks() -> Option<&'static SaiAuthHooks> {
+pub fn sai_auth_hooks() -> Option<&'static SaiAuthHooks> {
     SAI_AUTH_HOOKS.get()
 }
 
@@ -45,12 +45,12 @@ pub(crate) fn sai_auth_access_token(cx: &App) -> Option<String> {
 }
 
 /// true if the token is expired, without auth nothing is ever expired
-pub(crate) fn sai_auth_is_expired(token: &str, leeway_seconds: f64) -> bool {
+pub fn sai_auth_is_expired(token: &str, leeway_seconds: f64) -> bool {
     sai_auth_hooks().is_some_and(|hooks| (hooks.is_expired)(token, leeway_seconds))
 }
 
 /// refreshes the access token, fails like a signed out refresh when auth is missing
-pub(crate) fn sai_auth_refresh_access_token(
+pub fn sai_auth_refresh_access_token(
     cx: &mut App,
 ) -> LocalBoxFuture<'static, anyhow::Result<()>> {
     match sai_auth_hooks() {

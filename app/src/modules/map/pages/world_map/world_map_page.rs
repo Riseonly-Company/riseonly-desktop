@@ -27,8 +27,8 @@ use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::transition::{Edge, Presence, Transition};
 use rise_widgets::window_controls_band;
 
-use crate::app::aside::aside_navigator;
 use crate::app::router::main_tab_chrome::main_tab_bar_underlap;
+use crate::app::router::navigation_aside_hooks::navigation_aside_hooks;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::{MainTab, RootRoute};
 use crate::core::config::app_environment::AppEnvironment;
@@ -106,7 +106,9 @@ fn push(nav_store: &Option<Entity<NavigationStore>>, route: RootRoute, cx: &mut 
 fn open_settings(nav_store: &Option<Entity<NavigationStore>>, cx: &mut App) {
     let beside = nav_store.as_ref().is_some_and(|store| store.read(cx).aside_takes_details());
     if beside {
-        aside_navigator::open(RootRoute::MapSettings, cx);
+        if let Some(aside) = navigation_aside_hooks() {
+            (aside.open)(RootRoute::MapSettings, cx);
+        }
         return;
     }
     push(nav_store, RootRoute::MapSettings, cx);

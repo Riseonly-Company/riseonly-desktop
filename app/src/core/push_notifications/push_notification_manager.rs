@@ -702,7 +702,7 @@ impl PushNotificationManager {
         true
     }
 
-    pub(crate) fn should_present_for_chat_notification_settings(
+    pub fn should_present_for_chat_notification_settings(
         user_info: &Map<String, Value>,
         cx: &mut App,
     ) -> bool {

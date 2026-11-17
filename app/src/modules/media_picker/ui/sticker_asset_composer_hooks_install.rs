@@ -30,7 +30,7 @@ fn media_picker_sheet(
     .into_any_element()
 }
 
-pub(crate) fn install_sticker_asset_composer_hooks() {
+pub fn install_sticker_asset_composer_hooks() {
     set_sticker_asset_composer_hooks(StickerAssetComposerHooks { media_picker_sheet });
 }
 

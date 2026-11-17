@@ -23,14 +23,14 @@ impl EnvKey for MusicPlayerHiddenUnderFullPlayerKey {
 }
 
 /// whether content here is hidden by the open full player right now
-pub(crate) fn is_hidden_under_full_player(player: &MusicPlayerState, hides_under_full_player: bool) -> bool {
+pub fn is_hidden_under_full_player(player: &MusicPlayerState, hides_under_full_player: bool) -> bool {
     hides_under_full_player && player.show_now_playing()
 }
 
 /// observe the player for a centre page
 /// full player covers the window so the page skips publications
 /// redraws once when it closes
-pub(crate) fn observe_player_unless_covered<T: 'static>(
+pub fn observe_player_unless_covered<T: 'static>(
     player: &Entity<MusicPlayerState>,
     cx: &mut Context<T>,
 ) -> Subscription {
@@ -47,7 +47,7 @@ pub(crate) fn observe_player_unless_covered<T: 'static>(
 
 /// a render under the open full player that reads it but hears it through a filtered observation
 /// so a publication doesnt redraw its cached view
-pub(crate) fn hear_player_through_observation_while_covered(player: &Entity<MusicPlayerState>, cx: &App) {
+pub fn hear_player_through_observation_while_covered(player: &Entity<MusicPlayerState>, cx: &App) {
     let hides_under_full_player = env::<MusicPlayerHiddenUnderFullPlayerKey>(cx);
     if is_hidden_under_full_player(player.read(cx), hides_under_full_player) {
         gpui::hear_entity_through_events_only(player.entity_id());
@@ -56,7 +56,7 @@ pub(crate) fn hear_player_through_observation_while_covered(player: &Entity<Musi
 
 /// shared player read by a stateless view
 /// observation lives in element state and redraws the view that draws id
-pub(crate) fn observed_music_player(
+pub fn observed_music_player(
     id: impl Into<ElementId>,
     window: &mut Window,
     cx: &mut App,

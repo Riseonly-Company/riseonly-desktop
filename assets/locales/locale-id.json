@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Buang perubahan?",
   "media_editor_discard_confirm": "Buang perubahan",
   "media_editor_discard_keep": "Lanjutkan mengedit",
-  "story_canvas_photos_limit_reached": "Anda dapat menambahkan hingga %d foto"
+  "story_canvas_photos_limit_reached": "Anda dapat menambahkan hingga %d foto",
+  "error_rtc_overloaded": "Panggilan sedang sangat ramai. Agar panggilan yang berlangsung tetap stabil, panggilan baru dijeda sebentar. Coba lagi sebentar lagi",
+  "overload_modal_title": "Sedang sangat ramai"
 }

@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::map::engine::rise_map_domain::RiseMapDomain;
 
-pub(crate) fn install_rise_map_domain_hooks() {
+pub fn install_rise_map_domain_hooks() {
     RiseAppEngineMapDomainHooks::install(RiseAppEngineMapDomainHooks {
         prepare: Box::new(|context| {
             async move {

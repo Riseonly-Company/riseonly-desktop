@@ -4,9 +4,9 @@ use rise_platform::user_defaults::UserDefaults;
 use rise_platform::user_defaults_keys;
 
 use crate::app::router::navigation_types::CreatePostIntent;
+use crate::modules::camera::capture::post_author_premium_hooks::post_author_is_premium;
 use crate::modules::media_picker::api::media_picker_configuration::MediaPickerConfiguration;
 use crate::modules::media_picker::api::short_video_limits::ShortVideoLimits;
-use crate::modules::user::pages::profile::create_post::create_post::CreatePostScreenState;
 
 /// what a shot from the feed camera becomes
 /// the strip lists them in this order, camera opens on the last used one and on story the first time
@@ -50,7 +50,7 @@ impl RiseCameraMode {
         match self {
             Self::Story => MediaPickerConfiguration::story(),
             Self::Publication | Self::Riffs => {
-                MediaPickerConfiguration::post_media_for_tier(CreatePostScreenState::author_is_premium(cx))
+                MediaPickerConfiguration::post_media_for_tier(post_author_is_premium(cx))
             }
         }
     }

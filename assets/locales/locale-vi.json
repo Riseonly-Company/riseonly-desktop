@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Hủy các thay đổi?",
   "media_editor_discard_confirm": "Hủy thay đổi",
   "media_editor_discard_keep": "Tiếp tục chỉnh sửa",
-  "story_canvas_photos_limit_reached": "Bạn có thể thêm tối đa %d ảnh"
+  "story_canvas_photos_limit_reached": "Bạn có thể thêm tối đa %d ảnh",
+  "error_rtc_overloaded": "Cuộc gọi hiện đang quá tải. Để giữ ổn định các cuộc gọi đang diễn ra, cuộc gọi mới tạm thời bị hoãn. Hãy thử lại sau giây lát",
+  "overload_modal_title": "Hiện đang quá tải"
 }

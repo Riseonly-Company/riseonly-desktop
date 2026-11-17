@@ -8,7 +8,7 @@ use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEd
 use crate::modules::media_picker::editor::media_reedit_store::MediaReeditStore;
 use crate::modules::media_picker::shared::media_picker_recent_files::MediaPickerRecentFiles;
 
-pub(crate) fn install_account_state_reset_media_picker_hooks() {
+pub fn install_account_state_reset_media_picker_hooks() {
     set_account_state_reset_media_picker_hooks(AccountStateResetMediaPickerHooks {
         activate_account_state: |cx| {
             MediaPickerRecentFiles::shared(cx).update(cx, |files, cx| files.activate_account_state(cx));

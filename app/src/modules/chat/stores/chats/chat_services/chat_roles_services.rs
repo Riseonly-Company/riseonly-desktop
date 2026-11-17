@@ -23,7 +23,7 @@ use crate::modules::chat::engine::chat_engine_hooks::ChatEngineMainCallback;
 use crate::modules::chat::engine::core::rise_conversation_presentation::RiseConversationPresentation;
 use crate::modules::chat::engine::forum::rise_forum_voice_presence::RiseForumVoicePresentation;
 use crate::modules::chat::shared::chat_permission_resolution::ChatPermissionResolution;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::{chat_stores_rtc_hooks, chat_stores_user_hooks};
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{
@@ -196,11 +196,11 @@ fn defer_revalidate_forum_feed(chat_id: String, cx: &mut App) {
 }
 
 fn guide_owns_forum(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_forum_chat_id(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_forum_chat_id)(chat_id, cx)
 }
 
 fn guide_owns_roles(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_roles(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_roles)(chat_id, cx)
 }
 
 fn active_room_config(cx: &mut App) -> Option<(String, Option<String>)> {
@@ -246,14 +246,13 @@ impl ChatServicesStore {
         cx: &mut App,
     ) -> Rc<ForumStructureProjection> {
         if guide_owns_forum(chat_id, cx) {
-            let sandbox = GuideSandbox::shared(cx);
-            let sandbox = sandbox.read(cx);
+            let sandbox = chat_guide_sandbox_hooks();
             return Rc::new(ForumStructureProjection {
                 has_payload: true,
-                sections: sandbox.forum_sections(),
-                topics: sandbox.forum_topics(),
+                sections: (sandbox.forum_sections)(cx),
+                topics: (sandbox.forum_topics)(cx),
                 general_topic: None,
-                roles: sandbox.forum_roles(),
+                roles: (sandbox.forum_roles)(cx),
                 general_hidden: false,
             });
         }
@@ -490,7 +489,7 @@ impl ChatServicesStore {
             Self::effective_notification_scopes(chat.notification_scopes(), mute_all_chats_enabled, is_exception);
         let permissions_cache_key = Self::effective_perms_cache_key(chat_id, None);
         let permissions = if guide_owns_forum(chat_id, cx) {
-            GuideSandbox::shared(cx).read(cx).forum_permissions().mask()
+            (chat_guide_sandbox_hooks().forum_permissions)(cx).mask()
         } else if SaiWsResponseCache::observed_memory_only(&permissions_cache_key, cx).is_none() {
             0
         } else {
@@ -535,7 +534,7 @@ impl ChatServicesStore {
         cx: &mut App,
     ) -> Option<EffectivePermissionsDTO> {
         if guide_owns_forum(chat_id, cx) {
-            return Some(GuideSandbox::shared(cx).read(cx).forum_permissions());
+            return Some((chat_guide_sandbox_hooks().forum_permissions)(cx));
         }
         self.decoded_forum(&Self::effective_perms_cache_key(chat_id, topic_id), cx)
     }
@@ -548,7 +547,7 @@ impl ChatServicesStore {
         cx: &mut App,
     ) -> Option<Vec<ChatPermOverwrite>> {
         if guide_owns_roles(chat_id, cx) {
-            return GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).overwrites(scope, scope_id));
+            return (chat_guide_sandbox_hooks().overwrites)(scope, scope_id, cx);
         }
         let dto: GetOverwritesGatewayDTO =
             self.decoded_forum(&Self::overwrites_cache_key(chat_id, scope, scope_id), cx)?;
@@ -557,7 +556,7 @@ impl ChatServicesStore {
 
     pub fn cached_member_override(&self, chat_id: &str, participant_id: &str, cx: &mut App) -> Option<(i64, i64)> {
         if guide_owns_roles(chat_id, cx)
-            && let Some(invented) = GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).member_override(participant_id)).map(|member_override| (member_override.allow, member_override.deny))
+            && let Some(invented) = (chat_guide_sandbox_hooks().member_override)(participant_id, cx)
         {
             return Some(invented);
         }

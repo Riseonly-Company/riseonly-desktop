@@ -10,7 +10,7 @@ use crate::modules::auth::services::auth_token_refresh::AuthTokenRefresh;
 use crate::modules::auth::stores::auth_interactions::auth_interactions::AuthInteractionsStore;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 
-pub(crate) fn install_auth_services_hooks() {
+pub fn install_auth_services_hooks() {
     set_sai_auth_hooks(SaiAuthHooks {
         access_token: Box::new(|cx: &App| {
             let store = AuthServicesStore::try_read(cx)?;

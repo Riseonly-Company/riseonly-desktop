@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::theme::engine::rise_theme_domain::RiseThemeDomain;
 
-pub(crate) fn install_rise_theme_domain_hooks() {
+pub fn install_rise_theme_domain_hooks() {
     RiseAppEngineThemeDomainHooks::install(RiseAppEngineThemeDomainHooks {
         prepare: Box::new(|context| {
             async move {

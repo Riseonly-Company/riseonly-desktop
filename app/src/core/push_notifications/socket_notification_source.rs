@@ -34,7 +34,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::app::dev_drive::DevDrive;
-use crate::app::shell::window_presenter::WindowPresenter;
+use crate::app::shell::handover_hooks::handover_hooks;
 use crate::core::desktop_platform::rise_app_lifecycle::{RiseAppLifecycle, ScenePhase};
 use crate::core::desktop_platform::rise_app_quit_drain::request_quit;
 use crate::core::desktop_platform::tray_controller::TrayController;
@@ -1043,8 +1043,10 @@ impl SocketNotificationSource {
     }
 
     pub fn did_reopen(cx: &mut App) {
-        if WindowPresenter::window_count(cx) == 0 {
-            WindowPresenter::open_shell(cx);
+        if cx.windows().is_empty()
+            && let Some(hooks) = handover_hooks()
+        {
+            (hooks.open_shell)(cx);
         }
     }
 

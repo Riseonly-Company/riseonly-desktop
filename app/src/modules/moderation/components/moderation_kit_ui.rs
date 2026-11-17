@@ -32,13 +32,13 @@ use crate::modules::moderation::stores::moderation_actions::moderation_types::{
 
 const FILLED_SYMBOL_SUFFIX: &str = ".fill";
 
-pub(crate) fn moderation_child_id(id: &ElementId, name: impl Into<SharedString>) -> ElementId {
+pub fn moderation_child_id(id: &ElementId, name: impl Into<SharedString>) -> ElementId {
     ElementId::NamedChild(std::sync::Arc::new(id.clone()), name.into())
 }
 
 /// system image at a size and color
 /// lucide has no filled variants so the fill intent is read off the sf name
-pub(crate) fn moderation_symbol(symbol: &str, side: f32, color: Hsla) -> Option<Svg> {
+pub fn moderation_symbol(symbol: &str, side: f32, color: Hsla) -> Option<Svg> {
     IconUi::sized(symbol, px(side), color, symbol.ends_with(FILLED_SYMBOL_SUFFIX))
 }
 

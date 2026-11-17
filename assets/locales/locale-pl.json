@@ -5981,5 +5981,7 @@
   "media_editor_discard_title": "Odrzucić zmiany?",
   "media_editor_discard_confirm": "Odrzuć zmiany",
   "media_editor_discard_keep": "Kontynuuj edycję",
-  "story_canvas_photos_limit_reached": "Możesz dodać maksymalnie %d zdjęć"
+  "story_canvas_photos_limit_reached": "Możesz dodać maksymalnie %d zdjęć",
+  "error_rtc_overloaded": "Połączenia są teraz mocno obciążone. Aby trwające rozmowy pozostały stabilne, nowe są na chwilę wstrzymane. Spróbuj ponownie za chwilę",
+  "overload_modal_title": "Duże obciążenie w tej chwili"
 }

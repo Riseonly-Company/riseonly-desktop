@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Descartar alterações?",
   "media_editor_discard_confirm": "Descartar alterações",
   "media_editor_discard_keep": "Continuar a editar",
-  "story_canvas_photos_limit_reached": "Pode adicionar até %d fotos"
+  "story_canvas_photos_limit_reached": "Pode adicionar até %d fotos",
+  "error_rtc_overloaded": "As chamadas estão com muita afluência neste momento. Para manter estáveis as chamadas em curso, as novas estão em pausa por um instante. Tente novamente daqui a pouco",
+  "overload_modal_title": "Muita afluência neste momento"
 }

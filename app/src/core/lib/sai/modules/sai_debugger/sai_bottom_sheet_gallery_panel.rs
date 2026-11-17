@@ -12,7 +12,7 @@ use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::segmented_picker::SegmentedPicker;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 
-use super::bottom_sheet_debug_catalog::BottomSheetDebugCatalog;
+use super::bottom_sheet_debug_catalog_hooks::bottom_sheet_debug_catalog_hooks;
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_debug_registration::{
     BottomSheetDebugRegistration, BottomSheetDebugRegistrationKind, BottomSheetDebugRegistrationMode,
     BottomSheetDebugRegistrationModule,
@@ -65,7 +65,10 @@ impl SaiBottomSheetGalleryPanel {
         kind: Option<BottomSheetDebugRegistrationKind>,
         query: &str,
     ) -> Vec<BottomSheetDebugRegistration> {
-        BottomSheetDebugCatalog::entries()
+        let Some(hooks) = bottom_sheet_debug_catalog_hooks() else {
+            return Vec::new();
+        };
+        (hooks.entries)()
             .iter()
             .filter(|entry| {
                 (module.is_none() || Some(entry.module) == module)
@@ -121,7 +124,8 @@ impl SaiBottomSheetGalleryPanel {
     fn module_cell(&self, item: BottomSheetDebugRegistrationModule) -> impl IntoElement + use<> {
         let theme = &self.theme;
         let binding = self.module.clone();
-        let count = BottomSheetDebugCatalog::counts().get(&item).copied().unwrap_or(0);
+        let count =
+            bottom_sheet_debug_catalog_hooks().and_then(|hooks| (hooks.counts)().get(&item).copied()).unwrap_or(0);
         plain(ElementId::Name(SharedString::from(format!("sai-bottom-sheet-module-{}", item.id()))))
             .flex_1()
             .min_w(px(0.))
@@ -154,7 +158,7 @@ impl SaiBottomSheetGalleryPanel {
     }
 
     fn module_grid(&self) -> Div {
-        let modules = BottomSheetDebugCatalog::modules();
+        let modules = bottom_sheet_debug_catalog_hooks().map(|hooks| (hooks.modules)()).unwrap_or_default();
         let rows: Vec<Div> = modules
             .chunks(2)
             .map(|pair| {

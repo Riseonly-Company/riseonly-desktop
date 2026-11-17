@@ -13,11 +13,11 @@ use rise_i18n::tr;
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::push_notifications::riseonly_public_link::RiseonlyPublicLink;
 use crate::core::ui::formatted_text_ui::{FormattedText, FormattedTextOptions, FormattedTextStyle};
-use crate::core::ui::rich_text::post_text_layout::{PostTextLayout, PostTextLayoutBuilder};
-use crate::modules::post::pages::posts::post_detail::native_list::contracts::post_list_contracts::{
+use crate::core::ui::rich_text::post_text_contracts_hooks::{
     PostRowCaptionLayout, PostRowLayoutSpec, PostRowPalette, PostRowParagraphLayout, PostRowTextBlockLayout,
     PostTextTokenKind,
 };
+use crate::core::ui::rich_text::post_text_layout::{PostTextLayout, PostTextLayoutBuilder};
 
 /// every constant tying native caption text to the hosted caption
 pub enum PostRichTextCalibration {}

@@ -7,7 +7,7 @@ use crate::modules::post::stores::post_services::post_guide_sandbox_hooks::{
     PostGuideSandboxHooks, set_post_guide_sandbox_hooks,
 };
 
-pub(crate) fn install_post_guide_sandbox_hooks() {
+pub fn install_post_guide_sandbox_hooks() {
     set_post_guide_sandbox_hooks(PostGuideSandboxHooks {
         owns_post: Box::new(owns_post),
         post: Box::new(post),

@@ -7,7 +7,7 @@ use crate::modules::chat::components::chat::async_render::chat_performance_trace
     ChatPerformanceTrace, OperationToken,
 };
 
-pub(crate) fn install_chat_performance_trace_hooks() {
+pub fn install_chat_performance_trace_hooks() {
     set_chat_performance_trace_hooks(ChatPerformanceTraceHooks {
         record: record_event,
         begin_operation,

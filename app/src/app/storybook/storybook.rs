@@ -445,7 +445,7 @@ mod tests {
 
     fn translate(arguments: &str) -> Vec<String> {
         let script =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/dev-args.sh");
+            std::path::Path::new(env!("RISE_WORKSPACE_DIR")).join("scripts/dev-args.sh");
         let output = std::process::Command::new("sh")
             .arg("-c")
             .arg(format!(

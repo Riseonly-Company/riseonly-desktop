@@ -2024,7 +2024,7 @@ impl RootView {
 
     /// the window the link was raised for is the one that opens it, whichever subscribed first
     pub(crate) fn is_frontmost_shell(&self, cx: &App) -> bool {
-        frontmost_shell(cx).is_some_and(|shell| AnyWindowHandle::from(shell) == self.window_handle)
+        frontmost_shell(cx).is_some_and(|shell| shell == self.window_handle)
     }
 
     fn window_did_close(&mut self, cx: &mut Context<Self>) {

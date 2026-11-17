@@ -10,10 +10,10 @@ use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_sour
 };
 use crate::modules::chat::shared::message_permissions::ChatMessageAction;
 
-pub(crate) enum ChatProfileMediaSaveActions {}
+pub enum ChatProfileMediaSaveActions {}
 
 impl ChatProfileMediaSaveActions {
-    pub(crate) fn actions(entry: &ChatProfileMediaEntry) -> Vec<HoldContextMenuAction> {
+    pub fn actions(entry: &ChatProfileMediaEntry) -> Vec<HoldContextMenuAction> {
         if entry.has_protected_content {
             return Vec::new();
         }
@@ -33,7 +33,7 @@ impl ChatProfileMediaSaveActions {
     }
 
     /// true when the action was one of the save rows, even if nothing got saved
-    pub(crate) fn handle(id: &str, entry: &ChatProfileMediaEntry, chat_id: &str, cx: &mut App) -> bool {
+    pub fn handle(id: &str, entry: &ChatProfileMediaEntry, chat_id: &str, cx: &mut App) -> bool {
         if id != ChatMessageAction::SAVE && id != ChatMessageAction::SAVE_TO_GALLERY {
             return false;
         }

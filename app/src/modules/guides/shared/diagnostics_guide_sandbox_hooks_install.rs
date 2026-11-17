@@ -5,7 +5,7 @@ use crate::modules::diagnostics::stores::diagnostics_guide_sandbox_hooks::{
 };
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 
-pub(crate) fn install_diagnostics_guide_sandbox_hooks() {
+pub fn install_diagnostics_guide_sandbox_hooks() {
     let _ = set_diagnostics_guide_sandbox_hooks(DiagnosticsGuideSandboxHooks { owns_bug_report_scene });
 }
 

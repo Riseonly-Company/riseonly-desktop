@@ -5,10 +5,9 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use futures::channel::oneshot;
 use gpui::{
-    AnyElement, App, AsyncApp, Bounds, ClipboardItem, Context, ElementId, Entity, FocusHandle, FontWeight, Hsla, Render,
-    SharedString, StyleRefinement, Subscription, Task, WeakEntity, Window, black, div, point, px, size,
+    AnyElement, App, AsyncApp, ClipboardItem, Context, ElementId, Entity, FocusHandle, FontWeight, Hsla, Render,
+    SharedString, StyleRefinement, Subscription, Task, WeakEntity, Window, black, div, px,
 };
 
 use rise_canon::{RiseLimits, RiseTimingCanon};
@@ -27,7 +26,7 @@ use rise_i18n::{FormatArg, tr, tr_args};
 use rise_music::PlaylistVisibility as CanonPlaylistVisibility;
 use rise_platform::file_manager::{CocoaError, FileManager};
 use rise_platform::haptics::{NotificationKind, notification, selection_changed};
-use rise_platform::system_share::{ShareFinished, ShareItem, ShareOutcome, ShareRequest, share};
+use rise_platform::system_share::ShareItem;
 use rise_theme::{AppTheme, FONT_FAMILY, ThemeStore};
 use rise_ui::IconUi;
 use rise_ui::liquid_glass_button::{LiquidGlassButton, LiquidGlassButtonShape};
@@ -54,11 +53,12 @@ use crate::core::ui::formatted_text_ui::FormattedText;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
+use crate::core::widgets::sheets::chat_favourites_logo_hooks::ChatFavouritesLogo;
 use crate::core::widgets::sheets::message_external_share_materializer::MessageExternalShareCoordinator;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::chat::components::chat::chat_logo::ChatFavouritesLogo;
 use crate::modules::chat::components::chat::topic_icon_glyph::TopicIconGlyph;
 use crate::modules::chat::engine::messages::rise_message_wire_codec::RiseMessageWireCodec;
+pub use crate::modules::chat::shared::utils::system_share_hooks::SystemShare;
 use crate::modules::chat::stores::message::message_actions::message_types::{
     GetMessageMessage, MessageContentType, MessageForwardError, MessageForwardLimits, MessageMediaKind,
 };
@@ -66,6 +66,9 @@ use crate::modules::chat::stores::message::message_actions::message_wire_types::
     ForwardMessageDestinationBody, ForwardMessageResultWireDTO, ForwardMessagesGatewayDTO,
 };
 use crate::modules::chat::stores::message::message_interactions::message_interactions::MessageInteractionsStore;
+pub use crate::modules::chat::stores::message::message_interactions::share_destination_hooks::{
+    ShareForwardIdentity, ShareSheetDestination,
+};
 use crate::modules::comment::stores::comment_actions::comment_types::GetCommentsResponse;
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
 use crate::modules::music::stores::music_services::music_services::MusicServicesStore;
@@ -599,43 +602,6 @@ impl SharePayload {
         }
         let sender = trimming_whitespaces_and_newlines(&message.sender_name);
         if sender.is_empty() { Some(text) } else { Some(format!("{sender}:\n{text}")) }
-    }
-}
-
-/// message service canonicalizes chat and topic and message ids before echoing a forward result
-/// so compare canonical forms, else a delivered batch is reported as not sent
-pub enum ShareForwardIdentity {}
-
-impl ShareForwardIdentity {
-    pub fn canonical(raw: Option<&str>) -> Option<String> {
-        let value = trimming_whitespaces_and_newlines(raw?);
-        if value.is_empty() {
-            return None;
-        }
-        Some(
-            Uuid::from_uuid_string(value)
-                .map(|uuid| uuid.uuid_string().to_lowercase())
-                .unwrap_or_else(|| value.to_owned()),
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ShareSheetDestination {
-    pub chat_id: String,
-    pub topic_id: Option<String>,
-}
-
-impl ShareSheetDestination {
-    pub fn new(chat_id: &str, topic_id: Option<&str>) -> Self {
-        Self {
-            chat_id: ShareForwardIdentity::canonical(Some(chat_id)).unwrap_or_else(|| chat_id.to_owned()),
-            topic_id: ShareForwardIdentity::canonical(topic_id),
-        }
-    }
-
-    pub fn id(&self) -> String {
-        format!("{}:{}", self.chat_id, self.topic_id.as_deref().unwrap_or_default())
     }
 }
 
@@ -1964,78 +1930,6 @@ impl ShareSheetStore {
             .and_then(ShareSendHandoffError::error_description)
             .or_else(|| error.downcast_ref::<MessageForwardError>().and_then(MessageForwardError::error_description))?;
         Self::presentable_reason(Some(&described))
-    }
-}
-
-const SYSTEM_SHARE_SOURCE_BOTTOM_INSET: f32 = 40.0;
-
-pub enum SystemShare {}
-
-impl SystemShare {
-    pub fn present(items: Vec<ShareItem>, completion: Option<Box<dyn FnOnce(&mut App)>>, cx: &mut App) -> bool {
-        Self::present_reporting(items, None, completion, cx)
-    }
-
-    /// presents items to share, no system sheet on linux so text goes to the clipboard
-    /// notifier says so, false when no window is open to show it
-    pub fn present_reporting(
-        items: Vec<ShareItem>,
-        on_success: Option<Box<dyn FnOnce(&mut App)>>,
-        completion: Option<Box<dyn FnOnce(&mut App)>>,
-        cx: &mut App,
-    ) -> bool {
-        let Some(window_handle) = cx
-            .active_window()
-            .or_else(|| cx.window_stack().and_then(|stack| stack.first().copied()))
-            .or_else(|| cx.windows().first().copied())
-        else {
-            return false;
-        };
-        cx.defer(move |cx| {
-            let (sender, receiver) = oneshot::channel::<ShareFinished>();
-            let outcome = window_handle.update(cx, |_, window, _| {
-                let viewport = window.viewport_size();
-                let anchor = Bounds::new(
-                    point(viewport.width / 2.0, viewport.height - px(SYSTEM_SHARE_SOURCE_BOTTOM_INSET)),
-                    size(px(0.0), px(0.0)),
-                );
-                match ShareRequest::new(items, anchor) {
-                    Ok(request) => share(window, &request, move |finished| {
-                        let _ = sender.send(finished);
-                    }),
-                    Err(reason) => ShareOutcome::Unavailable { reason, copy: None },
-                }
-            });
-            match outcome {
-                Ok(ShareOutcome::Presented) => {
-                    cx.spawn(async move |cx| {
-                        let succeeded = receiver.await.is_ok_and(|finished| finished.succeeded);
-                        cx.update(|cx| {
-                            if succeeded && let Some(on_success) = on_success {
-                                on_success(cx);
-                            }
-                            if let Some(completion) = completion {
-                                completion(cx);
-                            }
-                        });
-                    })
-                    .detach();
-                }
-                Ok(ShareOutcome::Unavailable { copy: Some(text), .. }) => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    Notifier::copied(cx);
-                    if let Some(completion) = completion {
-                        completion(cx);
-                    }
-                }
-                Ok(ShareOutcome::Unavailable { copy: None, .. }) | Err(_) => {
-                    if let Some(completion) = completion {
-                        completion(cx);
-                    }
-                }
-            }
-        });
-        true
     }
 }
 

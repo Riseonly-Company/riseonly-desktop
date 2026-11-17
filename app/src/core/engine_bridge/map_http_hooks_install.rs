@@ -7,7 +7,7 @@ use super::network_transport_config::NetworkClientSlot;
 
 static MAP_HTTP_CLIENT: NetworkClientSlot = NetworkClientSlot::standard();
 
-pub(crate) fn install_map_http_hooks() {
+pub fn install_map_http_hooks() {
     set_map_http_hooks(MapHttpHooks { start });
 }
 

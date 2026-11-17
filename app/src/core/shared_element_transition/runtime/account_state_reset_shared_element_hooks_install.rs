@@ -5,7 +5,7 @@ use crate::modules::auth::services::account_state_reset_hooks::{
     AccountStateResetSharedElementHooks, set_account_state_reset_shared_element_hooks,
 };
 
-pub(crate) fn install_account_state_reset_shared_element_hooks() {
+pub fn install_account_state_reset_shared_element_hooks() {
     set_account_state_reset_shared_element_hooks(AccountStateResetSharedElementHooks {
         reset_account_state: |cx: &mut App| {
             SharedElementTransitionCoordinator::shared(cx)

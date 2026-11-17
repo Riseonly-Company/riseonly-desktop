@@ -2795,8 +2795,16 @@ impl FanoutRefusalDetailsWireDTO {
     }
 }
 
-impl RiseFailure {
-    pub fn from_fanout_code(
+pub trait RiseFailureFanout: Sized {
+    fn from_fanout_code(
+        code: Option<&str>,
+        message: Option<&str>,
+        details: Option<&FanoutRefusalDetailsWireDTO>,
+    ) -> Option<Self>;
+}
+
+impl RiseFailureFanout for RiseFailure {
+    fn from_fanout_code(
         code: Option<&str>,
         message: Option<&str>,
         details: Option<&FanoutRefusalDetailsWireDTO>,

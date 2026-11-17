@@ -7,8 +7,7 @@ use rise_core::foundation::foundation_compare::compare_case_insensitive;
 use rise_engine::{CancellationError, RiseJSONValue, RiseWireRemoteError};
 use rise_errors::ErrorCode;
 
-use crate::modules::bot::stores::bot::bot_actions::bot_types::BotModel;
-use crate::modules::bot::stores::bot::bot_actions::bot_wire_types::{BotGatewayDTO, BotWireDTOExt};
+use crate::modules::chat::engine::bot_model_hooks::{BotGatewayDTO, BotModel, BotWireDTOExt};
 use crate::modules::chat::engine::core::rise_conversation_request_state::RiseConversationStateError;
 use crate::modules::chat::engine::core::rise_conversation_rpc::{RiseConversationEndpoints, RiseConversationRPC};
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomain;

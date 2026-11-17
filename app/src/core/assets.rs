@@ -96,7 +96,7 @@ fn locate_assets() -> Option<PathBuf> {
     }
 
     if cfg!(debug_assertions) {
-        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets");
+        let candidate = PathBuf::from(env!("RISE_WORKSPACE_DIR")).join("assets");
         if candidate.join("locales").is_dir() {
             return std::fs::canonicalize(candidate).ok();
         }
@@ -112,7 +112,7 @@ mod tests {
     fn repo_assets() -> RiseAssets {
         RiseAssets {
             root: std::fs::canonicalize(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets"),
+                PathBuf::from(env!("RISE_WORKSPACE_DIR")).join("assets"),
             )
             .ok(),
         }

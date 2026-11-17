@@ -31,16 +31,12 @@ use crate::modules::user::engine::rise_user_profile_photo_upload::RiseProfilePho
 use crate::modules::user::engine::rise_user_profile_photos_presentation::RiseUserProfilePhotosPresentation;
 use crate::modules::user::stores::user_profile_photos::user_profile_photos_interactions::user_profile_photos_interactions::UserProfilePhotosInteractionsStore;
 use crate::modules::user::stores::user_profile_photos::user_profile_photos_services::user_profile_photos_services::UserProfilePhotosServicesStore;
+use crate::modules::vacancy::pages::create_resume::local_image_file_hooks::{
+    format_of_extension, local_image_file, named_file,
+};
 
 const PNG_SIGNATURE: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
 const JPEG_SIGNATURE: [u8; 3] = [0xFF, 0xD8, 0xFF];
-
-const LOCAL_IMAGE_FORMATS: [RiseUploadFormat; 4] = [
-    RiseUploadFormat::IMAGE_PNG,
-    RiseUploadFormat::IMAGE_HEIC,
-    RiseUploadFormat::IMAGE_WEBP,
-    RiseUploadFormat::IMAGE_JPEG,
-];
 
 /// what the editors avatar circle draws from the album and media viewer
 #[derive(Clone, PartialEq)]
@@ -356,15 +352,7 @@ impl ProfileAvatarPickerBlock {
     /// stem is exporter temp name
     fn filename(item: &MediaPickerItem, content_type: &str) -> String {
         let stem = item.url.deleting_path_extension().last_path_component();
-        Self::named_file(&stem, content_type)
-    }
-
-    fn named_file(stem: &str, content_type: &str) -> String {
-        let file_extension = LOCAL_IMAGE_FORMATS
-            .iter()
-            .find(|format| format.mime == content_type)
-            .map_or(RiseUploadFormat::IMAGE_JPEG.extension, |format| format.extension);
-        format!("{}.{file_extension}", if stem.is_empty() { "avatar" } else { stem })
+        named_file(&stem, content_type)
     }
 
     fn image_content_type(item: &MediaPickerItem) -> &'static str {
@@ -376,24 +364,14 @@ impl ProfileAvatarPickerBlock {
                 return RiseUploadFormat::IMAGE_JPEG.mime;
             }
         }
-        Self::format_of_extension(&item.url.path_extension()).map_or(RiseUploadFormat::IMAGE_JPEG.mime, |format| format.mime)
-    }
-
-    fn format_of_extension(path_extension: &str) -> Option<RiseUploadFormat> {
-        let lowered = path_extension.to_lowercase();
-        LOCAL_IMAGE_FORMATS
-            .into_iter()
-            .find(|format| format.disk_extensions.iter().any(|disk_extension| *disk_extension == lowered))
+        format_of_extension(&item.url.path_extension()).map_or(RiseUploadFormat::IMAGE_JPEG.mime, |format| format.mime)
     }
 
     /// upload fields of a dropped or pasted image file,
     /// none for anything else. stem stays,
     /// extension comes from the format
-    pub(crate) fn local_image_file(path: &Path) -> Option<(Url, String, String)> {
-        let format = Self::format_of_extension(path.extension()?.to_str()?)?;
-        let local_url = Url::from_file_path(path)?;
-        let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
-        Some((local_url, Self::named_file(&stem, format.mime), format.mime.to_owned()))
+    pub fn local_image_file(path: &Path) -> Option<(Url, String, String)> {
+        local_image_file(path)
     }
 
     /// desktop only,

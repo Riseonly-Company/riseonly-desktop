@@ -12,7 +12,7 @@ pub struct ChatContextPreviewHooks {
 
 pub(crate) static CHAT_CONTEXT_PREVIEW_HOOKS: FeatureHookSlot<ChatContextPreviewHooks> = FeatureHookSlot::new("CHAT_CONTEXT_PREVIEW_HOOKS");
 
-pub(crate) fn set_chat_context_preview_hooks(hooks: ChatContextPreviewHooks) {
+pub fn set_chat_context_preview_hooks(hooks: ChatContextPreviewHooks) {
     let _ = CHAT_CONTEXT_PREVIEW_HOOKS.set(hooks);
 }
 

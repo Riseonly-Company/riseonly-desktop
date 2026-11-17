@@ -36,7 +36,7 @@ use crate::core::widgets::notifier::notifier_store::{
 };
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::engine::chat_engine_hooks::ChatEngineMainCallback;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::{ChatGuideSandboxRolePatch, chat_guide_sandbox_hooks};
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 
 const TEMPORARY_ROLE_ID_PREFIX: &str = "temp-role-";
@@ -68,11 +68,11 @@ pub(super) fn typed_payload<T: DeserializeOwned + 'static>(payload: Option<Box<d
 }
 
 fn guide_owns_roles(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_roles(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_roles)(chat_id, cx)
 }
 
 fn guide_owns_forum(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_forum_chat_id(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_forum_chat_id)(chat_id, cx)
 }
 
 fn fire_main(callback: &Option<ChatEngineMainCallback>, cx: &mut App) {
@@ -268,7 +268,7 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            let created = GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.create_role(name, color, permissions, mentionable, hoist, cx));
+            let created = (chat_guide_sandbox_hooks().create_role)(name, color, permissions, mentionable, hoist, cx);
             fire_result(&on_result, created.is_some(), cx);
             return;
         }
@@ -373,7 +373,11 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.update_role(role_id, name, color, permissions, mentionable, hoist, cx));
+            (chat_guide_sandbox_hooks().update_role)(
+                role_id,
+                ChatGuideSandboxRolePatch { name, color, permissions, mentionable, hoist },
+                cx,
+            );
             GuideSignalBus::emit(RiseGuideSignal::RoleSaved);
             fire_result(&on_result, true, cx);
             return;
@@ -473,7 +477,7 @@ impl ChatActionsStore {
 
     pub fn delete_role_action(&mut self, chat_id: &str, role_id: &str, cx: &mut Context<Self>) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.delete_role(role_id, cx));
+            (chat_guide_sandbox_hooks().delete_role)(role_id, cx);
             return;
         }
         if wire_user_id(cx).is_none() {
@@ -534,7 +538,7 @@ impl ChatActionsStore {
 
     pub fn reorder_roles_action(&mut self, chat_id: &str, role_ids: Vec<String>, cx: &mut Context<Self>) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.reorder_roles(&role_ids, cx));
+            (chat_guide_sandbox_hooks().reorder_roles)(&role_ids, cx);
             GuideSignalBus::emit(RiseGuideSignal::RoleReordered);
             return;
         }
@@ -601,7 +605,7 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.assign_role(participant_id, role_id, assign, cx));
+            (chat_guide_sandbox_hooks().assign_role)(participant_id, role_id, assign, cx);
             if assign {
                 GuideSignalBus::emit(RiseGuideSignal::MemberRoleAssigned);
             }
@@ -920,7 +924,7 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            on_result(GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).overwrites(scope, scope_id)).unwrap_or_default(), cx);
+            on_result((chat_guide_sandbox_hooks().overwrites)(scope, scope_id, cx).unwrap_or_default(), cx);
             return;
         }
         if wire_user_id(cx).is_none() {
@@ -995,7 +999,7 @@ impl ChatActionsStore {
             deny,
         };
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.set_overwrite(scope, scope_id, overwrite, cx));
+            (chat_guide_sandbox_hooks().set_overwrite)(scope, scope_id, overwrite, cx);
             fire_result(&on_result, true, cx);
             return;
         }
@@ -1073,7 +1077,7 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.remove_overwrite(scope, scope_id, target_type, target_id, cx));
+            (chat_guide_sandbox_hooks().remove_overwrite)(scope, scope_id, target_type, target_id, cx);
             fire_result(&on_result, true, cx);
             return;
         }
@@ -1147,7 +1151,7 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.set_member_override(participant_id, allow, deny, cx));
+            (chat_guide_sandbox_hooks().set_member_override)(participant_id, allow, deny, cx);
             fire_result(&on_result, true, cx);
             return;
         }
@@ -1236,7 +1240,7 @@ impl ChatActionsStore {
         cx: &mut Context<Self>,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            let invented = GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).member_override(participant_id)).map(|member_override| (member_override.allow, member_override.deny));
+            let invented = (chat_guide_sandbox_hooks().member_override)(participant_id, cx);
             on_result(invented.map_or(0, |value| value.0), invented.map_or(0, |value| value.1), cx);
             if let Some(on_effective_permissions) = &on_effective_permissions {
                 on_effective_permissions(None, cx);

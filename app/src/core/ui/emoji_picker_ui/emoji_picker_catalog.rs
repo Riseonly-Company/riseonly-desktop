@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use rise_core::foundation::foundation_character::scalar_is_emoji;
-use rise_core::foundation::foundation_text::{
-    character_count, is_whitespace_or_newline, trimming_whitespaces_and_newlines,
-};
+use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_i18n::tr;
 use rise_canon::EmojiSearch;
 
+use crate::modules::auth::stores::auth_actions::selectable_emoji_hooks;
 use crate::modules::chat::stores::message::message_actions::message_types::MessageReaction;
 
 pub struct EmojiPickerCatalog;
@@ -154,13 +152,6 @@ static QUICK_FILTER_LIST: LazyLock<Vec<EmojiPickerCatalogQuickFilter>> = LazyLoc
         .collect()
 });
 
-const VARIATION_SELECTOR_TEXT: u32 = 0xFE0E;
-const VARIATION_SELECTOR_EMOJI: u32 = 0xFE0F;
-const COMBINING_KEYCAP: u32 = 0x20E3;
-const SELECTABLE_EMOJI_MAX_BYTES: usize = 64;
-const SELECTABLE_EMOJI_MAX_SCALARS: usize = 16;
-const CUSTOM_EMOJI_REF_MAX_BYTES: usize = 64;
-
 impl EmojiPickerCatalog {
     pub fn make_cells(emojis: &[String], section_id: &str) -> Vec<EmojiPickerCatalogCell> {
         emojis
@@ -189,18 +180,7 @@ impl EmojiPickerCatalog {
     /// one unicode emoji grapheme or a ce custom emoji ref
     /// decoding with normalized_selectable_emoji alone would rewrite every custom emoji
     pub fn normalized_selectable_emoji_or_custom_ref(value: Option<&str>) -> Option<String> {
-        let value = trimming_whitespaces_and_newlines(value?);
-        if value.is_empty() {
-            return None;
-        }
-        if value.starts_with(MessageReaction::CUSTOM_EMOJI_PREFIX) {
-            return if Self::is_valid_custom_emoji_ref(value) {
-                Some(value.to_owned())
-            } else {
-                None
-            };
-        }
-        Self::normalized_selectable_emoji(Some(value))
+        selectable_emoji_hooks::normalized_selectable_emoji_or_custom_ref(value)
     }
 
     /// builds ce:sticker_item_id the way the server accepts it
@@ -220,39 +200,11 @@ impl EmojiPickerCatalog {
     }
 
     pub fn is_valid_custom_emoji_ref(value: &str) -> bool {
-        let Some(id) = value.strip_prefix(MessageReaction::CUSTOM_EMOJI_PREFIX) else {
-            return false;
-        };
-        if value.len() > CUSTOM_EMOJI_REF_MAX_BYTES || id.is_empty() {
-            return false;
-        }
-        id.bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        selectable_emoji_hooks::is_valid_custom_emoji_ref(value)
     }
 
     pub fn normalized_selectable_emoji(value: Option<&str>) -> Option<String> {
-        let value = trimming_whitespaces_and_newlines(value?);
-        if character_count(value) != 1
-            || value.is_empty()
-            || value.len() > SELECTABLE_EMOJI_MAX_BYTES
-            || value.chars().count() > SELECTABLE_EMOJI_MAX_SCALARS
-            || value.chars().any(is_whitespace_or_newline)
-            || value.chars().any(|scalar| u32::from(scalar) == VARIATION_SELECTOR_TEXT)
-        {
-            return None;
-        }
-
-        let has_emoji = value.chars().any(scalar_is_emoji);
-        let has_keycap = value.chars().any(|scalar| u32::from(scalar) == COMBINING_KEYCAP);
-        let only_ascii_emoji_base = value.chars().all(|scalar| {
-            let code = u32::from(scalar);
-            code <= 0x7F || code == VARIATION_SELECTOR_EMOJI || code == COMBINING_KEYCAP
-        });
-        if !has_emoji || (only_ascii_emoji_base && !has_keycap) {
-            return None;
-        }
-
-        Some(value.to_owned())
+        selectable_emoji_hooks::normalized_selectable_emoji(value)
     }
 
     pub fn search(query: &str) -> Vec<String> {

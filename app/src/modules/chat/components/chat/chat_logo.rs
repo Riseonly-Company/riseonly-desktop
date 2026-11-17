@@ -18,6 +18,7 @@ use rise_ui::swiftui::shapes::{Shape, SwiftUiShapes, centred_stroke};
 use crate::core::ui::clever_image_disk_cache::CleverImagePrefetchItem;
 use crate::core::ui::clever_image_ui::{CleverImageCachePolicy, CleverImageUi, ContentMode};
 use crate::core::ui::user_logo_ui::StoryRingUi;
+pub use crate::core::widgets::sheets::chat_favourites_logo_hooks::ChatFavouritesLogo;
 use crate::modules::chat::engine::forum::rise_chat_voice_presence::RiseChatVoicePresentation;
 use crate::modules::chat::stores::chats::chat_actions::chat_avatar_palette::AvatarPaletteChat;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatInfo, ChatType};
@@ -433,38 +434,6 @@ impl RenderOnce for ChatLogoPresenceIndicator {
                 .into_any_element(),
             PresenceIndicatorValue::Hidden => div().into_any_element(),
         }
-    }
-}
-
-#[derive(IntoElement)]
-pub struct ChatFavouritesLogo {
-    size: f32,
-    icon_size: Option<f32>,
-}
-
-impl ChatFavouritesLogo {
-    pub fn new(size: f32) -> Self {
-        Self { size, icon_size: None }
-    }
-
-    pub fn icon_size(mut self, icon_size: impl Into<Option<f32>>) -> Self {
-        self.icon_size = icon_size.into();
-        self
-    }
-}
-
-impl RenderOnce for ChatFavouritesLogo {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let icon_size = self.icon_size.unwrap_or_else(|| (self.size * 0.42).max(11.0));
-        div()
-            .size(px(self.size))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .bg(AvatarPalette::favourites_background())
-            .children(IconUi::sized("bookmark.fill", px(icon_size), white(), true))
     }
 }
 

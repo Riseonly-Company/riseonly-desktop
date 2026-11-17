@@ -10,7 +10,7 @@ use rise_platform::file_manager::FileManager;
 use super::music_media_url::MusicMediaURL;
 use super::music_models::TrackModel;
 use crate::core::stores::http::http_service::HttpService;
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 
 const LEGACY_MUSIC_MARKER: &str = "/public/music/";
 const UUID_STRING_LENGTH: usize = 36;

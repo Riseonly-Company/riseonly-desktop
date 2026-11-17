@@ -13,7 +13,7 @@ use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_ui::swiftui::transition::{Presence, Transition};
 
-use crate::app::aside::aside_navigator;
+use crate::app::router::navigation_aside_hooks::navigation_aside_hooks;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::ui::guide_anchor_ui::guide_anchor_scroller::GuideAnchorScroller;
@@ -82,8 +82,8 @@ impl MusicTab {
     }
 
     fn open_library(nav_store: Option<&Entity<NavigationStore>>, cx: &mut App) {
-        if aside_navigator::has_frontmost(cx) {
-            aside_navigator::open(RootRoute::MusicLibrary, cx);
+        if let Some(aside) = navigation_aside_hooks() && (aside.has_frontmost)(cx) {
+            (aside.open)(RootRoute::MusicLibrary, cx);
             return;
         }
         if let Some(nav_store) = nav_store {

@@ -109,7 +109,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// bar row and its time labels, the definite box a cached view around the bar lays out
-    pub(crate) fn height() -> f32 {
+    pub fn height() -> f32 {
         ROW_HEIGHT + 6. + Font::caption().size * NATURAL_LINE_HEIGHT
     }
 
@@ -130,10 +130,10 @@ impl MusicLivePlaybackSeekBar {
     }
 
     const LISTENER_MARKER_REACH: f32 = MARKER_HEIGHT - MARKER_DOT / 2.;
-    pub(crate) const LISTENER_AVATAR_SIDE: f32 = MARKER_AVATAR;
-    pub(crate) const LISTENER_DOT_SIDE: f32 = MARKER_DOT;
+    pub const LISTENER_AVATAR_SIDE: f32 = MARKER_AVATAR;
+    pub const LISTENER_DOT_SIDE: f32 = MARKER_DOT;
 
-    pub(crate) fn visible_playlist_listeners(
+    pub fn visible_playlist_listeners(
         player: &Entity<MusicPlayerState>,
         playlist_id: Option<&str>,
         cx: &mut App,
@@ -167,7 +167,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// where the listener is in its track as a fraction of duration seconds
-    pub(crate) fn listener_fraction(
+    pub fn listener_fraction(
         services: &MusicServicesStore,
         listener: &MusicPlaylistListener,
         duration: TimeInterval,
@@ -178,7 +178,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// center x of the index-th marker pointing at x
-    pub(crate) fn listener_marker_x(index: usize, x: f32) -> f32 {
+    pub fn listener_marker_x(index: usize, x: f32) -> f32 {
         x + index as f32 * 3.
     }
 
@@ -187,7 +187,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// accent of a playing listeners marker
-    pub(crate) fn listener_playing_accent(cx: &App) -> Hsla {
+    pub fn listener_playing_accent(cx: &App) -> Hsla {
         UIColor::system_green().resolved_color(rise_ui::theme(cx).appearance)
     }
 
@@ -408,7 +408,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// desktop version of the adjustable action, the arrow keys of the focused bar
-    pub(crate) fn adjust(duration: TimeInterval, increment: bool, player: &Entity<MusicPlayerState>, cx: &mut App) {
+    pub fn adjust(duration: TimeInterval, increment: bool, player: &Entity<MusicPlayerState>, cx: &mut App) {
         let (is_interactive, is_locked, base) = {
             let player = player.read(cx);
             (Self::is_interactive(player), Self::is_seek_locked(player), player.progress)
@@ -475,7 +475,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// ringed avatar of one listener in accent, its playing or paused tint
-    pub(crate) fn listener_avatar(id: &ElementId, listener: &MusicPlaylistListener, accent: Hsla) -> Div {
+    pub fn listener_avatar(id: &ElementId, listener: &MusicPlaylistListener, accent: Hsla) -> Div {
         let logo_id = ElementId::Name(format!("{id}-marker-{}", listener.user_id).into());
         div()
             .relative()
@@ -502,7 +502,7 @@ impl MusicLivePlaybackSeekBar {
     }
 
     /// dot in accent that marks a listeners position on the track
-    pub(crate) fn listener_dot(accent: Hsla) -> Div {
+    pub fn listener_dot(accent: Hsla) -> Div {
         div()
             .relative()
             .size(px(MARKER_DOT))

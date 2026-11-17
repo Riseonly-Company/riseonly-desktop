@@ -39,7 +39,6 @@ use crate::modules::post::engine::rise_post_content_presentation::RisePostConten
 use crate::modules::post::engine::rise_post_engine_models::{
     RisePostPageScope, RisePostPageStatus, RisePostProfileKind,
 };
-use crate::modules::post::pages::posts::post_detail::native_list::model::post_row_preparer::PostRowPreparer;
 use crate::modules::post::pages::posts::post_detail::native_list::post_list_engine_policy::PostListEnginePolicy;
 use crate::modules::post::shared::post_media_slides::PostMediaSlide;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
@@ -47,6 +46,7 @@ use crate::modules::shorts::components::shorts_media_prefetch::ShortsMediaPrefet
 use crate::modules::user::components::profile_content::pages::grid_posts::grid_posts::{
     ProfileGridPreviewSourcePolicy, ProfileThumbnailDecodePolicy,
 };
+use crate::modules::user::components::profile_content::pages::grid_posts::post_row_warm_anchor_hooks::post_row_warm_anchor_hooks;
 use crate::modules::user::components::profile_content::pages::grid_riffs::grid_riffs::{
     ProfileRiffCoverSourcePolicy, RiffsGridMetrics,
 };
@@ -384,13 +384,15 @@ impl ProfileGridSharedElementOrigin {
             self.warm_full_image(post, cx);
             if !self.armed_route_opens_viewer.get() && PostListEnginePolicy::uses_native_list() {
                 let window_size = self.host_view(cx).and(self.probe_window_size.get());
-                PostRowPreparer::warm_anchor(
-                    post,
-                    window_size.map(|window_size| f32::from(window_size.width)),
-                    window_size.and(self.display_scale.get()),
-                    None,
-                    cx,
-                );
+                if let Some(hooks) = post_row_warm_anchor_hooks() {
+                    (hooks.warm_anchor)(
+                        post,
+                        window_size.map(|window_size| f32::from(window_size.width)),
+                        window_size.and(self.display_scale.get()),
+                        None,
+                        cx,
+                    );
+                }
             }
         }
         armed

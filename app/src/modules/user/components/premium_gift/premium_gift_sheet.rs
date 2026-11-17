@@ -194,7 +194,7 @@ impl PremiumGiftSheet {
 
     /// what the phone handoff modal of a premium gift purchase says, from this sheet or the gift shop
     /// the root purchase continue host takes it once when the handoff opens
-    pub(crate) fn continue_on_phone_content(
+    pub fn continue_on_phone_content(
         store: &Entity<PremiumGiftStore>,
         services: &Entity<SubscriptionServicesStore>,
         cx: &App,

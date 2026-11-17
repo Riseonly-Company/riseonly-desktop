@@ -19,10 +19,7 @@ use rise_widgets::window_controls_band;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey};
 use crate::app::router::navigation_types::RiseRTCRoomTarget;
-use crate::app::root_view::RootView;
-use crate::app::shell::shell_actions::{CloseWindow, KEY_CONTEXT};
-use crate::app::shell::window_presenter::WindowPresenter;
-use crate::app::shell::window_title_bar::{WindowTitleBar, window_frame};
+use crate::app::shell::handover_hooks::handover_hooks;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::sai::Sai;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_host::HoldContextMenuHost;
@@ -32,13 +29,16 @@ use crate::modules::rtc::engine::rise_rtc_engine_models::{
     RiseRTCCallStateExt, RiseRTCDirectCall, RiseRTCEvictionReason, RiseRTCRoomEviction, RiseRTCRoomMode,
 };
 use crate::modules::rtc::media::rise_rtc_end_tone_player::RiseRTCEndTonePlayer;
+use crate::modules::rtc::pages::rise_rtc_call_window_chrome_hooks::rise_rtc_call_window_chrome_hooks;
 use crate::modules::rtc::pages::rise_rtc_direct_call_screen::{RiseRTCDirectCallScreen, RiseRTCTerminalHold};
 use crate::modules::rtc::pages::rise_rtc_room_screen::RiseRTCRoomScreen;
+use crate::modules::rtc::pages::shell_window_actions_hooks::{CloseWindow, KEY_CONTEXT};
 use crate::modules::rtc::shared::rise_rtc_screen_safe_area::RiseRTCScreenTopInsetKey;
 use crate::modules::rtc::shared::rise_rtc_navigation_gate::{RiseRTCNavigationGate, RiseRTCRoomTargetSafeLogKind};
 use crate::modules::rtc::shared::rise_rtc_room_locator::RiseRTCRoomTargetRoomID;
 use crate::modules::rtc::stores::rtc::rtc_interactions::rtc_interactions::RTCInteractionsStore;
 use crate::modules::rtc::stores::rtc::rtc_services::rtc_services::RTCServicesStore;
+use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 use crate::modules::rtc::system::rise_rtc_system_call_presentation::{
     RiseRTCSystemCallPresentation, RiseRTCSystemCallPresentationStore,
 };
@@ -334,7 +334,7 @@ impl RiseRTCRoomPresentationHost {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(CALL_WINDOW_MIN_SIZE.0), px(CALL_WINDOW_MIN_SIZE.1))),
-                    app_id: WindowPresenter::app_id(),
+                    app_id: rise_rtc_call_window_hooks().and_then(|hooks| (hooks.app_id)()),
                     titlebar: Some(TitlebarOptions {
                         title: Some(tr("rtc_voice_chat").into()),
                         appears_transparent: true,
@@ -689,7 +689,7 @@ pub struct RiseRTCCallWindow {
     navigation_store: Option<Entity<NavigationStore>>,
     applied_direct_call_controls: Option<bool>,
     focus_handle: FocusHandle,
-    title_bar: Entity<WindowTitleBar>,
+    title_bar: Option<AnyView>,
     hold_context_menu_host: Entity<HoldContextMenuHost>,
     notifier_host: Entity<NotifierHost>,
     _host_changes: Vec<Subscription>,
@@ -719,11 +719,15 @@ impl RiseRTCCallWindow {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
         let closing = host.clone();
-        let title_bar = cx.new(|cx| {
-            WindowTitleBar::without_app_menu(window, cx).on_close(Rc::new(move |window: &mut Window, cx: &mut App| {
-                Self::minimize_call(&closing, cx);
-                window.remove_window();
-            }))
+        let title_bar = rise_rtc_call_window_chrome_hooks().map(|hooks| {
+            (hooks.title_bar)(
+                Rc::new(move |window: &mut Window, cx: &mut App| {
+                    Self::minimize_call(&closing, cx);
+                    window.remove_window();
+                }),
+                window,
+                cx,
+            )
         });
         let notifier_host = cx.new(NotifierHost::window_scoped);
         Self {
@@ -747,8 +751,10 @@ impl RiseRTCCallWindow {
             host.call_window_is_active = false;
             host.minimize_active_presentation(cx);
         });
-        if !cx.windows().into_iter().any(|window| window.downcast::<RootView>().is_some()) {
-            WindowPresenter::open_shell(cx);
+        if let Some(hooks) = handover_hooks()
+            && !cx.windows().into_iter().any(|window| (hooks.is_shell)(window))
+        {
+            (hooks.open_shell)(cx);
         }
     }
 
@@ -764,7 +770,11 @@ impl Render for RiseRTCCallWindow {
         if self.applied_direct_call_controls != Some(is_direct) {
             self.applied_direct_call_controls = Some(is_direct);
             set_system_controls_appearance(window, is_direct.then_some(WindowAppearance::Dark));
-            self.title_bar.update(cx, |bar, cx| bar.set_controls_theme(is_direct.then(AppTheme::dark), cx));
+            if let Some(hooks) = rise_rtc_call_window_chrome_hooks()
+                && let Some(title_bar) = &self.title_bar
+            {
+                (hooks.set_title_bar_controls_theme)(title_bar, is_direct.then(AppTheme::dark), cx);
+            }
         }
         let content = self.host.read(cx).call_window_content(self.host.downgrade(), cx);
         let background = if is_direct { black() } else { rise_ui::theme(cx).bg._000 };
@@ -782,7 +792,7 @@ impl Render for RiseRTCCallWindow {
                 env_scope::<NavigationStoreKey>(self.navigation_store.clone())
                     .child(env_scope::<RiseRTCScreenTopInsetKey>(top_inset).child(content)),
             )
-            .children((band > px(0.0)).then(|| self.title_bar.clone()))
+            .children((band > px(0.0)).then(|| self.title_bar.clone()).flatten())
             .child(
                 deferred(
                     AnyView::from(self.hold_context_menu_host.clone())
@@ -798,7 +808,10 @@ impl Render for RiseRTCCallWindow {
                 .with_priority(NotifierHost::LAYER_PRIORITY),
             )
             .child(GuideOverlayWindow::new());
-        window_frame(body, window, cx)
+        match rise_rtc_call_window_chrome_hooks() {
+            Some(hooks) => (hooks.window_frame)(body.into_any_element(), window, cx),
+            None => body.into_any_element(),
+        }
     }
 }
 

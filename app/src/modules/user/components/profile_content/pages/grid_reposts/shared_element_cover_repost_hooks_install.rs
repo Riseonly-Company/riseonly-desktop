@@ -4,7 +4,7 @@ use crate::core::shared_element_transition::renderer::shared_element_cover_hooks
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::user::components::profile_content::pages::grid_reposts::grid_reposts::ProfileGridRepostTextUi;
 
-pub(crate) fn install_shared_element_cover_repost_hooks() {
+pub fn install_shared_element_cover_repost_hooks() {
     SharedElementCoverRepostHooks::set(SharedElementCoverRepostHooks { profile_grid_repost_text_ui });
 }
 

@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "ยกเลิกการเปลี่ยนแปลงไหม",
   "media_editor_discard_confirm": "ยกเลิกการเปลี่ยนแปลง",
   "media_editor_discard_keep": "แก้ไขต่อ",
-  "story_canvas_photos_limit_reached": "เพิ่มรูปภาพได้สูงสุด %d รูป"
+  "story_canvas_photos_limit_reached": "เพิ่มรูปภาพได้สูงสุด %d รูป",
+  "error_rtc_overloaded": "ขณะนี้มีการโทรหนาแน่นมาก เพื่อให้สายที่กำลังสนทนาอยู่เสถียร เราจึงพักการโทรใหม่ไว้ชั่วครู่ ลองอีกครั้งในอีกสักครู่",
+  "overload_modal_title": "ขณะนี้มีผู้ใช้งานหนาแน่น"
 }

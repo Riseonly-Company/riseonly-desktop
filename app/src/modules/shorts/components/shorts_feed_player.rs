@@ -31,7 +31,6 @@ use crate::core::media::remote_media_disk_cache::{
 use crate::core::media::rise_media_foreground_gate::RiseMediaForegroundGate;
 use crate::core::media::video_warm_start_prefetch::{VideoWarmPlayerBox, VideoWarmStartPrefetch};
 use crate::core::rise_engine_bridge::rise_engine_app_runtime::RISE_ENGINE_CONNECTION_READY;
-use crate::core::shared_element_transition::renderer::shared_element_video_frame_grabber::SharedElementPlayerLayerView;
 use crate::core::ui::clever_image_ui::{CleverImageCachePolicy, CleverImageUi};
 use crate::modules::analytics::stores::engagement::engagement_actions::engagement_types::EngagementSurface;
 use crate::modules::analytics::stores::engagement::engagement_interactions::engagement_interactions::EngagementInteractionsStore;
@@ -42,6 +41,7 @@ use crate::modules::music::shared::utils::music::music_listening_interruption_ga
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
 use crate::modules::post::components::post::post_music_playback_controller::PostMusicPlaybackController;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
+use crate::modules::shorts::components::shared_element_player_layer_hooks::SharedElementPlayerLayerView;
 
 /// the one reel allowed to play across navigators of the window
 /// the right panel stays drawn so a reel left there keeps playing

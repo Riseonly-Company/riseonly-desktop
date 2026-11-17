@@ -10,24 +10,24 @@ use crate::core::lib::canon_field_rule::{RiseFocusedTextInput, RiseTextInputCare
 use crate::core::ui::input_ui::InputUiCaret;
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 
-pub(crate) fn hex_color(value: u32) -> Hsla {
+pub fn hex_color(value: u32) -> Hsla {
     Hsla::from(rgb(value))
 }
 
-pub(crate) fn pop_screen(nav_store: Option<&Entity<NavigationStore>>, cx: &mut App) {
+pub fn pop_screen(nav_store: Option<&Entity<NavigationStore>>, cx: &mut App) {
     if let Some(nav_store) = nav_store {
         nav_store.update(cx, |nav_store, cx| nav_store.pop(cx));
     }
 }
 
 /// true if the guide sandbox owns the jobs scene, a sandbox never built is never armed
-pub(crate) fn guide_owns_jobs_scene(cx: &App) -> bool {
+pub fn guide_owns_jobs_scene(cx: &App) -> bool {
     GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_jobs_scene())
 }
 
 /// form root tracks focus so cmd or ctrl enter works with no field focused
 /// and a click beside a field blurs it
-pub(crate) fn keeps_form_focus(field: impl IntoElement) -> Div {
+pub fn keeps_form_focus(field: impl IntoElement) -> Div {
     div().w_full().on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default()).child(field)
 }
 
@@ -79,7 +79,7 @@ impl VacancyTextEditorSession {
 
 /// text editor of the vacancy forms, paints its own box and scrolls to the focused editor
 #[derive(IntoElement)]
-pub(crate) struct VacancyTextEditor {
+pub struct VacancyTextEditor {
     id: ElementId,
     text: Binding<String>,
     placeholder: String,
@@ -93,7 +93,7 @@ pub(crate) struct VacancyTextEditor {
 impl VacancyTextEditor {
     const DEFAULT_MAX_LINES: usize = 64;
 
-    pub(crate) fn new(id: impl Into<ElementId>, text: Binding<String>) -> Self {
+    pub fn new(id: impl Into<ElementId>, text: Binding<String>) -> Self {
         Self {
             id: id.into(),
             text,
@@ -106,28 +106,28 @@ impl VacancyTextEditor {
         }
     }
 
-    pub(crate) fn placeholder(mut self, placeholder: impl Into<String>, color: Hsla) -> Self {
+    pub fn placeholder(mut self, placeholder: impl Into<String>, color: Hsla) -> Self {
         self.placeholder = placeholder.into();
         self.placeholder_color = Some(color);
         self
     }
 
-    pub(crate) fn font_size(mut self, font_size: f32) -> Self {
+    pub fn font_size(mut self, font_size: f32) -> Self {
         self.font_size = font_size;
         self
     }
 
-    pub(crate) fn min_height(mut self, min_height: f32) -> Self {
+    pub fn min_height(mut self, min_height: f32) -> Self {
         self.min_height = min_height;
         self
     }
 
-    pub(crate) fn max_lines(mut self, max_lines: usize) -> Self {
+    pub fn max_lines(mut self, max_lines: usize) -> Self {
         self.max_lines = max_lines;
         self
     }
 
-    pub(crate) fn on_focus_change(mut self, on_focus_change: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_focus_change(mut self, on_focus_change: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_focus_change = Some(Rc::new(on_focus_change));
         self
     }

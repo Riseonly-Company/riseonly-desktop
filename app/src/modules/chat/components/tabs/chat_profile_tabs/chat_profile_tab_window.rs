@@ -24,7 +24,7 @@ type ChatProfileTabGate = Box<dyn FnMut(&mut App) -> bool>;
 
 /// view a tab body renders in
 /// store changes rebuild this tab and not the pager around it
-pub(crate) struct ChatProfileTabHost {
+pub struct ChatProfileTabHost {
     body: ChatProfileTabBody,
     gate: Option<ChatProfileTabGate>,
     _subscriptions: Vec<Subscription>,
@@ -32,7 +32,7 @@ pub(crate) struct ChatProfileTabHost {
 
 impl ChatProfileTabHost {
     /// id must carry every property the body captures, the body is kept from the first render
-    pub(crate) fn hosted(
+    pub fn hosted(
         id: impl Into<ElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -42,7 +42,7 @@ impl ChatProfileTabHost {
         Self::hosted_with(id, window, cx, observe, None::<fn(&mut App) -> ()>, body)
     }
 
-    pub(crate) fn hosted_gated<G: PartialEq + 'static>(
+    pub fn hosted_gated<G: PartialEq + 'static>(
         id: impl Into<ElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -144,7 +144,7 @@ fn observe_grid_lift(cx: &mut Context<ChatProfileTabHost>) -> Subscription {
 }
 
 /// true when this grid cell is hidden because the media viewer has it open
-pub(crate) fn chat_profile_grid_cell_lifted(registry_id: &str, cx: &mut App) -> bool {
+pub fn chat_profile_grid_cell_lifted(registry_id: &str, cx: &mut App) -> bool {
     let viewer_id = media_viewer_presentation(cx).entity_id();
     cx.try_global::<ChatProfileGridLifts>()
         .and_then(|lifts| lifts.0.get(&viewer_id))
@@ -178,7 +178,7 @@ struct ChatProfileSquareGridState {
 /// grid of square cells, height comes from the count
 /// so the outer scroll sees every row without building it
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileSquareGrid {
+pub struct ChatProfileSquareGrid {
     id: ElementId,
     item_count: usize,
     columns: i64,
@@ -192,7 +192,7 @@ pub(crate) struct ChatProfileSquareGrid {
 impl ChatProfileSquareGrid {
     const INITIAL_ROWS: i64 = 8;
 
-    pub(crate) fn new(
+    pub fn new(
         id: impl Into<ElementId>,
         item_count: usize,
         columns: i64,
@@ -212,12 +212,12 @@ impl ChatProfileSquareGrid {
         }
     }
 
-    pub(crate) fn top_padding(mut self, top_padding: f32) -> Self {
+    pub fn top_padding(mut self, top_padding: f32) -> Self {
         self.top_padding = top_padding;
         self
     }
 
-    pub(crate) fn layout_probe(mut self, layout_probe: ChatProfileSquareGridProbe) -> Self {
+    pub fn layout_probe(mut self, layout_probe: ChatProfileSquareGridProbe) -> Self {
         self.layout_probe = Some(layout_probe);
         self
     }
@@ -314,7 +314,7 @@ impl RenderOnce for ChatProfileSquareGrid {
     }
 }
 
-pub(crate) struct ChatProfileWindowedRow {
+pub struct ChatProfileWindowedRow {
     id: String,
     pinned: bool,
     build: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
@@ -322,7 +322,7 @@ pub(crate) struct ChatProfileWindowedRow {
 
 impl ChatProfileWindowedRow {
     /// id is unique in the window and keys the row height too
-    pub(crate) fn new<E: IntoElement>(
+    pub fn new<E: IntoElement>(
         id: impl Into<String>,
         build: impl Fn(&mut Window, &mut App) -> E + 'static,
     ) -> Self {
@@ -349,7 +349,7 @@ struct ChatProfileWindowedRowsState {
 /// lazy list, rows near the viewport are built and measured
 /// the rest are spacers
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileWindowedRows {
+pub struct ChatProfileWindowedRows {
     id: ElementId,
     estimated_row_height: f32,
     rows: Vec<ChatProfileWindowedRow>,
@@ -361,7 +361,7 @@ impl ChatProfileWindowedRows {
     const BAND_QUANTUM: f32 = 64.0;
     const HEIGHT_TOLERANCE: f32 = 0.25;
 
-    pub(crate) fn new(
+    pub fn new(
         id: impl Into<ElementId>,
         estimated_row_height: f32,
         rows: Vec<ChatProfileWindowedRow>,

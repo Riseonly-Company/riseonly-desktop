@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Annuler les modifications ?",
   "media_editor_discard_confirm": "Annuler les modifications",
   "media_editor_discard_keep": "Continuer la modification",
-  "story_canvas_photos_limit_reached": "Vous pouvez ajouter jusqu’à %d photos"
+  "story_canvas_photos_limit_reached": "Vous pouvez ajouter jusqu’à %d photos",
+  "error_rtc_overloaded": "Les appels sont très sollicités en ce moment. Pour garder les appels en cours stables, les nouveaux sont en pause un instant. Réessayez un peu plus tard",
+  "overload_modal_title": "Forte affluence en ce moment"
 }

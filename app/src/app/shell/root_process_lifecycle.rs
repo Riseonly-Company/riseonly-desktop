@@ -4,6 +4,7 @@ use gpui::{App, Global, Subscription};
 use rise_core::foundation::foundation_date::Date;
 use rise_core::foundation::foundation_uuid::Uuid;
 
+use crate::app::root_view::RootView;
 use crate::app::shell::handover::frontmost_shell;
 use crate::core::desktop_platform::rise_app_lifecycle::{RiseAppLifecycle, ScenePhase};
 use crate::core::lib::rise_app_background_ledger::RiseAppBackgroundLedger;
@@ -105,7 +106,7 @@ impl RootProcessLifecycle {
                 RiseShareAppBridge::synchronize_credential(false);
                 let handoff = ShareSendHandoffInteractionsStore::shared(cx);
                 handoff.update(cx, |handoff, cx| handoff.resume_pending_if_possible(cx));
-                if let Some(shell) = frontmost_shell(cx) {
+                if let Some(shell) = frontmost_shell(cx).and_then(|shell| shell.downcast::<RootView>()) {
                     let _ = shell.update(cx, |view, _, cx| view.resume_shared_story_after_authentication_if_needed(cx));
                 }
                 if !Self::consume_return_from_background(cx) {

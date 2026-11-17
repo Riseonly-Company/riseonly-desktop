@@ -3,6 +3,9 @@
 # enables rise-media/ffmpeg (app/Cargo.toml), so other targets never read it.
 [env]
 FFMPEG_PKG_CONFIG_PATH = { value = "vendor/ffmpeg/macos-arm64/lib/pkgconfig", relative = true }
+# why: the app tree is compiled by several crates at different depths (scripts/crate-views.json), so a
+# source file finds assets and scripts from the workspace root, not from its crate's manifest directory.
+RISE_WORKSPACE_DIR = { value = "", relative = true }
 
 # why: the prebuilt libwebrtc webrtc-sys links on Windows is built against the static CRT (/MT),
 # so every other object of riseonly.exe has to match or lld-link stops at RuntimeLibrary.

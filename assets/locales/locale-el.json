@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Απόρριψη αλλαγών;",
   "media_editor_discard_confirm": "Απόρριψη αλλαγών",
   "media_editor_discard_keep": "Συνέχεια επεξεργασίας",
-  "story_canvas_photos_limit_reached": "Μπορείτε να προσθέσετε έως %d φωτογραφίες"
+  "story_canvas_photos_limit_reached": "Μπορείτε να προσθέσετε έως %d φωτογραφίες",
+  "error_rtc_overloaded": "Οι κλήσεις έχουν μεγάλο φόρτο αυτή τη στιγμή. Για να μείνουν σταθερές οι κλήσεις σε εξέλιξη, οι νέες είναι σε αναμονή για λίγο. Δοκιμάστε ξανά σε λίγο",
+  "overload_modal_title": "Μεγάλος φόρτος αυτή τη στιγμή"
 }

@@ -620,37 +620,6 @@ fn send_mini_app_data(chat_id: Option<&str>, data: &str, init_data: &str, cx: &m
     }
 }
 
-impl RootRoute {
-    pub(crate) fn shows_music_mini_player(&self) -> bool {
-        !matches!(
-            self,
-            RootRoute::Onboarding
-                | RootRoute::SignIn
-                | RootRoute::SignUp
-                | RootRoute::MainTabs(_)
-                | RootRoute::Chat { .. }
-                | RootRoute::ChatTopic { .. }
-                | RootRoute::ChatThread { .. }
-                | RootRoute::ForumAll { .. }
-                | RootRoute::CaseNotes { .. }
-                | RootRoute::RtcRoom { .. }
-                | RootRoute::ShortViewer { .. }
-                | RootRoute::QrScanner
-                | RootRoute::WorldMap
-                | RootRoute::MapJourney { .. }
-                | RootRoute::BotMiniApp { .. }
-                | RootRoute::BotMiniAppLink { .. }
-                | RootRoute::BotStartLink { .. }
-                | RootRoute::CreatePostMedia { .. }
-                | RootRoute::CreatePost { .. }
-                | RootRoute::EditPost { .. }
-                | RootRoute::CreatePostWithAchievement { .. }
-                | RootRoute::EditStory { .. }
-                | RootRoute::MapJourneyComposer
-        )
-    }
-}
-
 #[derive(IntoElement)]
 pub struct PlaceholderRouteView {
     title: SharedString,

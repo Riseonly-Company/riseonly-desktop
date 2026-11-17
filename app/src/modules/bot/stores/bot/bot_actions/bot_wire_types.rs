@@ -1,40 +1,12 @@
 use rise_canon::{rise_proto, rise_response};
 
 use super::bot_types::{
-    BotCallbackEnqueueResult, BotCommandModel, BotMiniAppLaunchData, BotMiniAppModel, BotModel,
+    BotCallbackEnqueueResult, BotCommandModel, BotMiniAppLaunchData, BotMiniAppModel,
     BotPublicCommandsModel, BotTagAvailability, BotTokenResult, BotWebhookInfoModel,
 };
+pub use crate::modules::chat::engine::bot_model_hooks::{BotGatewayDTO, BotWireDTOExt};
 
 pub type BotWireDTO = rise_proto::bot::Bot;
-
-pub trait BotWireDTOExt {
-    fn to_bot_model(&self) -> BotModel;
-}
-
-impl BotWireDTOExt for rise_proto::bot::Bot {
-    fn to_bot_model(&self) -> BotModel {
-        BotModel {
-            id: self.id.clone(),
-            owner_user_id: self.owner_user_id.clone(),
-            bot_user_id: self.bot_user_id.clone(),
-            private_chat_id: self.private_chat_id.clone(),
-            tag: self.tag.clone(),
-            name: self.name.clone(),
-            description: self.description.clone(),
-            avatar_url: self.avatar_url.clone(),
-            banner_url: self.banner_url.clone(),
-            is_active: self.is_active,
-            can_join_groups: self.can_join_groups,
-            privacy_mode: self.privacy_mode,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-            bot_user_chat_id: self.bot_user_chat_id.clone(),
-            is_owned_by_requester: self.is_owned_by_requester,
-            moderation_status: self.moderation_status.clone(),
-            is_system: self.is_system,
-        }
-    }
-}
 
 pub type BotCommandWireDTO = rise_proto::bot::BotCommand;
 
@@ -98,7 +70,6 @@ impl BotMiniAppWireDTOExt for rise_proto::bot::MiniApp {
 pub type BotCreateGatewayDTO = rise_proto::bot::CreateBotResponse;
 
 pub type BotListGatewayDTO = rise_proto::bot::ListBotsResponse;
-pub type BotGatewayDTO = rise_proto::bot::GetBotResponse;
 
 pub type BotTagAvailabilityGatewayDTO = rise_proto::bot::CheckBotTagAvailabilityResponse;
 

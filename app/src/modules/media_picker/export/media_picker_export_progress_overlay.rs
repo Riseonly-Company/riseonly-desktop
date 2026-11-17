@@ -13,13 +13,13 @@ use crate::modules::media_picker::export::export_progress_view_state::ExportProg
 
 
 #[derive(IntoElement)]
-pub(crate) struct MediaPickerExportProgressOverlay {
+pub struct MediaPickerExportProgressOverlay {
     state: Entity<ExportProgressViewState>,
     theme_store: Entity<ThemeStore>,
 }
 
 impl MediaPickerExportProgressOverlay {
-    pub(crate) fn new(state: Entity<ExportProgressViewState>, theme_store: Entity<ThemeStore>) -> Self {
+    pub fn new(state: Entity<ExportProgressViewState>, theme_store: Entity<ThemeStore>) -> Self {
         Self { state, theme_store }
     }
 

@@ -18,7 +18,7 @@ use crate::core::widgets::notifier::notifier_store::{
 };
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerTrackSelection};
-use crate::modules::media_picker::editor::media_editor_screen::MediaEditorOutcome;
+use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorOutcome;
 use crate::modules::media_picker::export::export_progress_view_state::ExportProgressViewState;
 use crate::modules::media_picker::export::media_exporter::MediaExporter;
 use crate::modules::media_picker::library::media_asset::{MediaAsset, MediaAssetMediaType};

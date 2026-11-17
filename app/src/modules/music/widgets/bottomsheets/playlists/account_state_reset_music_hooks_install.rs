@@ -14,7 +14,7 @@ use crate::modules::music::shared::utils::music::music_track_download_store::Mus
 use crate::modules::music::stores::music_services::music_services::MusicServicesStore;
 use crate::modules::music::widgets::bottomsheets::playlists::message_mp3_import_sheet::MessageMusicImportPresenter;
 
-pub(crate) fn install_account_state_reset_music_hooks() {
+pub fn install_account_state_reset_music_hooks() {
     set_account_state_reset_music_hooks(AccountStateResetMusicHooks {
         activate_account_state: |cx: &mut App| {
             MusicLocalState::shared(cx).update(cx, |store, cx| store.activate_account_state(cx));

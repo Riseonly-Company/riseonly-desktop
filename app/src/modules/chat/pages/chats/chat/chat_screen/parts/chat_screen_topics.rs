@@ -6,11 +6,11 @@ use rise_i18n::tr;
 use rise_theme::AppTheme;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
-use crate::app::aside::aside_navigator;
 use crate::app::router::navigation_types::RootRoute;
 use crate::modules::chat::components::chat::composer::chat_composer_inline_context::ChatComposerInlineContext;
 use crate::modules::chat::components::chat::composer::chat_composer_types::resign_chat_keyboard;
 use crate::modules::chat::pages::chats::chat::chat_roles::topic_mention_composer::TopicMentionComposer;
+use crate::modules::chat::pages::chats::chats_aside_hooks::chats_aside_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatPerm, ChatPermExt, ChatTopic, ChatType};
 use crate::modules::chat::stores::chats::chat_services::chat_topics_services::ChatRemovedTopicNotice;
 use super::super::chat_screen::*;
@@ -294,7 +294,9 @@ impl ChatScreen {
             ChatTopicTab::General => Some(RootRoute::GeneralProfile { chat_id: Some(chat_id.clone()) }),
             ChatTopicTab::All => None,
         };
-        aside_navigator::follow_topic(&chat_id, open_info.as_ref(), cx);
+        if let Some(hooks) = chats_aside_hooks() {
+            (hooks.follow_topic)(&chat_id, open_info.as_ref(), cx);
+        }
         self.state.selected_topic_tab = tab;
         self.state.topic_selection_initialized = true;
         self.state.reply_target = None;

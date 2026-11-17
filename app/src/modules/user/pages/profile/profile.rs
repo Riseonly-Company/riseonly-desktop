@@ -88,6 +88,7 @@ use crate::modules::user::components::profile_content::pages::grid_posts::grid_p
 use crate::modules::user::components::profile_content::profile_content::{
     ProfileContent, ProfileContentTab, ProfileViewportLayoutPolicy,
 };
+pub use crate::modules::user::components::profile_content::profile_content::ProfileCreateActionMetrics;
 use crate::modules::user::components::profile_content::profile_performance_trace::ProfilePerformanceTrace;
 use crate::modules::user::components::profile_content::profile_performance_trace_control::ProfilePerformanceTraceControl;
 use crate::modules::user::components::profile_content::profile_scroll_coordinator::{
@@ -134,12 +135,6 @@ impl ProfileRouteTarget {
         let value = trimming_whitespaces_and_newlines(value?);
         (!value.is_empty()).then(|| value.to_owned())
     }
-}
-
-pub enum ProfileCreateActionMetrics {}
-
-impl ProfileCreateActionMetrics {
-    pub const SIDE: f32 = 54.0;
 }
 
 const PULL_REFRESH_TRANSITION_SCALE: f32 = 0.6;
@@ -2061,7 +2056,7 @@ impl AccountMenuAvatarLoader {
         Some(Arc::new(RenderImage::new(vec![image::Frame::new(canvas)])))
     }
 
-    pub(crate) fn circular(source: &RenderImage) -> Option<CleverImage> {
+    pub fn circular(source: &RenderImage) -> Option<CleverImage> {
         let source_size = source.size(0);
         let (width, height) = (source_size.width.0 as u32, source_size.height.0 as u32);
         if width == 0 || height == 0 {

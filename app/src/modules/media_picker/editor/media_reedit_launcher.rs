@@ -25,7 +25,8 @@ use crate::modules::media_picker::api::media_picker_result::{
 use crate::modules::media_picker::editor::editor_image_bake::EditorImageBake;
 use crate::modules::media_picker::editor::editor_state::{EditorImageState, EditorPersonTagEntity};
 use crate::modules::media_picker::editor::editor_state_codable::EditorStateCodec;
-use crate::modules::media_picker::editor::media_editor_screen::{MediaEditorOutcome, MediaEditorScreen};
+use crate::modules::media_picker::editor::media_editor_view_hooks::media_editor_view_hooks;
+use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorOutcome;
 use crate::modules::media_picker::library::media_asset::{MediaAsset, MediaAssetMediaType};
 use crate::modules::media_picker::selection::media_selection_state::{
     MediaSelectionEdit, MediaSelectionEditPayload, MediaSelectionState,
@@ -370,28 +371,25 @@ impl Render for MediaReeditHostView {
         );
         let cancel = cx.weak_entity();
         let done = cx.weak_entity();
-        let screen = MediaEditorScreen::new(
-            ElementId::Name(SharedString::from(format!("media-reedit-screen-{}", self.asset_id))),
-            self.selection.clone(),
-            caption,
-            media_asset,
-            None,
-            self.theme_store.clone(),
-            self.configuration.clone(),
-            initial_edit,
-            false,
-            move |_: &mut Window, cx: &mut App| {
-                let _ = cancel.update(cx, |this, cx| this.finish(None, cx));
-            },
-            move |outcome: MediaEditorOutcome, _: &mut Window, cx: &mut App| {
-                let _ = done.update(cx, |this, cx| this.handle_done(outcome, cx));
-            },
-        )
-        .source_image_override(Some(self.original.clone()))
-        .enables_standalone_swipe_dismiss(false)
-        .editor_presentation(None)
-        .embed_in_hero_host(false);
+        let screen = media_editor_view_hooks().map(|hooks| {
+            (hooks.reedit_screen)(
+                ElementId::Name(SharedString::from(format!("media-reedit-screen-{}", self.asset_id))),
+                self.selection.clone(),
+                caption,
+                media_asset,
+                self.theme_store.clone(),
+                self.configuration.clone(),
+                initial_edit,
+                self.original.clone(),
+                Box::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = cancel.update(cx, |this, cx| this.finish(None, cx));
+                }),
+                Box::new(move |outcome: MediaEditorOutcome, _: &mut Window, cx: &mut App| {
+                    let _ = done.update(cx, |this, cx| this.handle_done(outcome, cx));
+                }),
+            )
+        });
 
-        div().id("media-reedit-host").absolute().inset_0().occlude().opacity(opacity).child(screen)
+        div().id("media-reedit-host").absolute().inset_0().occlude().opacity(opacity).children(screen)
     }
 }

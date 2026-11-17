@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::gifts::engine::rise_gifts_domain::RiseGiftsDomain;
 
-pub(crate) fn install_rise_gifts_domain_hooks() {
+pub fn install_rise_gifts_domain_hooks() {
     RiseAppEngineGiftsDomainHooks::install(RiseAppEngineGiftsDomainHooks {
         prepare: Box::new(|context| {
             async move {

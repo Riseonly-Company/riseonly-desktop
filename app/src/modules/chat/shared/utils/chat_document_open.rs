@@ -23,10 +23,10 @@ use crate::core::media::rise_media_transfer_hub::{
 use crate::core::widgets::notifier::notifier_store::{
     Notifier, NotifierIcon, NotifierPosition, NotifierSendOptions, NotifierType,
 };
-use crate::core::widgets::sheets::message_external_share_materializer::MessageExternalShareMaterializer;
-use crate::core::widgets::sheets::share_sheet::SystemShare;
 use crate::modules::chat::components::chat::bubble::chat_audio_track_adapter::ChatAudioTrackAdapter;
 use crate::modules::chat::shared::chat_audio_queue_continuation::ChatAudioQueueContinuationOrder;
+use crate::modules::chat::shared::utils::share_file_stem_hooks::ShareFileStem;
+use crate::modules::chat::shared::utils::system_share_hooks::SystemShare;
 use crate::modules::chat::stores::message::message_interactions::message_interactions::MessageInteractionsStore;
 use crate::modules::chat::stores::message::message_actions::message_types::{MessageMediaItem, RemoteMediaURL};
 use crate::modules::music::shared::utils::music::music_models::TrackModel;
@@ -235,7 +235,7 @@ impl ChatDocumentOpen {
         if raw_stem.is_empty() {
             return local;
         }
-        let stem = MessageExternalShareMaterializer::sanitize_file_stem(raw_stem);
+        let stem = ShareFileStem::sanitize(raw_stem);
         let leaf_extension = Path::new(leaf).extension().and_then(OsStr::to_str).unwrap_or("");
         let local_extension = local.extension().and_then(OsStr::to_str).unwrap_or("");
         let cache_extension = if local_extension.eq_ignore_ascii_case("bin") { "" } else { local_extension };

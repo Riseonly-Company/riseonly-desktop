@@ -42,7 +42,7 @@ struct ChatProfileLinkTabParts {
 }
 
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileLinkTab {
+pub struct ChatProfileLinkTab {
     chat_id: String,
     topic_id: Option<String>,
 }
@@ -56,11 +56,11 @@ impl ChatProfileLinkTab {
     const THUMB_DECODE_DIMENSION: i64 = 168;
     const SEPARATOR_LEADING: f32 = 84.0;
 
-    pub(crate) fn new(chat_id: impl Into<String>) -> Self {
+    pub fn new(chat_id: impl Into<String>) -> Self {
         Self { chat_id: chat_id.into(), topic_id: None }
     }
 
-    pub(crate) fn topic_id(mut self, topic_id: Option<String>) -> Self {
+    pub fn topic_id(mut self, topic_id: Option<String>) -> Self {
         self.topic_id = topic_id;
         self
     }

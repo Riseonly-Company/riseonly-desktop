@@ -7,7 +7,7 @@ use crate::modules::bot::shared::bot_ui_validation::BotCreateFlowState;
 use crate::modules::bot::stores::bot::bot_interactions::bot_interactions::BotInteractionsStore;
 use crate::modules::bot::stores::bot::bot_services::bot_services::BotServicesStore;
 
-pub(crate) fn install_account_state_reset_bot_hooks() {
+pub fn install_account_state_reset_bot_hooks() {
     set_account_state_reset_bot_hooks(AccountStateResetBotHooks {
         reset_account_state: |cx: &mut App| {
             BotServicesStore::shared(cx).update(cx, |services, cx| services.reset_account_state(cx));

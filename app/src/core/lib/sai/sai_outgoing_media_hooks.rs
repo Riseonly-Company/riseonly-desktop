@@ -19,12 +19,12 @@ pub struct OutgoingMediaCompressorResult {
 }
 
 /// compression progress from 0 to 1, called from the compression thread
-pub(crate) type OutgoingMediaProgress = Arc<dyn Fn(f64) + Send + Sync>;
+pub type OutgoingMediaProgress = Arc<dyn Fn(f64) + Send + Sync>;
 
 /// probe the compressor polls between stages to see if its cancelled
-pub(crate) type OutgoingMediaIsCancelled = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
+pub type OutgoingMediaIsCancelled = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
 
-pub(crate) struct SaiOutgoingMediaHooks {
+pub struct SaiOutgoingMediaHooks {
     pub compress_if_needed: Box<
         dyn Fn(
                 SaiWsOptimisticLocalFile,
@@ -40,7 +40,7 @@ pub(crate) struct SaiOutgoingMediaHooks {
 pub(crate) static SAI_OUTGOING_MEDIA_HOOKS: FeatureHookSlot<SaiOutgoingMediaHooks> = FeatureHookSlot::new("SAI_OUTGOING_MEDIA_HOOKS");
 
 /// installed once, a second install keeps the first
-pub(crate) fn set_sai_outgoing_media_hooks(hooks: SaiOutgoingMediaHooks) {
+pub fn set_sai_outgoing_media_hooks(hooks: SaiOutgoingMediaHooks) {
     let _ = SAI_OUTGOING_MEDIA_HOOKS.set(hooks);
 }
 

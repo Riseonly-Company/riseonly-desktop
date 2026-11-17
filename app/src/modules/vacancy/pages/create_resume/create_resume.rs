@@ -45,7 +45,6 @@ use crate::core::widgets::wrappers::list_shell_ui::{ListShellScrollUnderChromeMo
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::gifts::pages::gift_shop_sheet::GiftSheetScrollReader;
 use crate::modules::media_picker::api::media_picker_configuration::MediaPickerConfiguration;
-use crate::modules::user::pages::profile::settings::profile_settings::profile_avatar_picker_block::ProfileAvatarPickerBlock;
 use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
 use crate::modules::vacancy::components::resume_form_ui::{
     GeoCityPickerSheet, GeoCountryPickerSheet, ResumeChipsField, ResumeFormGroup, ResumeInlineInputRow, ResumeToggleRow,
@@ -54,6 +53,7 @@ use crate::modules::vacancy::components::resume_form_ui::{
 use crate::modules::vacancy::components::vacancy_form_support::{
     VacancyTextEditor, guide_owns_jobs_scene, hex_color, keeps_form_focus, pop_screen,
 };
+use crate::modules::vacancy::pages::create_resume::local_image_file_hooks::local_image_file;
 use crate::modules::vacancy::shared::geo_provider::GeoProvider;
 use crate::modules::vacancy::shared::picker_option::PickerOption;
 use crate::modules::vacancy::shared::resume_option_catalog::ResumeOptionCatalog;
@@ -756,7 +756,7 @@ impl CreateResume {
 
     fn receive_dropped_logo(state: &Entity<CreateResumeState>, entry_id: Uuid, paths: Vec<PathBuf>, cx: &mut App) {
         let Some((path, (url, filename, content_type))) =
-            paths.into_iter().find_map(|path| ProfileAvatarPickerBlock::local_image_file(&path).map(|file| (path, file)))
+            paths.into_iter().find_map(|path| local_image_file(&path).map(|file| (path, file)))
         else {
             return;
         };

@@ -23,7 +23,7 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{SaiWsCacheP
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomainRegistry;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{
     BlockedMember, ChatAction, ChatMember, ChatMemberWireDTOExt, ChatPerm, ChatPermExt,
@@ -62,7 +62,7 @@ impl ChatMembersProjection {
 }
 
 fn guide_forum_members(scope: &str, cx: &App) -> Option<Vec<ChatMember>> {
-    GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).forum_members(scope, cx))
+    (chat_guide_sandbox_hooks().forum_members)(scope, cx)
 }
 
 fn row_user_id(row: &Map<String, Value>) -> Option<&str> {

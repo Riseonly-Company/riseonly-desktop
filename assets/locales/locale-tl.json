@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Itapon ang mga pagbabago?",
   "media_editor_discard_confirm": "Itapon ang mga pagbabago",
   "media_editor_discard_keep": "Ituloy ang pag-edit",
-  "story_canvas_photos_limit_reached": "Hanggang %d larawan lang ang maidaragdag mo"
+  "story_canvas_photos_limit_reached": "Hanggang %d larawan lang ang maidaragdag mo",
+  "error_rtc_overloaded": "Mabigat ang load ng mga tawag ngayon. Para manatiling stable ang mga kasalukuyang tawag, pansamantalang naka-pause ang mga bago. Subukan ulit maya-maya",
+  "overload_modal_title": "Mabigat ang load ngayon"
 }

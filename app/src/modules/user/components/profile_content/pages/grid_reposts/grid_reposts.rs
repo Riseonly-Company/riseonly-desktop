@@ -71,7 +71,7 @@ fn child_id(id: &ElementId, name: impl Into<SharedString>) -> ElementId {
 }
 
 /// rows a lazy grid would build near the screen, plus the probe that moves them
-pub(crate) fn lazy_grid_mounted_range(
+pub fn lazy_grid_mounted_range(
     id: &ElementId,
     item_count: i64,
     columns: i64,

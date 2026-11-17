@@ -58,7 +58,7 @@ fn every_environment_is_nameable_and_distinguishable_at_a_glance() {
 #[test]
 fn the_bundle_identity_is_never_shared_between_environments() {
     let script = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/bundle-macos.sh"),
+        std::path::PathBuf::from(env!("RISE_WORKSPACE_DIR")).join("scripts/bundle-macos.sh"),
     )
     .unwrap_or_default();
     if script.is_empty() {

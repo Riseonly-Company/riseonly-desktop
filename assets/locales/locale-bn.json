@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "পরিবর্তনগুলো বাতিল করবেন?",
   "media_editor_discard_confirm": "পরিবর্তন বাতিল করুন",
   "media_editor_discard_keep": "সম্পাদনা চালিয়ে যান",
-  "story_canvas_photos_limit_reached": "আপনি সর্বোচ্চ %dটি ছবি যোগ করতে পারেন"
+  "story_canvas_photos_limit_reached": "আপনি সর্বোচ্চ %dটি ছবি যোগ করতে পারেন",
+  "error_rtc_overloaded": "কলে এখন অনেক চাপ। চলমান কল স্থিতিশীল রাখতে নতুন কল কিছুক্ষণের জন্য বন্ধ আছে। একটু পরে আবার চেষ্টা করুন",
+  "overload_modal_title": "এখন অনেক চাপ"
 }

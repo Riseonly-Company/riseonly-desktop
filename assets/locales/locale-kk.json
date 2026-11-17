@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Өзгерістерден бас тарту керек пе?",
   "media_editor_discard_confirm": "Өзгерістерден бас тарту",
   "media_editor_discard_keep": "Өңдеуді жалғастыру",
-  "story_canvas_photos_limit_reached": "%d фотодан артық қосу мүмкін емес"
+  "story_canvas_photos_limit_reached": "%d фотодан артық қосу мүмкін емес",
+  "error_rtc_overloaded": "Қоңыраулар қазір қатты жүктелген. Жүріп жатқан қоңыраулар тұрақты болуы үшін жаңалары уақытша тоқтатылды. Сәлден соң қайталап көріңіз",
+  "overload_modal_title": "Қазір жүктеме жоғары"
 }

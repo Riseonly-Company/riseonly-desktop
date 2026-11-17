@@ -45,7 +45,7 @@ use crate::core::media::rise_media_transfer_hub::RiseMediaCacheIdentity;
 use crate::core::ui::clever_image_disk_cache::CleverImageDiskCache;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierIcon, NotifierSendOptions, NotifierType};
 use crate::modules::auth::services::auth_token_refresh::AuthTokenRefresh;
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 use crate::modules::music::shared::utils::music::music_models::MusicLocalTrackTransferPhase;
 use crate::modules::music::shared::utils::music::music_playback_disk_cache::MusicPlaybackDiskCache;
 use crate::modules::music::shared::utils::music::music_track_file_upload::MusicTrackFileUpload;

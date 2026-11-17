@@ -15,7 +15,7 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponse
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::engine::core::rise_conversation_presentation::RiseConversationPresentation;
 use crate::modules::chat::engine::messages::rise_message_durable_outbox::RiseSlowModeRefusals;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{
     ChatAnalyticsModel, ChatInfo, ChatPerm, ChatPermExt, ChatPermKey, ChatReactionCatalog, ChatReactionConfig,
     ChatSettingsModel, ChatType, LinkedChatInfo,
@@ -518,7 +518,7 @@ impl ChatServicesStore {
     }
 
     pub fn resolved_linked_chat(&self, chat_id: &str, cx: &App) -> Option<LinkedChatInfo> {
-        if let Some(invented) = GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).linked_discussion(chat_id)) {
+        if let Some(invented) = (chat_guide_sandbox_hooks().linked_discussion)(chat_id, cx) {
             return invented;
         }
         if let Some(card) = self.linked_chat_by_chat.get(chat_id) {

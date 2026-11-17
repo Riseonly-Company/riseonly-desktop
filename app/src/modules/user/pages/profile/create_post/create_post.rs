@@ -66,6 +66,7 @@ use crate::core::widgets::wrappers::list_shell_ui::{
     ListShellScrollUnderChromeModifiers, SettingsWrapperUi, list_shell_under_chrome_box,
 };
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
+use crate::modules::camera::capture::post_author_premium_hooks::post_author_is_premium;
 use crate::modules::chat::components::chat::composer::chat_composer_types::{
     ChatBottomBarMetrics, ChatComposerCaretEdit, ChatComposerCaretEditResult, ChatDraftCustomEmoji,
 };
@@ -543,9 +544,7 @@ impl CreatePostScreenState {
     }
 
     pub fn author_is_premium(cx: &App) -> bool {
-        AuthServicesStore::try_read(cx)
-            .and_then(|auth| auth.profile())
-            .is_some_and(|profile| profile.more.is_premium)
+        post_author_is_premium(cx)
     }
 
     pub fn max_video_attachments() -> i64 {

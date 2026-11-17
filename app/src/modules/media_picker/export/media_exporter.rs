@@ -436,7 +436,7 @@ struct MediaExporterMixedMusic {
 
 /// shared exporter, clones see one state
 #[derive(Clone, Default)]
-pub(crate) struct MediaExporter {
+pub struct MediaExporter {
     state: Arc<Mutex<MediaExporterState>>,
 }
 
@@ -447,7 +447,7 @@ impl MediaExporter {
 
     const PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -455,7 +455,7 @@ impl MediaExporter {
         usize::try_from(RiseLimits::value("legacy_http_image")).unwrap_or(0)
     }
 
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         let (exporter, requests) = {
             let mut state = self.state.lock();
             state.cancelled = true;
@@ -494,7 +494,7 @@ impl MediaExporter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn export(
+    pub async fn export(
         &self,
         assets: Vec<LibraryAsset>,
         edits: HashMap<String, MediaSelectionEdit>,
@@ -614,7 +614,7 @@ impl MediaExporter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn export_external(
+    pub async fn export_external(
         &self,
         source_url: PathBuf,
         source_image: Option<CleverImage>,
@@ -976,7 +976,7 @@ impl MediaExporter {
     /// baked frame for the optimistic row
     /// the real clip renders later so without this the author sees the raw source
     /// display only, never the server poster
-    pub(crate) fn write_optimistic_media_preview(source: &CleverImage, spatial_edit: &EditorImageState) -> Option<PathBuf> {
+    pub fn write_optimistic_media_preview(source: &CleverImage, spatial_edit: &EditorImageState) -> Option<PathBuf> {
         let baked = EditorImageBake::render_edited_image(source, spatial_edit);
         let data = Self::jpeg_data(&baked, 0.8).filter(|data| !data.is_empty())?;
         let url = temporary_directory().join(format!("ro-chat-img-poster-{}.jpg", Uuid::new_v4().uuid_string()));

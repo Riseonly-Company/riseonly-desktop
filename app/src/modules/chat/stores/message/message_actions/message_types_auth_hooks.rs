@@ -1,6 +1,6 @@
 use crate::core::feature_hooks::FeatureHookSlot;
 
-pub(crate) struct MessageTypesAuthHooks {
+pub struct MessageTypesAuthHooks {
     pub message_author_user_id_for_outgoing: fn() -> String,
     pub profile_name: fn() -> Option<String>,
     pub profile_logo: fn() -> Option<String>,
@@ -17,15 +17,15 @@ impl MessageTypesAuthHooks {
         MESSAGE_TYPES_AUTH_HOOKS.get()
     }
 
-    pub(crate) fn message_author_user_id_for_outgoing() -> String {
+    pub fn message_author_user_id_for_outgoing() -> String {
         Self::installed().map(|hooks| (hooks.message_author_user_id_for_outgoing)()).unwrap_or_default()
     }
 
-    pub(crate) fn profile_name() -> Option<String> {
+    pub fn profile_name() -> Option<String> {
         Self::installed().and_then(|hooks| (hooks.profile_name)())
     }
 
-    pub(crate) fn profile_logo() -> Option<String> {
+    pub fn profile_logo() -> Option<String> {
         Self::installed().and_then(|hooks| (hooks.profile_logo)())
     }
 }

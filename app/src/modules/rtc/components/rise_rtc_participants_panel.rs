@@ -23,6 +23,7 @@ use crate::modules::rtc::components::rise_rtc_stage_roster::{
     RiseRTCStageListenerRow, RiseRTCStageMetrics, RiseRTCStageRosterActionHandler, RiseRTCStageRosterTapHandler,
     SEPARATOR_HEIGHT,
 };
+use crate::modules::rtc::components::sync_rows_hooks::sync_rows;
 use crate::modules::rtc::engine::rise_rtc_engine_models::RiseRTCParticipant;
 use crate::modules::rtc::engine::rise_rtc_listener_volume_presentation::RiseRTCListenerVolume;
 use crate::modules::rtc::pages::rise_rtc_room_screen::{RiseRTCRoomScreenView, non_empty};
@@ -30,7 +31,6 @@ use crate::modules::rtc::shared::rise_rtc_room_menu::{RiseRTCRoomMenuAction, Ris
 use crate::modules::rtc::shared::rtc_guide_sandbox_hooks::RtcGuideSandboxHooks;
 use crate::modules::rtc::stores::rtc::rtc_interactions::rtc_interactions::RTCInteractionsStore;
 use crate::modules::rtc::stores::rtc::rtc_services::rtc_services::RTCServicesStore;
-use crate::modules::vacancy::pages::vacancy_list::vacancy_list::sync_rows;
 
 const PANEL_PADDING: f32 = 12.0;
 const SECTION_SPACING: f32 = 14.0;

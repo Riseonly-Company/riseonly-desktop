@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "¿Descartar los cambios?",
   "media_editor_discard_confirm": "Descartar cambios",
   "media_editor_discard_keep": "Seguir editando",
-  "story_canvas_photos_limit_reached": "Puedes añadir hasta %d fotos"
+  "story_canvas_photos_limit_reached": "Puedes añadir hasta %d fotos",
+  "error_rtc_overloaded": "Las llamadas tienen mucha carga ahora mismo. Para mantener estables las llamadas en curso, las nuevas están en pausa un momento. Inténtalo un poco más tarde",
+  "overload_modal_title": "Mucha carga en este momento"
 }

@@ -19,18 +19,29 @@ path = "src/main.rs"
 # without them shows empty boxes where the product's whole first impression is.
 # `cargo make vendor-rlottie` fetches the source it compiles.
 default = ["rlottie"]
-rlottie = ["rise-media/rlottie", "rise-ui/rlottie"]
+rlottie = ["rise-media/rlottie", "rise-ui/rlottie", "riseonly-pages-chat/rlottie", "riseonly-pages-chat-info/rlottie", "riseonly-pages-user/rlottie", "riseonly-pages-post/rlottie", "riseonly-pages-media/rlottie", "riseonly-pages-music/rlottie", "riseonly-pages-misc-a/rlottie", "riseonly-pages-misc-b/rlottie", "riseonly-pages-misc-c/rlottie"]
 # Automated test runs only: muted sound and on-request window snapshots
 # (gpui's render_to_image lives behind test-support). Inert in release builds.
 # RISE_DEV_STEALTH=1 also hides every window and keeps secrets in files (X186).
-dev-drive = ["gpui_platform/test-support", "rise-platform/dev-drive"]
+dev-drive = ["gpui_platform/test-support", "rise-platform/dev-drive", "riseonly-pages-chat/dev-drive", "riseonly-pages-chat-info/dev-drive", "riseonly-pages-user/dev-drive", "riseonly-pages-post/dev-drive", "riseonly-pages-media/dev-drive", "riseonly-pages-music/dev-drive", "riseonly-pages-misc-a/dev-drive", "riseonly-pages-misc-b/dev-drive", "riseonly-pages-misc-c/dev-drive"]
 # iOS `SAI_DEBUG_TOOLS`: the Sai debugger (HTTP and socket traces) in an optimised build.
-sai_debug_tools = []
+sai_debug_tools = ["riseonly-pages-chat/sai_debug_tools", "riseonly-pages-chat-info/sai_debug_tools", "riseonly-pages-user/sai_debug_tools", "riseonly-pages-post/sai_debug_tools", "riseonly-pages-media/sai_debug_tools", "riseonly-pages-music/sai_debug_tools", "riseonly-pages-misc-a/sai_debug_tools", "riseonly-pages-misc-b/sai_debug_tools", "riseonly-pages-misc-c/sai_debug_tools"]
 
 [lints]
 workspace = true
 
 [dependencies]
+# @generated view crates begin: scripts/gen-mod-tree.py from scripts/crate-views.json. Do not edit.
+riseonly-pages-chat = { path = "../crates/riseonly-pages-chat", default-features = false }
+riseonly-pages-chat-info = { path = "../crates/riseonly-pages-chat-info", default-features = false }
+riseonly-pages-media = { path = "../crates/riseonly-pages-media", default-features = false }
+riseonly-pages-misc-a = { path = "../crates/riseonly-pages-misc-a", default-features = false }
+riseonly-pages-misc-b = { path = "../crates/riseonly-pages-misc-b", default-features = false }
+riseonly-pages-misc-c = { path = "../crates/riseonly-pages-misc-c", default-features = false }
+riseonly-pages-music = { path = "../crates/riseonly-pages-music", default-features = false }
+riseonly-pages-post = { path = "../crates/riseonly-pages-post", default-features = false }
+riseonly-pages-user = { path = "../crates/riseonly-pages-user", default-features = false }
+# @generated view crates end
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

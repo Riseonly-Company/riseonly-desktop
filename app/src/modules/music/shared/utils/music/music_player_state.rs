@@ -41,7 +41,6 @@ use rise_platform::media_keys::{
 use rise_platform::paths::temporary_directory;
 use rise_ui::swiftui::RepeatingTimer;
 
-use crate::app::aside::aside_navigator;
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::desktop_platform::av_audio_session::{
     AVAudioSession, AVAudioSessionInterruption, AVAudioSessionInterruptionOptions, AVAudioSessionInterruptionType,
@@ -75,8 +74,6 @@ use crate::core::widgets::notifier::notifier_store::{
 use crate::modules::auth::services::auth_local_storage::AuthLocalStorage;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::chat::async_render::chat_performance_trace::{ChatPerformanceTrace, OperationToken};
-use crate::modules::chat::components::chat::video_note::video_note_player_store::VideoNotePlayerStore;
-use crate::modules::chat::components::chat::voice::chat_voice_message_player::ChatVoiceMessagePlayer;
 use crate::modules::music::shared::utils::music::music_audio_effect_settings::{
     MusicAudioEffectKind, MusicAudioEffectKindExt, MusicAudioEffectSettings,
 };
@@ -92,10 +89,14 @@ use crate::modules::music::shared::utils::music::music_cover_letterbox::MusicCov
 use crate::modules::music::shared::utils::music::music_media_url::MusicMediaURL;
 use crate::modules::music::shared::utils::music::music_local_state::MusicLocalState;
 use crate::modules::music::shared::utils::music::music_player_rtc_hooks::music_player_rtc_hooks;
+use crate::modules::music::shared::utils::music::music_player_state_hooks::{
+    music_player_state_activity_hooks, music_player_state_video_note_hooks, music_player_state_voice_hooks,
+};
 use crate::modules::music::shared::utils::music::music_models::{MusicRepeatMode, MusicRepeatModeExt, TrackModel};
 use crate::modules::music::shared::utils::music::music_now_playing_artwork::MusicNowPlayingArtwork;
 use crate::modules::music::shared::utils::music::music_playback_disk_cache::MusicPlaybackDiskCache;
 use crate::modules::music::shared::utils::music::music_playback_url::MusicPlaybackUrl;
+use crate::modules::music::shared::utils::music::player_beside_hooks::player_beside;
 use crate::modules::music::shared::utils::music::music_playback_preferences::{
     MusicPlaybackPreferenceScope, MusicPlaybackPreferences,
 };
@@ -118,7 +119,6 @@ use crate::modules::music::stores::music_interactions::music_interactions::{
     MusicInteractionsStore, MusicPlaylistListeningSessionStateRequest,
 };
 use crate::modules::music::stores::music_services::music_services::MusicServicesStore;
-use crate::modules::user::engine::rise_meaningful_activity::RiseMeaningfulActivity;
 
 enum MusicPlayerLog {}
 
@@ -1031,19 +1031,18 @@ impl MusicPlayerState {
             let Some(state) = this.upgrade() else { return };
             let active = state.read(cx).is_playing;
             let weak = state.downgrade();
-            RiseMeaningfulActivity::shared(cx).update(cx, |activity, cx| {
-                activity.set_source(
-                    source,
-                    active,
-                    move |cx| {
-                        weak.upgrade().is_some_and(|state| {
-                            let state = state.read(cx);
-                            state.is_playing && state.current_track.is_some()
-                        })
-                    },
-                    cx,
-                );
-            });
+            let Some(hooks) = music_player_state_activity_hooks() else { return };
+            (hooks.set_source)(
+                source,
+                active,
+                Box::new(move |cx: &App| {
+                    weak.upgrade().is_some_and(|state| {
+                        let state = state.read(cx);
+                        state.is_playing && state.current_track.is_some()
+                    })
+                }),
+                cx,
+            );
         });
     }
 
@@ -2642,7 +2641,7 @@ impl MusicPlayerState {
             let is_player_on_screen = self.show_now_playing
                 || self.show_queue_sheet
                 || self.show_audio_effects_sheet
-                || aside_navigator::player_beside(cx);
+                || player_beside(cx);
             if is_player_on_screen {
                 self.blocked_listening_control = Some(control);
                 cx.notify();
@@ -4428,17 +4427,17 @@ impl MusicPlayerState {
             return false;
         }
         self.suppress_external_resume_during_user_handoff = true;
-        let voice_player = ChatVoiceMessagePlayer::shared(cx);
-        let video_note_player = VideoNotePlayerStore::shared(cx);
-        let stops_voice = voice_player.read(cx).is_active();
-        let stops_video_note = video_note_player.read(cx).is_active();
+        let voice_hooks = music_player_state_voice_hooks();
+        let video_note_hooks = music_player_state_video_note_hooks();
+        let stops_voice = voice_hooks.is_some_and(|hooks| (hooks.is_active)(cx));
+        let stops_video_note = video_note_hooks.is_some_and(|hooks| (hooks.is_active)(cx));
         if stops_voice || stops_video_note {
             cx.defer(move |cx| {
-                if stops_voice {
-                    voice_player.update(cx, |player, cx| player.stop(cx));
+                if stops_voice && let Some(hooks) = voice_hooks {
+                    (hooks.stop)(cx);
                 }
-                if stops_video_note {
-                    video_note_player.update(cx, |player, cx| player.stop(cx));
+                if stops_video_note && let Some(hooks) = video_note_hooks {
+                    (hooks.stop)(cx);
                 }
             });
         }

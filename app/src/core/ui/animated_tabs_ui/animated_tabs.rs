@@ -34,23 +34,55 @@ pub struct AnimatedTabs {
     sizes_pages_vertically_to_content: bool,
     minimum_page_height: f32,
     header_placement: AnimatedTabsHeaderPlacement,
+    detached_live_state: Option<Entity<AnimatedTabsPagerLiveState>>,
     on_swipe_back_beyond_first: Option<AnimatedTabsPagerAction>,
 }
 
 impl AnimatedTabs {
+    const DEFAULT_VERTICAL_PADDING: f32 = 8.0;
+
     pub fn new(id: impl Into<ElementId>, tabs: Vec<TabConfig>, active_tab: Binding<i64>) -> Self {
         Self {
             id: id.into(),
             tabs,
             active_tab,
             horizontal_padding: 10.0,
-            top_padding: 8.0,
-            bottom_padding: 8.0,
+            top_padding: Self::DEFAULT_VERTICAL_PADDING,
+            bottom_padding: Self::DEFAULT_VERTICAL_PADDING,
             sizes_pages_vertically_to_content: false,
             minimum_page_height: 1.0,
             header_placement: AnimatedTabsHeaderPlacement::Top,
+            detached_live_state: None,
             on_swipe_back_beyond_first: None,
         }
+    }
+
+    pub fn header_strip(
+        id: impl Into<ElementId>,
+        tabs: Vec<TabHeaderConfig>,
+        active_tab: Binding<i64>,
+        live_drag_state: Entity<AnimatedTabsPagerLiveState>,
+        horizontal_padding: f32,
+    ) -> Div {
+        let selected = active_tab.clone();
+        let header = AnimatedTabsLiveHeader::new(
+            id,
+            tabs,
+            active_tab,
+            live_drag_state,
+            Rc::new(move |id, window, cx| Self::select_tab(&selected, id, window, cx)),
+        )
+        .horizontal_padding(horizontal_padding);
+        div()
+            .w_full()
+            .pt(px(Self::DEFAULT_VERTICAL_PADDING))
+            .pb(px(Self::DEFAULT_VERTICAL_PADDING))
+            .child(header)
+    }
+
+    pub fn detached_header(mut self, live_drag_state: Entity<AnimatedTabsPagerLiveState>) -> Self {
+        self.detached_live_state = Some(live_drag_state);
+        self
     }
 
     pub fn horizontal_padding(mut self, padding: f32) -> Self {
@@ -167,7 +199,9 @@ impl RenderOnce for AnimatedTabs {
                 pager_height: None,
             })
         });
-        let live_drag_state = state.read(cx).live_drag_state.clone();
+        let draws_header = self.detached_live_state.is_none();
+        let live_drag_state =
+            self.detached_live_state.clone().unwrap_or_else(|| state.read(cx).live_drag_state.clone());
 
         let resolved_pager_height = self.resolved_pager_height(&state.read(cx).page_heights, active_tab);
         let now = RiseClock::monotonic();
@@ -184,8 +218,9 @@ impl RenderOnce for AnimatedTabs {
             }
         });
 
-        let header_top = (self.header_placement == AnimatedTabsHeaderPlacement::Top).then(|| self.tabs_header(&live_drag_state));
-        let header_bottom = (self.header_placement == AnimatedTabsHeaderPlacement::Bottom)
+        let header_top = (draws_header && self.header_placement == AnimatedTabsHeaderPlacement::Top)
+            .then(|| self.tabs_header(&live_drag_state));
+        let header_bottom = (draws_header && self.header_placement == AnimatedTabsHeaderPlacement::Bottom)
             .then(|| {
                 self.tabs_header(&live_drag_state)
                     .bg(ThemeStore::shared(cx).read(cx).current_theme().bg._100)

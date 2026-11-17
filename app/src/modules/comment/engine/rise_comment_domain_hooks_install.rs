@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::comment::engine::rise_comment_domain::RiseCommentDomain;
 
-pub(crate) fn install_rise_comment_domain_hooks() {
+pub fn install_rise_comment_domain_hooks() {
     RiseAppEngineCommentDomainHooks::install(RiseAppEngineCommentDomainHooks {
         prepare: Box::new(|context| {
             async move {

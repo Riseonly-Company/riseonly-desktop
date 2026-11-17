@@ -5,7 +5,7 @@ use crate::core::feature_hooks::FeatureHookSlot;
 use crate::modules::stickers::engine::rise_sticker_models::RiseStickerPresentationSnapshot;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::{StickerItem, StickerPack};
 
-pub(crate) struct StickersGuideSandboxHooks {
+pub struct StickersGuideSandboxHooks {
     pub stickers_snapshot: fn(real: RiseStickerPresentationSnapshot, cx: &App) -> RiseStickerPresentationSnapshot,
     pub owns_sticker_pack: fn(id: &str, cx: &App) -> bool,
     pub owns_stickers_scene: fn(cx: &App) -> bool,
@@ -27,10 +27,10 @@ static UNINSTALLED: StickersGuideSandboxHooks = StickersGuideSandboxHooks {
     observe_sandbox: |_, _| None,
 };
 
-pub(crate) fn set_stickers_guide_sandbox_hooks(hooks: StickersGuideSandboxHooks) -> Result<(), StickersGuideSandboxHooks> {
+pub fn set_stickers_guide_sandbox_hooks(hooks: StickersGuideSandboxHooks) -> Result<(), StickersGuideSandboxHooks> {
     HOOKS.set(hooks)
 }
 
-pub(crate) fn stickers_guide_sandbox_hooks() -> &'static StickersGuideSandboxHooks {
+pub fn stickers_guide_sandbox_hooks() -> &'static StickersGuideSandboxHooks {
     HOOKS.get().unwrap_or(&UNINSTALLED)
 }

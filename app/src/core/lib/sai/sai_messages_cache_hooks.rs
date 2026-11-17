@@ -2,14 +2,14 @@ use gpui::App;
 
 use crate::core::feature_hooks::FeatureHookSlot;
 
-pub(crate) struct SaiMessagesCacheHooks {
+pub struct SaiMessagesCacheHooks {
     pub notify_messages_cache_did_change: Box<dyn Fn(&str, &mut App) + Send + Sync>,
 }
 
 pub(crate) static SAI_MESSAGES_CACHE_HOOKS: FeatureHookSlot<SaiMessagesCacheHooks> = FeatureHookSlot::new("SAI_MESSAGES_CACHE_HOOKS");
 
 /// installed once, a second install keeps the first
-pub(crate) fn set_sai_messages_cache_hooks(hooks: SaiMessagesCacheHooks) {
+pub fn set_sai_messages_cache_hooks(hooks: SaiMessagesCacheHooks) {
     let _ = SAI_MESSAGES_CACHE_HOOKS.set(hooks);
 }
 

@@ -7,7 +7,7 @@ use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiSliceState;
 use crate::core::lib::sai::modules::sai_ws::sai_ws::SaiWs;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{SaiWsCachePreferredLayer, SaiWsDiskCachePolicy};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::music::stores::music_services::music_guide_sandbox_hooks::MusicGuideSandboxHooks;
 use crate::modules::music::stores::music_actions::music_actions::MusicActionsStore;
 use crate::modules::music::stores::music_actions::music_types::MusicLocalPlaylistDestination;
 use crate::modules::music::stores::music_actions::music_wire_types::{
@@ -32,8 +32,7 @@ impl MusicServicesStore {
                 .list_local_playlist_destinations_sai
                 .data()
         });
-        let sandbox = GuideSandbox::shared(cx);
-        let Some(staged) = sandbox.update(cx, |sandbox, cx| sandbox.playlist_destination(cx)) else {
+        let Some(staged) = MusicGuideSandboxHooks::playlist_destination(cx) else {
             return real;
         };
         let staged_id = staged.id.clone();

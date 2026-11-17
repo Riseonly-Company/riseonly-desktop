@@ -289,3 +289,13 @@ codegen-units = 256
 incremental = true
 strip = "none"
 debug = "line-tables-only"
+
+# why: the edit loop of scripts/watch-macos.sh; own code unoptimised with line tables only,
+# every dependency optimised once so the window stays usable while the app crate recompiles fast.
+[profile.watch]
+inherits = "dev"
+debug = "line-tables-only"
+
+[profile.watch.package."*"]
+opt-level = 2
+debug = false

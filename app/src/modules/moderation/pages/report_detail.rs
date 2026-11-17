@@ -11,7 +11,8 @@ use rise_ui::swiftui::page_refresh::PageRefreshKeys;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::scroll_view::scroll_view;
 
-use crate::app::aside::{aside_navigator, aside_registry};
+use crate::app::aside::aside_registry;
+use crate::app::router::navigation_aside_hooks::navigation_aside_hooks;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::canon_format::RiseFormat;
@@ -445,8 +446,11 @@ impl ReportDetailParts {
                 store.arm_comment_focus(&post_id, comment_id.as_deref(), false, cx);
             });
         }
-        if aside_navigator::has_frontmost(cx) && aside_registry::opens_beside_centre(&route) {
-            aside_navigator::open(route, cx);
+        if let Some(aside) = navigation_aside_hooks()
+            && (aside.has_frontmost)(cx)
+            && aside_registry::opens_beside_centre(&route)
+        {
+            (aside.open)(route, cx);
             return;
         }
         self.push(route, cx);
