@@ -1,0 +1,104 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -221,6 +221,44 @@
+         found
+     }
+ 
++    /// [`Self::swap_path`] for many keys in one pass over the scene, each path also taking the
++    /// colour of its swap, under the element opacity it was painted with (Riseonly 0049): a field
++    /// of twinkling sparkles moves and fades with a present. True only when every nonzero key was
++    /// found; the paths that were found keep the swap either way.
++    pub fn swap_paths(&mut self, swaps: &[(u64, Path<ScaledPixels>, Background)]) -> bool {
++        let slots: std::collections::HashMap<u64, usize> = swaps
++            .iter()
++            .enumerate()
++            .filter(|(_, swap)| swap.0 != 0)
++            .map(|(slot, swap)| (swap.0, slot))
++            .collect();
++        if slots.is_empty() {
++            return false;
++        }
++        let mut found = vec![false; swaps.len()];
++        for path in &mut self.paths {
++            if path.swap_key != 0
++                && let Some(&slot) = slots.get(&path.swap_key)
++            {
++                let (_, local, color) = &swaps[slot];
++                path.take_local_geometry(local);
++                path.color = color.opacity(path.swap_opacity);
++                found[slot] = true;
++            }
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(Primitive::Path(path)) = operation
++                && path.swap_key != 0
++                && let Some(&slot) = slots.get(&path.swap_key)
++            {
++                let (_, local, color) = &swaps[slot];
++                path.take_local_geometry(local);
++                path.color = color.opacity(path.swap_opacity);
++            }
++        }
++        slots.values().all(|&slot| found[slot])
++    }
++
+     pub fn finish(&mut self) {
+         self.shadows.sort_by_key(|shadow| shadow.order);
+         self.quads.sort_by_key(|quad| quad.order);
+@@ -1263,6 +1301,7 @@
+     contour_count: usize,
+     pub(crate) swap_key: u64,
+     pub(crate) swap_anchor: Point<P>,
++    pub(crate) swap_opacity: f32,
+ }
+ 
+ impl Path<Pixels> {
+@@ -1283,6 +1322,7 @@
+             contour_count: 0,
+             swap_key: 0,
+             swap_anchor: Default::default(),
++            swap_opacity: 1.0,
+         }
+     }
+ 
+@@ -1304,6 +1344,7 @@
+             color: self.color,
+             swap_key: self.swap_key,
+             swap_anchor: self.swap_anchor.scale(factor),
++            swap_opacity: self.swap_opacity,
+         }
+     }
+ 
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4652,6 +4652,7 @@
+         } else {
+             path.swap_key = swap_key;
+             path.swap_anchor = anchor;
++            path.swap_opacity = opacity;
+         }
+         self.next_frame
+             .scene
+@@ -5271,6 +5272,22 @@
+         found
+     }
+ 
++    /// [`Self::swap_path`] for several keys in one pass over the frame on screen, each path also
++    /// taking the colour of its swap (Riseonly 0049), and a present when every key was found. A
++    /// false return asks the caller to stop swapping and repaint through its view.
++    pub fn swap_paths(&mut self, swaps: Vec<(u64, Path<Pixels>, Background)>) -> bool {
++        let scale_factor = self.scale_factor();
++        let swaps: Vec<(u64, Path<ScaledPixels>, Background)> = swaps
++            .into_iter()
++            .map(|(swap_key, local, color)| (swap_key, local.scale(scale_factor), color))
++            .collect();
++        let found = self.rendered_frame.scene.swap_paths(&swaps);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
++    }
++
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         self.image_drops += 1;

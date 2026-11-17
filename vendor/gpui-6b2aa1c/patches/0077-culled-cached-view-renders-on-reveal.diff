@@ -1,0 +1,46 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -291,6 +291,17 @@
+     }
+ }
+ 
++/// Riseonly 0077: a cached view laid out wholly outside the clip it rendered under (its primitives
++/// were dropped by the scene, not recorded) that the new clip reaches. Its replay would draw nothing.
++fn culled_then_revealed(
++    old_bounds: Bounds<Pixels>,
++    old_mask: Bounds<Pixels>,
++    new_bounds: Bounds<Pixels>,
++    new_mask: Bounds<Pixels>,
++) -> bool {
++    !old_bounds.is_empty() && !old_bounds.intersects(&old_mask) && new_bounds.intersects(&new_mask)
++}
++
+ impl<V: View> IntoElement for ViewElement<V> {
+     type Element = Self;
+ 
+@@ -382,6 +393,13 @@
+         if !window.ranges_replay_moved(&self.prepaint_range, &self.paint_range) {
+             return Err("origin:pinned");
+         }
++        // Riseonly 0077: the scene keeps no primitive its clip cuts away whole, so a view rendered
++        // wholly outside its clip may have recorded nothing, and every range check below passes on
++        // nothing: replayed into view it stayed blank (settings switches laid out below the viewport,
++        // X1741). Its own bounds say what the empty ranges cannot; it renders when revealed.
++        if culled_then_revealed(key.bounds, key.content_mask.bounds, bounds, content_mask.bounds) {
++            return Err("origin:culled");
++        }
+         // Riseonly 0067: shown nothing before and nothing after (a pager neighbour outside its clip
+         // on a page sliding in): the replay draws the same nothing, so neither pixel snapping nor
+         // the mouse matter, and the recorded clips move along with it.
+@@ -445,6 +463,11 @@
+         if self.painted_frame + 1 != window.draw_count || self.prepainted_frame + 1 != window.draw_count {
+             return false;
+         }
++        // Riseonly 0077: culled whole under the old mask it may have recorded nothing to replay.
++        let bounds = self.cache_key.bounds;
++        if culled_then_revealed(bounds, self.cache_key.content_mask.bounds, bounds, content_mask.bounds) {
++            return false;
++        }
+         // Riseonly 0074: a view the old mask hid whole replays only while the new one hides it too;
+         // a mask growing over it (a page sliding in) renders it, its recorded clips are the old mask.
+         if window.ranges_wholly_hidden(&self.prepaint_range, &self.paint_range) {

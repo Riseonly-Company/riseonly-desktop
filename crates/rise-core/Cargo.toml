@@ -1,0 +1,29 @@
+[package]
+name = "rise-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+rand.workspace = true
+url.workspace = true
+unicode-segmentation.workspace = true
+unicode-normalization.workspace = true
+regex.workspace = true
+# Canon tag ceiling for the ready mention pattern (COMMON-TWINS 7); no deps by default.
+rise-validate.workspace = true
+jiff.workspace = true
+icu_collator.workspace = true
+icu_locale_core.workspace = true

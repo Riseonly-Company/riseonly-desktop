@@ -1,0 +1,204 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -280,8 +280,10 @@
+ 
+     /// Lets a cached view that only changed its origin (a cell scrolled within its clip) replay its
+     /// last frame moved instead of rendering (Riseonly 0041). Only for views whose prepaint keeps no
+-    /// window position outside [`Window::on_replayed_move`]: mouse listeners, input handlers,
+-    /// tooltips and deferred draws already make it render.
++    /// window position outside [`Window::on_replayed_move`] that anything but the mouse reads: input
++    /// handlers, tooltips and deferred draws already make it render. Mouse listeners may replay
++    /// moved (Riseonly 0044): a view with them renders while the mouse is over it, and the mouse
++    /// entering one replayed moved since it last rendered makes it render in the next frame.
+     pub fn replay_when_moved(mut self) -> Self {
+         self.replays_moved = true;
+         self
+@@ -321,6 +323,9 @@
+     stale_while_hidden: bool,
+     /// The prepaint replayed moved by this offset; the paint that follows replays moved too.
+     moved_by: Option<Point<Pixels>>,
++    /// The recorded ranges hold mouse listeners and element states of an earlier origin: this view
++    /// or a cached view inside it replayed moved since it last rendered (Riseonly 0044).
++    positions_moved: bool,
+ }
+ 
+ impl ViewElementState {
+@@ -357,6 +362,14 @@
+         {
+             return None;
+         }
++        // Riseonly 0044: listeners and element states keep the old origin, so a view the mouse is
++        // over before or after the move renders: hover, clicks and drags read fresh positions.
++        let mouse = window.mouse_position();
++        if window.paint_range_listens(&self.paint_range)
++            && (key.bounds.contains(&mouse) || bounds.contains(&mouse))
++        {
++            return None;
++        }
+         let offset = bounds.origin - key.bounds.origin;
+         let device = offset.scale(window.scale_factor());
+         let whole = |value: f32| (value - value.round()).abs() < 0.001;
+@@ -511,6 +524,12 @@
+                                 window,
+                             )
+                         {
++                            if window.paint_range_listens(&state.paint_range) {
++                                state.positions_moved = true;
++                            }
++                            if state.positions_moved {
++                                window.next_frame.moved_views.push((entity_id, bounds));
++                            }
+                             let prepaint_start = window.prepaint_index();
+                             let move_listeners =
+                                 window.reuse_moved_prepaint(state.prepaint_range.clone(), offset, mask_offset);
+@@ -567,6 +586,11 @@
+                                     window.keep_parked_states(parked);
+                                 }
+                             }
++                            // Riseonly 0044: still holding an earlier origin, so the mouse entering
++                            // it must make it render.
++                            if element_state.positions_moved && window.hidden_depth == 0 {
++                                window.next_frame.moved_views.push((entity_id, bounds));
++                            }
+                             let prepaint_start = window.prepaint_index();
+                             window.reuse_prepaint(element_state.prepaint_range.clone());
+                             cx.entities
+@@ -588,6 +612,7 @@
+                         // cache key moved, the window refreshes, or its ranges are not of the frame
+                         // just before (0030), so an animated leaf re-renders its ancestors only.
+                         let dropped_before = window.hidden_dropped_deferred;
++                        let moved_views_before = window.next_frame.moved_views.len();
+                         let prepaint_start = window.prepaint_index();
+                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+                             let mut element = self
+@@ -602,6 +627,9 @@
+                         });
+ 
+                         let prepaint_end = window.prepaint_index();
++                        // Riseonly 0044: a cached view inside replayed moved and listed itself;
++                        // a later replay of this view skips it, so that replay lists this view.
++                        let positions_moved = window.next_frame.moved_views.len() != moved_views_before;
+                         let accessed_entities = Rc::new(accessed_entities);
+                         window
+                             .next_frame
+@@ -626,6 +654,7 @@
+                                 dropped_deferred: window.hidden_dropped_deferred != dropped_before,
+                                 stale_while_hidden: false,
+                                 moved_by: None,
++                                positions_moved,
+                             },
+                         )
+                     },
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -952,6 +952,9 @@
+     pub(crate) cached_views: Vec<(EntityId, Rc<FxHashSet<EntityId>>)>,
+     /// Prepaint callbacks a cached view replayed at a new origin calls again (Riseonly 0041).
+     pub(crate) move_listeners: Vec<MoveListener>,
++    /// Cached views drawn with mouse listeners of an earlier origin and their bounds now: the
++    /// mouse entering one makes it render (Riseonly 0044).
++    pub(crate) moved_views: Vec<(EntityId, Bounds<Pixels>)>,
+ }
+ 
+ /// A prepaint callback that reads window positions, recorded so a cached view replayed at a new
+@@ -981,6 +984,7 @@
+     accessed_element_states_index: usize,
+     line_layout_index: LineLayoutIndex,
+     move_listeners_index: usize,
++    moved_views_index: usize,
+ }
+ 
+ /// The paint of a cached view kept out of the frames in which a hidden div skips it, replayed when
+@@ -1033,6 +1037,7 @@
+             tab_stops: TabStopMap::default(),
+             cached_views: Vec::new(),
+             move_listeners: Vec::new(),
++            moved_views: Vec::new(),
+         }
+     }
+ 
+@@ -1051,6 +1056,7 @@
+         self.tab_stops.clear();
+         self.cached_views.clear();
+         self.move_listeners.clear();
++        self.moved_views.clear();
+         self.focus = None;
+ 
+         #[cfg(any(test, feature = "test-support"))]
+@@ -3485,6 +3491,7 @@
+             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
+             line_layout_index: self.text_system.layout_index(),
+             move_listeners_index: self.next_frame.move_listeners.len(),
++            moved_views_index: self.next_frame.moved_views.len(),
+         }
+     }
+ 
+@@ -3547,8 +3554,8 @@
+ 
+     /// Replays a prepaint range of the frame just drawn moved by `offset` and returns the move
+     /// listeners it holds, for the cached view to call (Riseonly 0041). Element states keep the
+-    /// positions they recorded: a moved replay only runs for a view without mouse listeners,
+-    /// input handlers, tooltips or deferred draws, the ones that act on those positions.
++    /// positions they recorded: a moved replay only runs for a view without input handlers,
++    /// tooltips or deferred draws, and with mouse listeners only while the mouse is away (0044).
+     pub(crate) fn reuse_moved_prepaint(
+         &mut self,
+         range: Range<PrepaintStateIndex>,
+@@ -3570,8 +3577,8 @@
+     }
+ 
+     /// Whether the prepaint and paint ranges of the frame just drawn may replay at another origin
+-    /// (Riseonly 0041): no tooltip or deferred draw placed by the old origin, no mouse listener or
+-    /// input handler holding it.
++    /// (Riseonly 0041): no tooltip or deferred draw placed by the old origin, no input handler
++    /// holding it. Mouse listeners may (Riseonly 0044, see [`Self::paint_range_listens`]).
+     pub(crate) fn ranges_replay_moved(
+         &self,
+         prepaint: &Range<PrepaintStateIndex>,
+@@ -3579,8 +3586,14 @@
+     ) -> bool {
+         prepaint.start.tooltips_index == prepaint.end.tooltips_index
+             && prepaint.start.deferred_draws_index == prepaint.end.deferred_draws_index
+-            && paint.start.mouse_listeners_index == paint.end.mouse_listeners_index
+             && paint.start.input_handlers_index == paint.end.input_handlers_index
++    }
++
++    /// Whether a paint range registered mouse listeners (Riseonly 0044): replayed moved, they keep
++    /// the old origin in the hitbox copies and element states they read, so the view renders
++    /// whenever the mouse is over it.
++    pub(crate) fn paint_range_listens(&self, paint: &Range<PaintIndex>) -> bool {
++        paint.start.mouse_listeners_index != paint.end.mouse_listeners_index
+     }
+ 
+     /// Whether nothing a cached view drew or hit-tests in the frame just drawn was cut by `mask`,
+@@ -3983,6 +3996,9 @@
+             self.next_frame
+                 .move_listeners
+                 .truncate(index.move_listeners_index);
++            self.next_frame
++                .moved_views
++                .truncate(index.moved_views_index);
+         }
+         result
+     }
+@@ -5688,6 +5704,20 @@
+             self.reset_cursor_style(cx);
+         }
+ 
++        // Riseonly 0044: a view replayed moved keeps listeners of its old origin; the mouse
++        // reaching it makes it render, so what the mouse does next reads fresh positions.
++        let mouse_position = self.mouse_position;
++        let reached: SmallVec<[EntityId; 2]> = self
++            .rendered_frame
++            .moved_views
++            .iter()
++            .filter(|(_, bounds)| bounds.contains(&mouse_position))
++            .map(|(entity_id, _)| *entity_id)
++            .collect();
++        for entity_id in reached {
++            cx.notify(entity_id);
++        }
++
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         if self.is_inspector_picking(cx) {
+             self.handle_inspector_mouse_event(event, cx);

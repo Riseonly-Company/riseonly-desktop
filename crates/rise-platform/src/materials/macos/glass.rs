@@ -1,0 +1,570 @@
+use std::ffi::c_void;
+#[cfg(test)]
+use std::ffi::{CStr, c_char};
+use std::ptr::NonNull;
+
+use crate::gpui_shim::PlatformSupport;
+use crate::host_os::HostOs;
+use crate::materials::{
+    GlassError, GlassLayout, GlassSurface, LayoutGate, MacOsVersion, Material, MaterialBacking,
+    RegionRect, macos_version, offered_backing, resolve,
+};
+
+const OK: i32 = 0;
+const NOT_MAIN_THREAD: i32 = -1;
+const NO_HANDLE: i32 = -2;
+const NO_HOST_VIEW: i32 = -3;
+const NO_VIEW_CLASS: i32 = -4;
+const UNKNOWN_MATERIAL: i32 = -5;
+
+const BACKING_PAINTED: i32 = 0;
+const BACKING_VIBRANCY: i32 = 1;
+const BACKING_LIQUID_GLASS: i32 = 2;
+
+const MATERIAL_CHROME: i32 = 0;
+const MATERIAL_PANEL: i32 = 1;
+const MATERIAL_OVERLAY: i32 = 2;
+
+unsafe extern "C" {
+    fn rise_glass_probe_backing() -> i32;
+    #[cfg(test)]
+    fn rise_glass_vibrancy_material_name(material: i32) -> *const c_char;
+    fn rise_glass_attach() -> *mut c_void;
+    fn rise_glass_begin(handle: *mut c_void) -> i32;
+    fn rise_glass_region(
+        handle: *mut c_void,
+        id: u64,
+        backing: i32,
+        material: i32,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        radius: f64,
+    ) -> i32;
+    fn rise_glass_commit(handle: *mut c_void) -> i32;
+    fn rise_glass_clear(handle: *mut c_void) -> i32;
+    fn rise_glass_detach(handle: *mut c_void) -> i32;
+}
+
+pub const fn backing_code(backing: MaterialBacking) -> i32 {
+    match backing {
+        MaterialBacking::Painted => BACKING_PAINTED,
+        MaterialBacking::Vibrancy => BACKING_VIBRANCY,
+        MaterialBacking::LiquidGlass => BACKING_LIQUID_GLASS,
+    }
+}
+
+pub const fn backing_from_code(code: i32) -> MaterialBacking {
+    match code {
+        BACKING_LIQUID_GLASS => MaterialBacking::LiquidGlass,
+        BACKING_VIBRANCY => MaterialBacking::Vibrancy,
+        _ => MaterialBacking::Painted,
+    }
+}
+
+pub const fn material_code(material: Material) -> i32 {
+    match material {
+        Material::Chrome => MATERIAL_CHROME,
+        Material::Panel => MATERIAL_PANEL,
+        Material::Overlay => MATERIAL_OVERLAY,
+    }
+}
+
+const fn refusal(code: i32) -> &'static str {
+    match code {
+        NOT_MAIN_THREAD => "AppKit was reached from a thread that is not the main one",
+        NO_HANDLE => "the glass surface was used after it was detached",
+        NO_HOST_VIEW => "the window has no view to host a glass region below",
+        NO_VIEW_CLASS => "this machine has no NSGlassEffectView to instantiate",
+        UNKNOWN_MATERIAL => "the material has no NSVisualEffectMaterial case",
+        _ => "the platform layer refused the region",
+    }
+}
+
+fn check(code: i32) -> Result<(), GlassError> {
+    if code == OK {
+        Ok(())
+    } else {
+        Err(GlassError::Refused(format!("{} ({code})", refusal(code))))
+    }
+}
+
+pub const fn surface_backing(
+    host: HostOs,
+    version: Option<MacOsVersion>,
+    probed: MaterialBacking,
+) -> MaterialBacking {
+    offered_backing(host, version).capped_at(probed)
+}
+
+pub const fn region_backing(
+    material: Material,
+    host: HostOs,
+    version: Option<MacOsVersion>,
+    probed: MaterialBacking,
+) -> MaterialBacking {
+    resolve(material, host, version).capped_at(probed)
+}
+
+pub fn is_hostable(bounds: &RegionRect) -> bool {
+    bounds.has_area()
+        && bounds.x.is_finite()
+        && bounds.y.is_finite()
+        && bounds.width.is_finite()
+        && bounds.height.is_finite()
+}
+
+pub fn probe_backing() -> MaterialBacking {
+    backing_from_code(unsafe { rise_glass_probe_backing() })
+}
+
+#[cfg(test)]
+pub fn vibrancy_material_name(material: Material) -> Option<&'static str> {
+    let raw = unsafe { rise_glass_vibrancy_material_name(material_code(material)) };
+    if raw.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(raw) }.to_str().ok()
+}
+
+pub struct MacGlassSurface {
+    host: HostOs,
+    version: Option<MacOsVersion>,
+    probed: MaterialBacking,
+    backing: MaterialBacking,
+    gate: LayoutGate,
+    handle: Option<NonNull<c_void>>,
+}
+
+impl MacGlassSurface {
+    pub fn new() -> Self {
+        Self::with_policy(HostOs::current(), macos_version(), probe_backing())
+    }
+
+    fn with_policy(host: HostOs, version: Option<MacOsVersion>, probed: MaterialBacking) -> Self {
+        Self {
+            host,
+            version,
+            probed,
+            backing: surface_backing(host, version, probed),
+            gate: LayoutGate::new(),
+            handle: None,
+        }
+    }
+
+    fn handle(&mut self) -> Option<NonNull<c_void>> {
+        if self.handle.is_none() {
+            self.handle = NonNull::new(unsafe { rise_glass_attach() });
+        }
+        self.handle
+    }
+}
+
+impl Default for MacGlassSurface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GlassSurface for MacGlassSurface {
+    fn backing(&self) -> MaterialBacking {
+        self.backing
+    }
+
+    fn commit(&mut self, layout: &GlassLayout) -> Result<PlatformSupport, GlassError> {
+        self.gate.admit(layout.generation())?;
+
+        if self.backing.is_painted() {
+            return Ok(PlatformSupport::Unsupported);
+        }
+
+        for region in layout.regions() {
+            if !is_hostable(&region.bounds) {
+                return Err(GlassError::Refused(format!(
+                    "region {:?} has a frame AppKit cannot be given: {:?}",
+                    region.id, region.bounds
+                )));
+            }
+        }
+
+        let Some(handle) = self.handle() else {
+            return Err(GlassError::Refused(
+                "no window is open to host a glass region in".to_owned(),
+            ));
+        };
+
+        check(unsafe { rise_glass_begin(handle.as_ptr()) })?;
+
+        for region in layout.regions() {
+            let backing = region_backing(region.material, self.host, self.version, self.probed);
+            if backing.is_painted() {
+                continue;
+            }
+
+            check(unsafe {
+                rise_glass_region(
+                    handle.as_ptr(),
+                    region.id.0,
+                    backing_code(backing),
+                    material_code(region.material),
+                    f64::from(region.bounds.x),
+                    f64::from(region.bounds.y),
+                    f64::from(region.bounds.width),
+                    f64::from(region.bounds.height),
+                    f64::from(region.corner_radius),
+                )
+            })?;
+        }
+
+        check(unsafe { rise_glass_commit(handle.as_ptr()) })?;
+        Ok(PlatformSupport::Performed)
+    }
+
+    fn clear(&mut self) -> PlatformSupport {
+        if self.backing.is_painted() {
+            return PlatformSupport::Unsupported;
+        }
+
+        let Some(handle) = self.handle else {
+            return PlatformSupport::Performed;
+        };
+
+        if unsafe { rise_glass_clear(handle.as_ptr()) } == OK {
+            PlatformSupport::Performed
+        } else {
+            PlatformSupport::Unsupported
+        }
+    }
+}
+
+impl Drop for MacGlassSurface {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            unsafe { rise_glass_detach(handle.as_ptr()) };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::materials::{GlassRegion, RegionId};
+    use rise_core::GenerationCounter;
+
+    fn on_main_thread() -> bool {
+        objc2::MainThreadMarker::new().is_some()
+    }
+
+    fn rail(height: f32) -> RegionRect {
+        RegionRect::new(0.0, 0.0, 56.0, height)
+    }
+
+    #[test]
+    fn the_surface_reports_what_the_version_policy_predicts_capped_by_the_probe() {
+        let versions = [
+            None,
+            Some(MacOsVersion::new(10, 16, 0)),
+            Some(MacOsVersion::VIBRANCY),
+            Some(MacOsVersion::LIQUID_GLASS),
+            Some(MacOsVersion::new(99, 0, 0)),
+        ];
+
+        for host in HostOs::ALL {
+            for version in versions {
+                for probed in MaterialBacking::ALL {
+                    let expected = offered_backing(host, version).capped_at(probed);
+                    let surface = MacGlassSurface::with_policy(host, version, probed);
+
+                    assert_eq!(
+                        surface.backing(),
+                        expected,
+                        "{host:?} {version:?} with a {probed:?} probe"
+                    );
+                    assert!(
+                        surface.backing().tier() <= offered_backing(host, version).tier(),
+                        "the probe raised the tier the version policy allows"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn this_machine_reports_the_backing_resolve_predicts_for_it() {
+        let surface = MacGlassSurface::new();
+        let expected = surface_backing(HostOs::current(), macos_version(), probe_backing());
+
+        assert_eq!(surface.backing(), expected);
+        for material in Material::ALL {
+            assert!(
+                region_backing(
+                    material,
+                    HostOs::current(),
+                    macos_version(),
+                    probe_backing()
+                )
+                .tier()
+                    <= surface.backing().tier(),
+                "{material:?} may lower the surface tier, never raise it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_probe_overrules_a_version_policy_that_predicted_glass() {
+        let surface = MacGlassSurface::with_policy(
+            HostOs::MacOs,
+            Some(MacOsVersion::LIQUID_GLASS),
+            MaterialBacking::Vibrancy,
+        );
+
+        assert_eq!(
+            surface.backing(),
+            MaterialBacking::Vibrancy,
+            "a probe answering vibrancy must degrade the app, not blank the rail"
+        );
+    }
+
+    #[test]
+    fn the_backing_codes_round_trip_and_an_unknown_one_falls_down() {
+        for backing in MaterialBacking::ALL {
+            assert_eq!(backing_from_code(backing_code(backing)), backing);
+        }
+
+        for code in [-1, 3, 99, i32::MIN, i32::MAX] {
+            assert_eq!(backing_from_code(code), MaterialBacking::Painted);
+        }
+    }
+
+    #[test]
+    fn every_material_has_its_own_code() {
+        for material in Material::ALL {
+            let clashes = Material::ALL
+                .iter()
+                .filter(|other| material_code(**other) == material_code(material))
+                .count();
+            assert_eq!(
+                clashes, 1,
+                "{material:?} shares a code with another surface"
+            );
+        }
+    }
+
+    #[test]
+    fn every_refusal_names_something_other_than_the_number() {
+        for code in [
+            NOT_MAIN_THREAD,
+            NO_HANDLE,
+            NO_HOST_VIEW,
+            NO_VIEW_CLASS,
+            UNKNOWN_MATERIAL,
+            -99,
+        ] {
+            let error = check(code).unwrap_err();
+            let GlassError::Refused(message) = &error else {
+                panic!("{code} became {error:?} rather than a refusal");
+            };
+            assert!(message.contains(&code.to_string()));
+            assert!(message.len() > code.to_string().len() + 4);
+        }
+
+        assert!(check(OK).is_ok());
+    }
+
+    #[test]
+    fn a_frame_appkit_cannot_use_is_not_hostable() {
+        assert!(is_hostable(&rail(800.0)));
+
+        for bounds in [
+            RegionRect::new(f32::NAN, 0.0, 56.0, 800.0),
+            RegionRect::new(0.0, f32::NAN, 56.0, 800.0),
+            RegionRect::new(f32::INFINITY, 0.0, 56.0, 800.0),
+            RegionRect::new(0.0, f32::NEG_INFINITY, 56.0, 800.0),
+            RegionRect::new(0.0, 0.0, 0.0, 800.0),
+            RegionRect::new(0.0, 0.0, 56.0, f32::NAN),
+            RegionRect::new(0.0, 0.0, f32::NAN, 800.0),
+            RegionRect::new(0.0, 0.0, f32::INFINITY, 800.0),
+            RegionRect::new(0.0, 0.0, 56.0, f32::INFINITY),
+        ] {
+            assert!(!is_hostable(&bounds), "{bounds:?} is an undefined frame");
+        }
+    }
+
+    #[test]
+    fn an_undefined_origin_is_refused_before_the_pass_is_opened() {
+        let counter = GenerationCounter::new();
+        let mut surface = MacGlassSurface::with_policy(
+            HostOs::MacOs,
+            Some(MacOsVersion::LIQUID_GLASS),
+            probe_backing(),
+        );
+        assert!(!surface.backing().is_painted());
+
+        let mut layout = GlassLayout::new(counter.bump());
+        layout
+            .push(GlassRegion::new(
+                RegionId(1),
+                Material::Chrome,
+                RegionRect::new(f32::NAN, 0.0, 56.0, 800.0),
+            ))
+            .unwrap();
+
+        let error = surface.commit(&layout).unwrap_err();
+        let GlassError::Refused(message) = &error else {
+            panic!("an undefined frame became {error:?} rather than a refusal");
+        };
+        assert!(message.contains("NaN"), "{message}");
+    }
+
+    #[test]
+    fn a_stale_or_repeated_layout_pass_is_refused_before_anything_is_hosted() {
+        let counter = GenerationCounter::new();
+        let first = counter.bump();
+        let second = counter.bump();
+
+        let mut surface =
+            MacGlassSurface::with_policy(HostOs::MacOs, None, MaterialBacking::LiquidGlass);
+        assert_eq!(surface.backing(), MaterialBacking::Painted);
+
+        let newer = GlassLayout::new(second);
+        assert_eq!(
+            surface.commit(&newer).unwrap(),
+            PlatformSupport::Unsupported
+        );
+
+        assert_eq!(
+            surface.commit(&newer),
+            Err(GlassError::StaleLayout {
+                accepted: second.get(),
+                offered: second.get(),
+            }),
+            "a render pass has no new generation and must not move a region"
+        );
+
+        let older = GlassLayout::new(first);
+        assert!(surface.commit(&older).is_err());
+    }
+
+    #[test]
+    fn a_painted_mac_hosts_nothing_and_says_so() {
+        let counter = GenerationCounter::new();
+        let mut surface = MacGlassSurface::with_policy(
+            HostOs::MacOs,
+            Some(MacOsVersion::new(12, 0, 0)),
+            MaterialBacking::LiquidGlass,
+        );
+
+        let mut layout = GlassLayout::new(counter.bump());
+        layout
+            .push(GlassRegion::new(RegionId(1), Material::Chrome, rail(800.0)))
+            .unwrap();
+
+        assert_eq!(
+            surface.commit(&layout).unwrap(),
+            PlatformSupport::Unsupported,
+            "the caller has to be able to tell it must paint the material itself"
+        );
+        assert_eq!(surface.clear(), PlatformSupport::Unsupported);
+    }
+
+    #[test]
+    fn a_zero_area_or_repeated_region_never_reaches_the_platform() {
+        let counter = GenerationCounter::new();
+        let mut layout = GlassLayout::new(counter.bump());
+
+        assert_eq!(
+            layout.push(GlassRegion::new(
+                RegionId(1),
+                Material::Chrome,
+                RegionRect::new(0.0, 0.0, 56.0, 0.0),
+            )),
+            Err(GlassError::EmptyRegion(RegionId(1)))
+        );
+
+        layout
+            .push(GlassRegion::new(RegionId(1), Material::Chrome, rail(800.0)))
+            .unwrap();
+        assert_eq!(
+            layout.push(GlassRegion::new(
+                RegionId(1),
+                Material::Panel,
+                RegionRect::new(56.0, 0.0, 320.0, 800.0),
+            )),
+            Err(GlassError::DuplicateRegion(RegionId(1)))
+        );
+
+        assert_eq!(
+            layout.regions().len(),
+            1,
+            "only the one well-formed region may ever be handed to AppKit"
+        );
+    }
+
+    #[test]
+    fn the_linked_swift_configures_the_vibrancy_material_the_policy_names() {
+        for material in Material::ALL {
+            assert_eq!(
+                vibrancy_material_name(material),
+                Some(material.vibrancy_material()),
+                "RiseGlass.swift and Material::vibrancy_material drifted apart"
+            );
+        }
+    }
+
+    #[test]
+    fn the_linked_swift_never_claims_glass_on_a_release_that_has_none() {
+        let probed = probe_backing();
+
+        assert!(
+            !probed.is_painted(),
+            "NSVisualEffectView exists on every macOS this product runs on"
+        );
+
+        if let Some(version) = macos_version()
+            && !version.is_at_least(MacOsVersion::LIQUID_GLASS)
+        {
+            assert_eq!(
+                probed,
+                MaterialBacking::Vibrancy,
+                "{version:?} predates NSGlassEffectView"
+            );
+        }
+    }
+
+    #[test]
+    fn a_native_surface_with_no_window_refuses_instead_of_pretending() {
+        if on_main_thread() {
+            eprintln!("skipped: this test ran on the main thread");
+            return;
+        }
+
+        let counter = GenerationCounter::new();
+        let mut surface = MacGlassSurface::with_policy(
+            HostOs::MacOs,
+            Some(MacOsVersion::LIQUID_GLASS),
+            probe_backing(),
+        );
+        assert!(!surface.backing().is_painted());
+
+        let mut layout = GlassLayout::new(counter.bump());
+        layout
+            .push(
+                GlassRegion::new(RegionId(1), Material::Chrome, rail(800.0))
+                    .with_corner_radius(12.0),
+            )
+            .unwrap();
+
+        let error = surface.commit(&layout).unwrap_err();
+        assert!(
+            matches!(error, GlassError::Refused(_)),
+            "an unattachable surface must report a refusal, not success: {error:?}"
+        );
+
+        assert_eq!(
+            surface.clear(),
+            PlatformSupport::Performed,
+            "nothing was ever hosted, so nothing is left under the Metal layer"
+        );
+    }
+}

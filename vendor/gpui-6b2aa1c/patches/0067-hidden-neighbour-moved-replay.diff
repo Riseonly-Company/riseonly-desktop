@@ -1,0 +1,70 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -364,6 +364,13 @@
+             || !window.ranges_replay_moved(&self.prepaint_range, &self.paint_range)
+         {
+             return None;
++        }
++        // Riseonly 0067: shown nothing before and nothing after (a pager neighbour outside its clip
++        // on a page sliding in): the replay draws the same nothing, so neither pixel snapping nor
++        // the mouse matter, and the recorded clips move along with it.
++        let offset = bounds.origin - key.bounds.origin;
++        if window.ranges_hidden_by_mask(&self.prepaint_range, &self.paint_range, content_mask.bounds, offset) {
++            return Some((offset, offset));
+         }
+         // Riseonly 0044: listeners and element states keep the old origin, so a view the mouse is
+         // over before or after the move renders: hover, clicks and drags read fresh positions.
+@@ -373,7 +380,6 @@
+         {
+             return None;
+         }
+-        let offset = bounds.origin - key.bounds.origin;
+         let device = offset.scale(window.scale_factor());
+         let whole = |value: f32| (value - value.round()).abs() < 0.001;
+         if !whole(device.x.0) || !whole(device.y.0) {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3823,6 +3823,43 @@
+         paint.start.mouse_listeners_index != paint.end.mouse_listeners_index
+     }
+ 
++    /// Whether a cached view showed nothing in the frame just drawn and shows nothing once moved by
++    /// `offset` under `mask` (Riseonly 0067): every primitive and hitbox was cut away whole by the
++    /// clip it recorded, and moved it lies wholly outside `mask`. A pager neighbour off its clip
++    /// while the page slides in is one. Its replay draws the same nothing at any offset, whole
++    /// device pixels or not, and hit-tests nothing.
++    pub(crate) fn ranges_hidden_by_mask(
++        &self,
++        prepaint: &Range<PrepaintStateIndex>,
++        paint: &Range<PaintIndex>,
++        mask: Bounds<Pixels>,
++        offset: Point<Pixels>,
++    ) -> bool {
++        let hitboxes_hidden = self.rendered_frame.hitboxes
++            [prepaint.start.hitboxes_index..prepaint.end.hitboxes_index]
++            .iter()
++            .all(|hitbox| {
++                let moved = Bounds { origin: hitbox.bounds.origin + offset, size: hitbox.bounds.size };
++                !hitbox.bounds.intersects(&hitbox.content_mask.bounds) && !moved.intersects(&mask)
++            });
++        if !hitboxes_hidden {
++            return false;
++        }
++        let scale = self.scale_factor();
++        let scaled_mask = mask.scale(scale);
++        let scaled_offset = offset.scale(scale);
++        self.rendered_frame.scene.paint_operations[paint.start.scene_index..paint.end.scene_index]
++            .iter()
++            .all(|operation| match operation {
++                crate::scene::PaintOperation::Primitive(primitive) => {
++                    let painted = primitive.painted_bounds();
++                    let moved = Bounds { origin: painted.origin + scaled_offset, size: painted.size };
++                    !painted.intersects(&primitive.content_mask().bounds) && !moved.intersects(&scaled_mask)
++                }
++                _ => true,
++            })
++    }
++
+     /// Whether nothing a cached view drew or hit-tests in the frame just drawn was cut by `mask`,
+     /// and nothing would be once moved by `offset` (Riseonly 0041). Then the clips its primitives
+     /// and hitboxes recorded may move along although `mask` stays where it is.

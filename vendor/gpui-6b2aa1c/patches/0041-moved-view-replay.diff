@@ -1,0 +1,538 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -153,6 +153,27 @@
+         }
+     }
+ 
++    /// Replays a range of the previous scene moved by `offset`: the paint of a cached view that
++    /// only changed its origin, a cell scrolled within its clip (Riseonly 0041).
++    pub(crate) fn replay_moved(
++        &mut self,
++        range: Range<usize>,
++        prev_scene: &Scene,
++        offset: Point<ScaledPixels>,
++    ) {
++        for operation in &prev_scene.paint_operations[range] {
++            match operation {
++                PaintOperation::Primitive(primitive) => {
++                    let mut primitive = primitive.clone();
++                    primitive.translate(offset);
++                    self.insert_primitive(primitive);
++                }
++                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds + offset),
++                PaintOperation::EndLayer => self.pop_layer(),
++            }
++        }
++    }
++
+     pub fn finish(&mut self) {
+         self.shadows.sort_by_key(|shadow| shadow.order);
+         self.quads.sort_by_key(|quad| quad.order);
+@@ -253,7 +274,7 @@
+ 
+     /// Where the primitive lands on screen: a sprite's `bounds` are the ones before its
+     /// transformation, while the shaders clip it after, so culling and draw order must not use them.
+-    fn painted_bounds(&self) -> Bounds<ScaledPixels> {
++    pub(crate) fn painted_bounds(&self) -> Bounds<ScaledPixels> {
+         match self {
+             Primitive::MonochromeSprite(sprite) => {
+                 transformed_bounds(&sprite.bounds, &sprite.transformation)
+@@ -265,6 +286,69 @@
+                 transformed_bounds(&sprite.bounds, &sprite.transformation)
+             }
+             primitive => *primitive.bounds(),
++        }
++    }
++
++    /// Moves the primitive, its clip and its transformation by `offset` (Riseonly 0041). The clip
++    /// moves along: a moved replay only runs while the view sits wholly inside the outer clip, so
++    /// every clip the primitive keeps is the view's own.
++    fn translate(&mut self, offset: Point<ScaledPixels>) {
++        fn moved(bounds: &mut Bounds<ScaledPixels>, offset: Point<ScaledPixels>) {
++            bounds.origin = bounds.origin + offset;
++        }
++        // A sprite transformation maps absolute points (R * p + t): moving the sprite by d keeps
++        // its picture when t becomes t + d - R * d.
++        fn moved_transformation(
++            transformation: &mut TransformationMatrix,
++            offset: Point<ScaledPixels>,
++        ) {
++            let r = transformation.rotation_scale;
++            let (x, y) = (offset.x.0, offset.y.0);
++            transformation.translation[0] += x - (r[0][0] * x + r[0][1] * y);
++            transformation.translation[1] += y - (r[1][0] * x + r[1][1] * y);
++        }
++        match self {
++            Primitive::Shadow(shadow) => {
++                moved(&mut shadow.bounds, offset);
++                moved(&mut shadow.element_bounds, offset);
++                moved(&mut shadow.content_mask.bounds, offset);
++            }
++            Primitive::Quad(quad) => {
++                moved(&mut quad.bounds, offset);
++                moved(&mut quad.content_mask.bounds, offset);
++            }
++            Primitive::Path(path) => {
++                moved(&mut path.bounds, offset);
++                moved(&mut path.content_mask.bounds, offset);
++                for vertex in &mut path.vertices {
++                    vertex.xy_position = vertex.xy_position + offset;
++                    moved(&mut vertex.content_mask.bounds, offset);
++                }
++            }
++            Primitive::Underline(underline) => {
++                moved(&mut underline.bounds, offset);
++                moved(&mut underline.content_mask.bounds, offset);
++            }
++            Primitive::MonochromeSprite(sprite) => {
++                moved(&mut sprite.bounds, offset);
++                moved(&mut sprite.content_mask.bounds, offset);
++                moved_transformation(&mut sprite.transformation, offset);
++            }
++            Primitive::SubpixelSprite(sprite) => {
++                moved(&mut sprite.bounds, offset);
++                moved(&mut sprite.content_mask.bounds, offset);
++                moved_transformation(&mut sprite.transformation, offset);
++            }
++            Primitive::PolychromeSprite(sprite) => {
++                moved(&mut sprite.bounds, offset);
++                moved(&mut sprite.content_mask.bounds, offset);
++                moved_transformation(&mut sprite.transformation, offset);
++            }
++            Primitive::Surface(surface) => {
++                moved(&mut surface.bounds, offset);
++                moved(&mut surface.content_mask.bounds, offset);
++                moved(&mut surface.corner_clip_bounds, offset);
++            }
+         }
+     }
+ 
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -1,7 +1,7 @@
+ use crate::{
+     AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
+     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
+-    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
++    Pixels, Point, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
+ };
+ use crate::{Empty, Window};
+ use anyhow::Result;
+@@ -244,6 +244,7 @@
+     view: Option<V>,
+     entity_id: Option<EntityId>,
+     cached_style: Option<StyleRefinement>,
++    replays_moved: bool,
+     #[cfg(debug_assertions)]
+     source: &'static core::panic::Location<'static>,
+ }
+@@ -256,6 +257,7 @@
+         ViewElement {
+             entity_id,
+             cached_style: None,
++            replays_moved: false,
+             view: Some(view),
+             #[cfg(debug_assertions)]
+             source: core::panic::Location::caller(),
+@@ -275,6 +277,15 @@
+         self.cached_style = Some(style);
+         self
+     }
++
++    /// Lets a cached view that only changed its origin (a cell scrolled within its clip) replay its
++    /// last frame moved instead of rendering (Riseonly 0041). Only for views whose prepaint keeps no
++    /// window position outside [`Window::on_replayed_move`]: mouse listeners, input handlers,
++    /// tooltips and deferred draws already make it render.
++    pub fn replay_when_moved(mut self) -> Self {
++        self.replays_moved = true;
++        self
++    }
+ }
+ 
+ impl<V: View> IntoElement for ViewElement<V> {
+@@ -308,9 +319,62 @@
+     /// Turned dirty while a hidden div held it: the replayed frame is old, so the frame that shows
+     /// it again renders it fresh (Riseonly 0039).
+     stale_while_hidden: bool,
++    /// The prepaint replayed moved by this offset; the paint that follows replays moved too.
++    moved_by: Option<Point<Pixels>>,
+ }
+ 
+ impl ViewElementState {
++    /// The offset a moved replay applies in this frame, if the view may take one (Riseonly 0041):
++    /// shown, clean, the same size, text style and environment, painted in the frame just before,
++    /// no position kept by a listener, moved by whole device pixels so glyphs and images keep their
++    /// pixel snapping, and a mask that either moved along or cut nothing of it before and after.
++    fn moved_offset(
++        &self,
++        entity_id: EntityId,
++        bounds: Bounds<Pixels>,
++        content_mask: &ContentMask<Pixels>,
++        text_style: &TextStyle,
++        env_fingerprint: u64,
++        window: &Window,
++    ) -> Option<Point<Pixels>> {
++        let key = &self.cache_key;
++        let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.001;
++        if window.hidden_depth > 0
++            || window.refreshing
++            || window.dirty_views.contains(&entity_id)
++            || self.dropped_deferred
++            || self.stale_while_hidden
++            || self.prepainted_frame + 1 != window.draw_count
++            || self.painted_frame + 1 != window.draw_count
++        {
++            return None;
++        }
++        if key.bounds.size != bounds.size
++            || key.bounds.origin == bounds.origin
++            || key.text_style != *text_style
++            || key.env_fingerprint != env_fingerprint
++            || !window.ranges_replay_moved(&self.prepaint_range, &self.paint_range)
++        {
++            return None;
++        }
++        let offset = bounds.origin - key.bounds.origin;
++        let device = offset.scale(window.scale_factor());
++        let whole = |value: f32| (value - value.round()).abs() < 0.001;
++        if !whole(device.x.0) || !whole(device.y.0) {
++            return None;
++        }
++        // The mask moved along (a clipped cell scrolled whole): every recorded clip moves with it.
++        let old_mask = key.content_mask.bounds;
++        let new_mask = content_mask.bounds;
++        let mask_moved_along = near(new_mask.origin.x, old_mask.origin.x + offset.x)
++            && near(new_mask.origin.y, old_mask.origin.y + offset.y)
++            && new_mask.size == old_mask.size;
++        // The mask stayed (the scroll viewport) and cut nothing of the view before or after.
++        let mask_stays_clear = key.content_mask == *content_mask
++            && window.ranges_clear_of_mask(&self.prepaint_range, &self.paint_range, new_mask, offset);
++        (mask_moved_along || mask_stays_clear).then_some(offset)
++    }
++
+     /// Whether the recorded prepaint may replay in this frame (Riseonly 0034). Under a hidden div it
+     /// may unless it carries deferred draws, which would paint over what is shown. Shown, the paint
+     /// that follows must replay too: from the frame just before or from a valid parked paint;
+@@ -421,11 +485,45 @@
+ 
+                 window.with_element_state::<ViewElementState, _>(
+                     global_id.unwrap(),
+-                    |element_state, window| {
++                    |mut element_state, window| {
+                         let content_mask = window.content_mask();
+                         let text_style = window.text_style();
+                         let env_fingerprint = window.env_fingerprint;
+ 
++                        // Riseonly 0041: a scroll moves every visible cached cell; one that only
++                        // moved replays its last frame at the new origin instead of rendering, and
++                        // hands the move to the prepaint callbacks that read window positions.
++                        if self.replays_moved
++                            && let Some(state) = element_state.as_mut()
++                            && let Some(offset) = state.moved_offset(
++                                entity_id,
++                                bounds,
++                                &content_mask,
++                                &text_style,
++                                env_fingerprint,
++                                window,
++                            )
++                        {
++                            let prepaint_start = window.prepaint_index();
++                            let move_listeners =
++                                window.reuse_moved_prepaint(state.prepaint_range.clone(), offset);
++                            cx.entities.extend_accessed(&state.accessed_entities);
++                            window
++                                .next_frame
++                                .cached_views
++                                .push((entity_id, state.accessed_entities.clone()));
++                            let prepaint_end = window.prepaint_index();
++                            state.prepaint_range = prepaint_start..prepaint_end;
++                            state.prepainted_frame = window.draw_count;
++                            state.cache_key.bounds = bounds;
++                            state.cache_key.content_mask = content_mask;
++                            state.moved_by = Some(offset);
++                            for listener in &move_listeners {
++                                listener.call(window, cx);
++                            }
++                            return (None, element_state.unwrap());
++                        }
++
+                         // Riseonly 0037: a hidden view paints nothing, so a moved key (the centre
+                         // narrowed by a panel, a new mask or environment) does not render it while
+                         // hidden. It replays its last frame and keeps the old key, so the frame that
+@@ -471,6 +569,7 @@
+                             let prepaint_end = window.prepaint_index();
+                             element_state.prepaint_range = prepaint_start..prepaint_end;
+                             element_state.prepainted_frame = window.draw_count;
++                            element_state.moved_by = None;
+ 
+                             return (None, element_state);
+                         }
+@@ -517,6 +616,7 @@
+                                 parked: None,
+                                 dropped_deferred: window.hidden_dropped_deferred != dropped_before,
+                                 stale_while_hidden: false,
++                                moved_by: None,
+                             },
+                         )
+                     },
+@@ -562,7 +662,12 @@
+                                 window.refreshing = refreshing;
+                                 element_state.painted_frame = window.draw_count;
+                             } else if element_state.painted_frame + 1 == window.draw_count {
+-                                window.reuse_paint(element_state.paint_range.clone());
++                                match element_state.moved_by.take() {
++                                    // Riseonly 0041: the prepaint replayed at a new origin.
++                                    Some(offset) => window
++                                        .reuse_moved_paint(element_state.paint_range.clone(), offset),
++                                    None => window.reuse_paint(element_state.paint_range.clone()),
++                                }
+                                 element_state.painted_frame = window.draw_count;
+                             } else if let Some(parked) = element_state.parked.take() {
+                                 // Riseonly 0034: shown again after hidden frames, same cache key.
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -950,8 +950,25 @@
+     pub(crate) tab_stops: TabStopMap,
+     /// Every cached view drawn in this frame with the entities its render read (Riseonly 0029).
+     pub(crate) cached_views: Vec<(EntityId, Rc<FxHashSet<EntityId>>)>,
++    /// Prepaint callbacks a cached view replayed at a new origin calls again (Riseonly 0041).
++    pub(crate) move_listeners: Vec<MoveListener>,
+ }
+ 
++/// A prepaint callback that reads window positions, recorded so a cached view replayed at a new
++/// origin instead of rendering can hand it the move (Riseonly 0041).
++#[derive(Clone)]
++pub(crate) struct MoveListener {
++    callback: Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App)>,
++    /// How far the view moved since the frame that recorded the callback.
++    offset: Point<Pixels>,
++}
++
++impl MoveListener {
++    pub(crate) fn call(&self, window: &mut Window, cx: &mut App) {
++        (self.callback)(self.offset, window, cx);
++    }
++}
++
+ #[derive(Clone, Default)]
+ pub(crate) struct PrepaintStateIndex {
+     hitboxes_index: usize,
+@@ -960,6 +977,7 @@
+     dispatch_tree_index: usize,
+     accessed_element_states_index: usize,
+     line_layout_index: LineLayoutIndex,
++    move_listeners_index: usize,
+ }
+ 
+ /// The paint of a cached view kept out of the frames in which a hidden div skips it, replayed when
+@@ -1011,6 +1029,7 @@
+             inspector_hitboxes: FxHashMap::default(),
+             tab_stops: TabStopMap::default(),
+             cached_views: Vec::new(),
++            move_listeners: Vec::new(),
+         }
+     }
+ 
+@@ -1028,6 +1047,7 @@
+         self.deferred_draws.clear();
+         self.tab_stops.clear();
+         self.cached_views.clear();
++        self.move_listeners.clear();
+         self.focus = None;
+ 
+         #[cfg(any(test, feature = "test-support"))]
+@@ -3461,10 +3481,17 @@
+             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
+             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
+             line_layout_index: self.text_system.layout_index(),
++            move_listeners_index: self.next_frame.move_listeners.len(),
+         }
+     }
+ 
+     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
++        self.next_frame.move_listeners.extend(
++            self.rendered_frame.move_listeners
++                [range.start.move_listeners_index..range.end.move_listeners_index]
++                .iter()
++                .cloned(),
++        );
+         self.next_frame.hitboxes.extend(
+             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
+                 .iter()
+@@ -3513,8 +3540,108 @@
+                     paint_range: deferred_draw.paint_range.clone(),
+                 }),
+         );
++    }
++
++    /// Replays a prepaint range of the frame just drawn moved by `offset` and returns the move
++    /// listeners it holds, for the cached view to call (Riseonly 0041). Element states keep the
++    /// positions they recorded: a moved replay only runs for a view without mouse listeners,
++    /// input handlers, tooltips or deferred draws, the ones that act on those positions.
++    pub(crate) fn reuse_moved_prepaint(
++        &mut self,
++        range: Range<PrepaintStateIndex>,
++        offset: Point<Pixels>,
++    ) -> Vec<MoveListener> {
++        let hitboxes_start = self.next_frame.hitboxes.len();
++        let move_listeners_start = self.next_frame.move_listeners.len();
++        self.reuse_prepaint(range);
++        for hitbox in &mut self.next_frame.hitboxes[hitboxes_start..] {
++            hitbox.bounds.origin = hitbox.bounds.origin + offset;
++            hitbox.content_mask.bounds.origin = hitbox.content_mask.bounds.origin + offset;
++        }
++        for listener in &mut self.next_frame.move_listeners[move_listeners_start..] {
++            listener.offset = listener.offset + offset;
++        }
++        self.next_frame.move_listeners[move_listeners_start..].to_vec()
+     }
+ 
++    /// Whether the prepaint and paint ranges of the frame just drawn may replay at another origin
++    /// (Riseonly 0041): no tooltip or deferred draw placed by the old origin, no mouse listener or
++    /// input handler holding it.
++    pub(crate) fn ranges_replay_moved(
++        &self,
++        prepaint: &Range<PrepaintStateIndex>,
++        paint: &Range<PaintIndex>,
++    ) -> bool {
++        prepaint.start.tooltips_index == prepaint.end.tooltips_index
++            && prepaint.start.deferred_draws_index == prepaint.end.deferred_draws_index
++            && paint.start.mouse_listeners_index == paint.end.mouse_listeners_index
++            && paint.start.input_handlers_index == paint.end.input_handlers_index
++    }
++
++    /// Whether nothing a cached view drew or hit-tests in the frame just drawn was cut by `mask`,
++    /// and nothing would be once moved by `offset` (Riseonly 0041). Then the clips its primitives
++    /// and hitboxes recorded may move along although `mask` stays where it is.
++    pub(crate) fn ranges_clear_of_mask(
++        &self,
++        prepaint: &Range<PrepaintStateIndex>,
++        paint: &Range<PaintIndex>,
++        mask: Bounds<Pixels>,
++        offset: Point<Pixels>,
++    ) -> bool {
++        // Strictly inside before: a shape touching the edge may have been cut there.
++        fn clear(shown: [f32; 4], mask: [f32; 4], dx: f32, dy: f32) -> bool {
++            let [left, top, right, bottom] = shown;
++            let [mask_left, mask_top, mask_right, mask_bottom] = mask;
++            left > mask_left
++                && top > mask_top
++                && right < mask_right
++                && bottom < mask_bottom
++                && left + dx >= mask_left
++                && top + dy >= mask_top
++                && right + dx <= mask_right
++                && bottom + dy <= mask_bottom
++        }
++        let (dx, dy) = (f32::from(offset.x), f32::from(offset.y));
++        let edges = |bounds: &Bounds<Pixels>| {
++            [
++                f32::from(bounds.left()),
++                f32::from(bounds.top()),
++                f32::from(bounds.right()),
++                f32::from(bounds.bottom()),
++            ]
++        };
++        let pixels_mask = edges(&mask);
++        let hitboxes_clear = self.rendered_frame.hitboxes
++            [prepaint.start.hitboxes_index..prepaint.end.hitboxes_index]
++            .iter()
++            .all(|hitbox| {
++                let shown = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
++                shown.is_empty() || clear(edges(&shown), pixels_mask, dx, dy)
++            });
++        if !hitboxes_clear {
++            return false;
++        }
++        let scale = self.scale_factor();
++        let scaled_mask = pixels_mask.map(|edge| edge * scale);
++        self.rendered_frame.scene.paint_operations[paint.start.scene_index..paint.end.scene_index]
++            .iter()
++            .all(|operation| match operation {
++                crate::scene::PaintOperation::Primitive(primitive) => {
++                    let shown = primitive
++                        .painted_bounds()
++                        .intersect(&primitive.content_mask().bounds);
++                    let edges = [
++                        shown.left().0,
++                        shown.top().0,
++                        shown.right().0,
++                        shown.bottom().0,
++                    ];
++                    shown.is_empty() || clear(edges, scaled_mask, dx * scale, dy * scale)
++                }
++                _ => true,
++            })
++    }
++
+     /// Whether a prepaint range of the frame just drawn holds deferred draws (Riseonly 0034).
+     pub(crate) fn prepaint_range_defers(&self, range: &Range<PrepaintStateIndex>) -> bool {
+         range.start.deferred_draws_index != range.end.deferred_draws_index
+@@ -3583,6 +3710,16 @@
+     }
+ 
+     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
++        self.reuse_paint_at(range, None);
++    }
++
++    /// Replays a paint range of the frame just drawn moved by `offset` (Riseonly 0041).
++    pub(crate) fn reuse_moved_paint(&mut self, range: Range<PaintIndex>, offset: Point<Pixels>) {
++        let offset = offset.scale(self.scale_factor());
++        self.reuse_paint_at(range, Some(offset));
++    }
++
++    fn reuse_paint_at(&mut self, range: Range<PaintIndex>, offset: Option<Point<ScaledPixels>>) {
+         self.next_frame.cursor_styles.extend(
+             self.rendered_frame.cursor_styles
+                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
+@@ -3614,10 +3751,35 @@
+ 
+         self.text_system
+             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+-        self.next_frame.scene.replay(
+-            range.start.scene_index..range.end.scene_index,
+-            &self.rendered_frame.scene,
+-        );
++        let scene_range = range.start.scene_index..range.end.scene_index;
++        match offset {
++            Some(offset) => {
++                self.next_frame
++                    .scene
++                    .replay_moved(scene_range, &self.rendered_frame.scene, offset)
++            }
++            None => self
++                .next_frame
++                .scene
++                .replay(scene_range, &self.rendered_frame.scene),
++        }
++    }
++
++    /// Registers a callback for the element being prepainted that reads window positions (a frame
++    /// reader, a visibility probe). A cached view opted in with `replay_when_moved` that only
++    /// changed its origin replays its last frame instead of rendering, and calls the callback with
++    /// the offset from the bounds this prepaint saw (Riseonly 0041).
++    ///
++    /// This method should only be called as part of the prepaint phase of element drawing.
++    pub fn on_replayed_move(
++        &mut self,
++        callback: impl Fn(Point<Pixels>, &mut Window, &mut App) + 'static,
++    ) {
++        self.invalidator.debug_assert_prepaint();
++        self.next_frame.move_listeners.push(MoveListener {
++            callback: Rc::new(callback),
++            offset: Point::default(),
++        });
+     }
+ 
+     /// Push a text style onto the stack, and call a function with that style active.
+@@ -3811,6 +3973,9 @@
+                 .accessed_element_states
+                 .truncate(index.accessed_element_states_index);
+             self.text_system.truncate_layouts(index.line_layout_index);
++            self.next_frame
++                .move_listeners
++                .truncate(index.move_listeners_index);
+         }
+         result
+     }

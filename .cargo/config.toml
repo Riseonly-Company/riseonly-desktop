@@ -1,0 +1,5 @@
+# why: X2352, a build script's set_var does not reach the build script of rusty_ffmpeg
+# (rsmpeg), so without this it probes Homebrew's GPL FFmpeg. Only the macOS target
+# enables rise-media/ffmpeg (app/Cargo.toml), so other targets never read it.
+[env]
+FFMPEG_PKG_CONFIG_PATH = { value = "vendor/ffmpeg/macos-arm64/lib/pkgconfig", relative = true }

@@ -1,0 +1,16 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2535,6 +2535,13 @@
+         }
+     }
+ 
++    /// Riseonly 0095: whether anything invalidated the window since its last draw, the question
++    /// the platform frame callback asks before it draws. A driver that draws a concealed window by
++    /// hand asks it too, so it draws no frame that nothing asked for.
++    pub fn needs_draw(&self) -> bool {
++        self.invalidator.is_dirty()
++    }
++
+     /// Close this window.
+     pub fn remove_window(&mut self) {
+         self.removed = true;

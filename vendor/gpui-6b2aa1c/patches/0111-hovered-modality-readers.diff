@@ -1,0 +1,85 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -770,7 +770,9 @@
+         // modality (keyboard hides hover), so it is notified when the modality changes.
+         let hit = self.hit_test(window);
+         if hit && let Some(view) = window.rendered_entity_stack.last() {
+-            window.modality_readers.borrow_mut().insert(*view);
++            // Riseonly 0111: kept with the hitbox, so a switch notifies only the views whose
++            // hitbox is under the mouse then (X2331).
++            window.hover_modality_readers.borrow_mut().insert((*view, self));
+         }
+         hit && window.last_input_modality != InputModality::Keyboard
+     }
+@@ -1713,6 +1715,10 @@
+     /// Riseonly 0069: views that read the input modality while drawing; a modality change
+     /// notifies them instead of refreshing the window.
+     modality_readers: RefCell<FxHashSet<EntityId>>,
++    /// Riseonly 0111: views that drew a hitbox under the mouse, with that hitbox. A modality
++    /// change flips `is_hovered` only for a hitbox under the mouse at that moment; the others
++    /// read hover the same way under either modality and are dropped.
++    hover_modality_readers: RefCell<FxHashSet<(EntityId, HitboxId)>>,
+     /// Riseonly 0087: views that read the window active status while drawing; an activation
+     /// change notifies them instead of refreshing the window.
+     activation_readers: RefCell<FxHashSet<EntityId>>,
+@@ -2505,6 +2511,7 @@
+             input_latency_tracker: InputLatencyTracker::new()?,
+             last_input_modality: InputModality::Mouse,
+             modality_readers: RefCell::new(FxHashSet::default()),
++            hover_modality_readers: RefCell::new(FxHashSet::default()),
+             activation_readers: RefCell::new(FxHashSet::default()),
+             refreshing: false,
+             draw_count: 0,
+@@ -3662,6 +3669,7 @@
+         let previous_window_active = self.rendered_frame.window_active;
+         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
+         self.next_frame.clear();
++        self.retain_live_hover_modality_readers();
+         let current_focus_path = self.rendered_frame.focus_path();
+         let current_window_active = self.rendered_frame.window_active;
+         let mut focus_before_listeners = self.focus;
+@@ -4828,7 +4836,26 @@
+             line_layout_index: self.text_system.layout_index(),
+             move_listeners_index: self.next_frame.move_listeners.len(),
+             moved_views_index: self.next_frame.moved_views.len(),
++        }
++    }
++
++    /// Riseonly 0111: hitbox ids never repeat, so a pair whose hitbox left the frame can never be
++    /// under the mouse again. Dropped once per frame, the set stays bounded by the live hitboxes
++    /// that were drawn under the mouse, even when the modality never changes (mouse-only use).
++    /// A cached view replays its hitboxes with the same ids, so its pairs survive reuse.
++    fn retain_live_hover_modality_readers(&mut self) {
++        let mut readers = self.hover_modality_readers.borrow_mut();
++        if readers.is_empty() {
++            return;
+         }
++        let hitboxes = &self.rendered_frame.hitboxes;
++        // The set is a handful of pairs under the mouse; a scan beats hashing every hitbox.
++        if readers.len() <= 16 {
++            readers.retain(|(_, id)| hitboxes.iter().any(|hitbox| hitbox.id == *id));
++        } else {
++            let live: FxHashSet<HitboxId> = hitboxes.iter().map(|hitbox| hitbox.id).collect();
++            readers.retain(|(_, id)| live.contains(id));
++        }
+     }
+ 
+     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+@@ -7649,7 +7676,16 @@
+         // the views that read the modality while drawing (a hitbox under the mouse, focus-visible
+         // styles, focus rings, tooltip checks) are notified.
+         if self.last_input_modality != old_modality {
+-            let readers = std::mem::take(&mut *self.modality_readers.borrow_mut());
++            let mut readers = std::mem::take(&mut *self.modality_readers.borrow_mut());
++            // Riseonly 0111: a view that once drew a hitbox under the mouse stayed a reader after
++            // the mouse left it, so the first press after Esc drew the whole chats list again
++            // beside the chat (X2331: 20 rows, 133 views).
++            let hover_readers = std::mem::take(&mut *self.hover_modality_readers.borrow_mut());
++            for (view, hitbox) in hover_readers {
++                if hitbox.hit_test(self) {
++                    readers.insert(view);
++                }
++            }
+             for view in readers {
+                 cx.notify(view);
+             }

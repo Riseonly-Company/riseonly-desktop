@@ -1,0 +1,95 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -381,6 +381,10 @@
+     /// The recorded ranges hold mouse listeners and element states of an earlier origin: this view
+     /// or a cached view inside it replayed moved since it last rendered (Riseonly 0044).
+     positions_moved: bool,
++    /// Riseonly 0091: the frame a nested replay (0045, 0080) last looked at this view, and why it
++    /// left the view on its old frame (empty when it rebased it), for the `prepaint_gap` reason.
++    rebase_seen: u64,
++    rebase_refused: &'static str,
+ }
+ 
+ impl ViewElementState {
+@@ -585,7 +589,14 @@
+         } else if key.env_fingerprint != env_fingerprint {
+             crate::profiler::detailed_reason("env", env_change(key.env_trace.as_deref(), &window.env_trace))
+         } else if self.prepainted_frame + 1 != window.draw_count {
+-            "prepaint_gap"
++            // Riseonly 0091: whether a nested replay of the frame just before saw this view.
++            if self.rebase_seen + 1 != window.draw_count {
++                "prepaint_gap:unvisited"
++            } else if self.rebase_refused.is_empty() {
++                "prepaint_gap"
++            } else {
++                crate::profiler::detailed_reason("prepaint_gap", self.rebase_refused)
++            }
+         } else if self.dropped_deferred {
+             "dropped_deferred"
+         } else if self.stale_while_hidden {
+@@ -627,13 +638,17 @@
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+             return;
+         };
++        state.rebase_seen = frame;
+         if state.prepainted_frame + 1 != frame {
++            state.rebase_refused = if state.prepainted_frame == frame { "" } else { "stale" };
+             return;
+         }
+         let Some(range) = PrepaintStateIndex::rebase_within(&state.prepaint_range, old, &replayed.start)
+         else {
++            state.rebase_refused = PrepaintStateIndex::outside_field(&state.prepaint_range, old);
+             return;
+         };
++        state.rebase_refused = "";
+         state.prepaint_range = range;
+         state.prepainted_frame = frame;
+         state.moved_by = None;
+@@ -1150,6 +1165,8 @@
+                                 moved_by: None,
+                                 painted_under: PaintContext::default(),
+                                 positions_moved,
++                                rebase_seen: 0,
++                                rebase_refused: "",
+                             },
+                         )
+                     },
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1193,6 +1193,36 @@
+                 .within(&(LineLayoutIndex::default()..other.line_layout_index.clone()))
+     }
+ 
++    /// Riseonly 0091: the first index of `inner` that lies outside `old`, why
++    /// [`Self::rebase_within`] refused it, for the frame trace (`none` when it lies inside).
++    pub(crate) fn outside_field(inner: &Range<Self>, old: &Range<Self>) -> &'static str {
++        let outside = |field: fn(&Self) -> usize| {
++            !(field(&old.start) <= field(&inner.start)
++                && field(&inner.start) <= field(&inner.end)
++                && field(&inner.end) <= field(&old.end))
++        };
++        let layouts = old.start.line_layout_index.clone()..old.end.line_layout_index.clone();
++        if outside(|index| index.hitboxes_index) {
++            "hitboxes"
++        } else if outside(|index| index.tooltips_index) {
++            "tooltips"
++        } else if outside(|index| index.deferred_draws_index) {
++            "deferred_draws"
++        } else if outside(|index| index.dispatch_tree_index) {
++            "dispatch_tree"
++        } else if outside(|index| index.accessed_element_states_index) {
++            "element_states"
++        } else if outside(|index| index.move_listeners_index) {
++            "move_listeners"
++        } else if !(inner.start.line_layout_index.within(&layouts)
++            && inner.end.line_layout_index.within(&layouts))
++        {
++            "line_layouts"
++        } else {
++            "none"
++        }
++    }
++
+     /// Where the prepaint range `inner`, recorded inside `old`, lies after `old` was replayed
+     /// starting at `new_start` (Riseonly 0045), or None when `inner` is not inside `old`. A replay
+     /// copies hitboxes, tooltips, deferred draws, dispatch nodes, element state keys, line layouts

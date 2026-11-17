@@ -1,0 +1,55 @@
+--- a/crates/gpui_macos/src/text_system.rs
++++ b/crates/gpui_macos/src/text_system.rs
+@@ -246,7 +246,17 @@
+     }
+ 
+     fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
+-        self.0.write().layout_line(text, font_size, font_runs)
++        // Riseonly 0094: CoreText shapes the line outside the lock. Off-main text layout (post
++        // bodies, caption prewarm) shapes long paragraphs through this same text system, and with
++        // the write lock held for the whole CTLine the frame thread waited on it: 80 ms of shaping
++        // for five short feed lines. The lock now covers only reading the fonts and mapping the
++        // shaped runs back to font ids.
++        let (string, max_ascent, max_descent) =
++            self.0.read().line_attributed_string(text, font_size, font_runs);
++        let line = CTLine::new_with_attributed_string(string.as_concrete_TypeRef());
++        self.0
++            .write()
++            .line_layout_from_ctline(&line, text, font_size, max_ascent, max_descent)
+     }
+ 
+     fn recommended_rendering_mode(
+@@ -571,7 +581,12 @@
+         }
+     }
+ 
+-    fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
++    fn line_attributed_string(
++        &self,
++        text: &str,
++        font_size: Pixels,
++        font_runs: &[FontRun],
++    ) -> (CFMutableAttributedString, f32, f32) {
+         // Construct the attributed string, converting UTF8 ranges to UTF16 ranges.
+         let mut string = CFMutableAttributedString::new();
+         let mut max_ascent = 0.0f32;
+@@ -613,8 +628,18 @@
+                 break_ligature = !break_ligature;
+             }
+         }
++        (string, max_ascent, max_descent)
++    }
++
++    fn line_layout_from_ctline(
++        &mut self,
++        line: &CTLine,
++        text: &str,
++        font_size: Pixels,
++        max_ascent: f32,
++        max_descent: f32,
++    ) -> LineLayout {
+         // Retrieve the glyphs from the shaped line, converting UTF16 offsets to UTF8 offsets.
+-        let line = CTLine::new_with_attributed_string(string.as_concrete_TypeRef());
+         let glyph_runs = line.glyph_runs();
+         let mut runs = <Vec<ShapedRun>>::with_capacity(glyph_runs.len() as usize);
+         let mut ix_converter = StringIndexConverter::new(text);

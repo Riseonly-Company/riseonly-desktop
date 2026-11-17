@@ -1,0 +1,262 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -139,7 +139,12 @@
+     }
+ 
+     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
+-        for operation in &prev_scene.paint_operations[range] {
++        self.replay_operations(&prev_scene.paint_operations[range]);
++    }
++
++    /// Replays operations kept out of the frames, the paint of a parked cached view (Riseonly 0034).
++    pub(crate) fn replay_operations(&mut self, operations: &[PaintOperation]) {
++        for operation in operations {
+             match operation {
+                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+@@ -211,6 +216,7 @@
+     Surface,
+ }
+ 
++#[derive(Clone)]
+ pub(crate) enum PaintOperation {
+     Primitive(Primitive),
+     StartLayer(Bounds<ScaledPixels>),
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -950,6 +950,17 @@
+     dispatch_tree_index: usize,
+     accessed_element_states_index: usize,
+     line_layout_index: LineLayoutIndex,
++}
++
++/// The paint of a cached view kept out of the frames in which a hidden div skips it, replayed when
++/// the view shows again with the same cache key, so a tab coming back does not render (Riseonly 0034).
++pub(crate) struct ParkedPaint {
++    scene: Vec<crate::scene::PaintOperation>,
++    mouse_listeners: Vec<Option<AnyMouseListener>>,
++    cursor_styles: Vec<CursorStyleRequest>,
++    accessed_element_states: Vec<(GlobalElementId, TypeId)>,
++    tab_stops: Vec<crate::tab_stop::TabStopOperation>,
++    image_drops: u64,
+ }
+ 
+ #[derive(Clone, Default)]
+@@ -1163,6 +1174,12 @@
+     /// Number of the frame being drawn, raised at the start of every draw. A cached view replays
+     /// its recorded ranges only when they were recorded in the frame just before this one.
+     pub(crate) draw_count: u64,
++    /// Number of `Visibility::Hidden` divs around the element being prepainted (Riseonly 0034).
++    pub(crate) hidden_depth: usize,
++    /// Deferred draws dropped so far because a hidden div held them (Riseonly 0034).
++    pub(crate) hidden_dropped_deferred: u64,
++    /// Images dropped from the sprite atlas so far; a parked paint may point at their tiles.
++    pub(crate) image_drops: u64,
+     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
+     pub(crate) focus: Option<FocusId>,
+     focus_enabled: bool,
+@@ -1915,6 +1932,9 @@
+             last_input_modality: InputModality::Mouse,
+             refreshing: false,
+             draw_count: 0,
++            hidden_depth: 0,
++            hidden_dropped_deferred: 0,
++            image_drops: 0,
+             activation_observers: SubscriberSet::new(),
+             focus: None,
+             focus_enabled: true,
+@@ -3451,8 +3471,63 @@
+                     paint_range: deferred_draw.paint_range.clone(),
+                 }),
+         );
++    }
++
++    /// Whether a prepaint range of the frame just drawn holds deferred draws (Riseonly 0034).
++    pub(crate) fn prepaint_range_defers(&self, range: &Range<PrepaintStateIndex>) -> bool {
++        range.start.deferred_draws_index != range.end.deferred_draws_index
++    }
++
++    /// Takes the paint a cached view recorded in the frame just drawn out of that frame, for a frame
++    /// in which a hidden div skips the view's paint (Riseonly 0034). Input handlers stay behind: a
++    /// hidden view holds no focus, and its field takes the handler back when focused and drawn.
++    pub(crate) fn park_paint(&mut self, range: Range<PaintIndex>) -> ParkedPaint {
++        let image_drops = self.image_drops;
++        let frame = &mut self.rendered_frame;
++        ParkedPaint {
++            scene: frame.scene.paint_operations[range.start.scene_index..range.end.scene_index]
++                .to_vec(),
++            mouse_listeners: frame.mouse_listeners
++                [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
++                .iter_mut()
++                .map(|listener| listener.take())
++                .collect(),
++            cursor_styles: frame.cursor_styles
++                [range.start.cursor_styles_index..range.end.cursor_styles_index]
++                .to_vec(),
++            accessed_element_states: frame.accessed_element_states
++                [range.start.accessed_element_states_index..range.end.accessed_element_states_index]
++                .to_vec(),
++            tab_stops: frame.tab_stops.insertion_history
++                [range.start.tab_handle_index..range.end.tab_handle_index]
++                .to_vec(),
++            image_drops,
++        }
++    }
++
++    /// Whether a parked paint still draws what it recorded: no image left the sprite atlas since.
++    pub(crate) fn parked_paint_valid(&self, parked: &ParkedPaint) -> bool {
++        parked.image_drops == self.image_drops
++    }
++
++    /// Keeps the element states a parked paint reads alive through a frame that skips it.
++    pub(crate) fn keep_parked_states(&mut self, parked: &ParkedPaint) {
++        self.next_frame
++            .accessed_element_states
++            .extend(parked.accessed_element_states.iter().cloned());
+     }
+ 
++    /// Replays a parked paint into the frame being drawn (Riseonly 0034).
++    pub(crate) fn replay_parked_paint(&mut self, parked: ParkedPaint) {
++        self.next_frame.cursor_styles.extend(parked.cursor_styles);
++        self.next_frame.mouse_listeners.extend(parked.mouse_listeners);
++        self.next_frame
++            .accessed_element_states
++            .extend(parked.accessed_element_states);
++        self.next_frame.tab_stops.replay(&parked.tab_stops);
++        self.next_frame.scene.replay_operations(&parked.scene);
++    }
++
+     pub(crate) fn paint_index(&self) -> PaintIndex {
+         PaintIndex {
+             scene_index: self.next_frame.scene.len(),
+@@ -3984,6 +4059,12 @@
+         content_mask: Option<ContentMask<Pixels>>,
+     ) {
+         self.invalidator.debug_assert_prepaint();
++        // Riseonly 0034: a popover of a hidden subtree would draw over what is shown, and a
++        // deferred draw paints at the window level whatever hides its parent.
++        if self.hidden_depth > 0 {
++            self.hidden_dropped_deferred += 1;
++            return;
++        }
+         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
+         self.next_frame.deferred_draws.push(DeferredDraw {
+             current_view: self.current_view(),
+@@ -4812,6 +4893,7 @@
+ 
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
++        self.image_drops += 1;
+         for frame_index in 0..data.frame_count() {
+             let params = RenderImageParams {
+                 image_id: data.id,
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -301,8 +301,32 @@
+     painted_frame: u64,
+     cache_key: ViewElementCacheKey,
+     accessed_entities: Rc<FxHashSet<EntityId>>,
++    /// The last paint, taken out of the frames while a hidden div skips this view (Riseonly 0034).
++    parked: Option<crate::window::ParkedPaint>,
++    /// The render that recorded the prepaint ranges dropped a deferred draw under a hidden div.
++    dropped_deferred: bool,
+ }
+ 
++impl ViewElementState {
++    /// Whether the recorded prepaint may replay in this frame (Riseonly 0034). Under a hidden div it
++    /// may unless it carries deferred draws, which would paint over what is shown. Shown, the paint
++    /// that follows must replay too: from the frame just before or from a valid parked paint;
++    /// otherwise the view renders now instead of drawing nothing for a frame.
++    fn can_replay(&self, window: &Window) -> bool {
++        if window.hidden_depth > 0 {
++            return !window.prepaint_range_defers(&self.prepaint_range);
++        }
++        if self.dropped_deferred {
++            return false;
++        }
++        self.painted_frame + 1 == window.draw_count
++            || self
++                .parked
++                .as_ref()
++                .is_some_and(|parked| window.parked_paint_valid(parked))
++    }
++}
++
+ struct ViewElementCacheKey {
+     bounds: Bounds<Pixels>,
+     content_mask: ContentMask<Pixels>,
+@@ -404,7 +428,21 @@
+                             && !window.dirty_views.contains(&entity_id)
+                             && !window.refreshing
+                             && element_state.prepainted_frame + 1 == window.draw_count
++                            && element_state.can_replay(window)
+                         {
++                            if window.hidden_depth > 0 {
++                                // Riseonly 0034: the paint of the frame just drawn is skipped from
++                                // now on; keep it for the frame that shows the view again.
++                                if element_state.parked.is_none()
++                                    && element_state.painted_frame + 1 == window.draw_count
++                                {
++                                    element_state.parked =
++                                        Some(window.park_paint(element_state.paint_range.clone()));
++                                }
++                                if let Some(parked) = element_state.parked.as_ref() {
++                                    window.keep_parked_states(parked);
++                                }
++                            }
+                             let prepaint_start = window.prepaint_index();
+                             window.reuse_prepaint(element_state.prepaint_range.clone());
+                             cx.entities
+@@ -421,6 +459,7 @@
+                         }
+ 
+                         let refreshing = mem::replace(&mut window.refreshing, true);
++                        let dropped_before = window.hidden_dropped_deferred;
+                         let prepaint_start = window.prepaint_index();
+                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+                             let mut element = self
+@@ -455,6 +494,8 @@
+                                     content_mask,
+                                     text_style,
+                                 },
++                                parked: None,
++                                dropped_deferred: window.hidden_dropped_deferred != dropped_before,
+                             },
+                         )
+                     },
+@@ -502,6 +543,10 @@
+                             } else if element_state.painted_frame + 1 == window.draw_count {
+                                 window.reuse_paint(element_state.paint_range.clone());
+                                 element_state.painted_frame = window.draw_count;
++                            } else if let Some(parked) = element_state.parked.take() {
++                                // Riseonly 0034: shown again after hidden frames, same cache key.
++                                window.replay_parked_paint(parked);
++                                element_state.painted_frame = window.draw_count;
+                             } else {
+                                 // Prepaint was replayed but the last paint is older than the
+                                 // previous frame (the view sat under a hidden div): its range
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -1907,6 +1907,12 @@
+                     return hitbox;
+                 }
+ 
++                // Riseonly 0034: cached views under a hidden div park their paint, and deferred
++                // draws under it are dropped.
++                let hidden = style.visibility == Visibility::Hidden;
++                if hidden {
++                    window.hidden_depth += 1;
++                }
+                 window.with_image_cache(image_cache, |window| {
+                     window.with_element_offset(scroll_offset, |window| {
+                         if let Some(order_fn) = &self.prepaint_order_fn {
+@@ -1927,6 +1933,9 @@
+                         listener(children_bounds, window, cx);
+                     }
+                 });
++                if hidden {
++                    window.hidden_depth -= 1;
++                }
+ 
+                 hitbox
+             },

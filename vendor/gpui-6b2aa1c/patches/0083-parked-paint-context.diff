@@ -1,0 +1,21 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -1102,6 +1102,18 @@
+                                 // Riseonly 0034: shown again after hidden frames, same cache key.
+                                 window.replay_parked_paint(parked);
+                                 element_state.painted_frame = window.draw_count;
++                                // Riseonly 0083: the parked paint keeps the opacity and the
++                                // transformation it was painted under. One painted inside a fade
++                                // (at zero opacity its primitives were dropped) or another flight
++                                // came back blank and stayed so until notified (X1769: a feed row
++                                // left a hole after Settings and back). It shows once and renders
++                                // in the next frame, as the in-place replay does (0053, 0065).
++                                let now = window.paint_context();
++                                if !element_state.painted_under.places_alike(&now)
++                                    || !Window::same_opacity(&element_state.painted_under, &now)
++                                {
++                                    cx.notify(entity_id);
++                                }
+                             } else {
+                                 // Prepaint was replayed but the last paint is older than the
+                                 // previous frame (the view sat under a hidden div): its range

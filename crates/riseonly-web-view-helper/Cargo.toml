@@ -1,0 +1,24 @@
+[package]
+name = "riseonly-web-view-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Linux bundling builds it on its own: cargo build -p riseonly-web-view-helper --features helper.
+# Behind a feature so a workspace check on any system does not pull gtk into rise-platform.
+[features]
+helper = ["dep:rise-platform"]
+
+[[bin]]
+name = "riseonly-web-view-helper"
+path = "src/main.rs"
+required-features = ["helper"]
+
+[dependencies]
+# The helper is the web_view_helper seam of rise-platform; this crate only runs it.
+rise-platform = { workspace = true, optional = true, features = ["web_view_helper"] }

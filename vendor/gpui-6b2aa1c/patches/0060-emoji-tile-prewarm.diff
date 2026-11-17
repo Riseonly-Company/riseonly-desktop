@@ -1,0 +1,101 @@
+--- a/crates/gpui/src/text_system.rs
++++ b/crates/gpui/src/text_system.rs
+@@ -334,6 +334,59 @@
+         }
+     }
+ 
++    /// Shapes `text` in `font` at `font_size` and rasterizes each distinct emoji glyph of it with
++    /// the params Window::paint_emoji uses at `scale_factor` (Riseonly 0060). Meant for a
++    /// background thread: the tiles go to the atlas later through Window::prewarm_emoji_tiles.
++    pub fn rasterize_emoji_text(
++        &self,
++        text: &str,
++        font: &Font,
++        font_size: Pixels,
++        scale_factor: f32,
++    ) -> Vec<(RenderGlyphParams, Size<DevicePixels>, Vec<u8>)> {
++        if text.is_empty() {
++            return Vec::new();
++        }
++        let font_id = self.resolve_font(font);
++        let layout = self.platform_text_system.layout_line(
++            text,
++            font_size,
++            &[FontRun {
++                len: text.len(),
++                font_id,
++            }],
++        );
++        let mut seen = collections::FxHashSet::default();
++        let mut tiles = Vec::new();
++        for run in &layout.runs {
++            for glyph in run.glyphs.iter().filter(|glyph| glyph.is_emoji) {
++                let params = RenderGlyphParams {
++                    font_id: run.font_id,
++                    glyph_id: glyph.id,
++                    font_size,
++                    subpixel_variant: Default::default(),
++                    scale_factor,
++                    is_emoji: true,
++                    subpixel_rendering: false,
++                    dilation: 0,
++                };
++                if !seen.insert(params.clone()) {
++                    continue;
++                }
++                let Ok(bounds) = self.raster_bounds(&params) else {
++                    continue;
++                };
++                if crate::geometry::IsZero::is_zero(&bounds) {
++                    continue;
++                }
++                if let Ok((size, bytes)) = self.platform_text_system.rasterize_glyph(&params, bounds) {
++                    tiles.push((params, size, bytes));
++                }
++            }
++        }
++        tiles
++    }
++
+     /// Rasterizes a glyph off the frame: its size and bytes, one per pixel, or BGRA for an emoji.
+     pub fn rasterize_glyph(
+         &self,
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5220,6 +5220,36 @@
+         };
+ 
+         mode == TextRenderingMode::Subpixel
++    }
++
++    /// Rasterizes the emoji of `text` on the background executor and stores their tiles in this
++    /// window's sprite atlas (Riseonly 0060), so the first paint of those glyphs reads the atlas
++    /// instead of rasterizing inside the frame: a colour emoji costs about a millisecond on the
++    /// main thread, and a wheel step through an emoji grid revealed close to a hundred of them.
++    /// Nothing is notified, the tiles only wait for a paint. Dropping the task stops the insert.
++    pub fn prewarm_emoji_tiles(
++        &self,
++        text: SharedString,
++        font: crate::Font,
++        font_size: Pixels,
++        cx: &App,
++    ) -> Task<()> {
++        let text_system = cx.text_system().clone();
++        let atlas = self.sprite_atlas.clone();
++        let scale_factor = self.scale_factor();
++        let tiles = cx.background_executor().spawn(async move {
++            text_system.rasterize_emoji_text(&text, &font, font_size, scale_factor)
++        });
++        cx.foreground_executor().spawn(async move {
++            for (params, size, bytes) in tiles.await {
++                let mut bytes = Some(bytes);
++                atlas
++                    .get_or_insert_with(&params.into(), &mut || {
++                        Ok(bytes.take().map(|bytes| (size, Cow::Owned(bytes))))
++                    })
++                    .log_err();
++            }
++        })
+     }
+ 
+     /// Paints an emoji glyph into the scene for the next frame at the current z-index.

@@ -1,0 +1,154 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -334,6 +334,53 @@
+         true
+     }
+ 
++    /// Moves every image sprite carrying `key` in its pad from the atlas tile `previous` to the same
++    /// place in `next` (Riseonly 0057): an animated sticker or GIF shows its next frame with a
++    /// present, without a render, layout or paint of the views around it. A sprite showing a cut
++    /// of its picture keeps that cut. The copies kept for replay take it too. False, with nothing
++    /// changed, when no sprite carries the key, one of them shows another tile than `previous`, or
++    /// the two tiles differ in size.
++    pub fn swap_image_tile(&mut self, key: u32, previous: AtlasTile, next: AtlasTile) -> bool {
++        if key == 0 || previous.bounds.size != next.bounds.size {
++            return false;
++        }
++        let shows_previous = |sprite: &PolychromeSprite| {
++            sprite.tile.texture_id == previous.texture_id && sprite.tile.tile_id == previous.tile_id
++        };
++        let moved = |tile: AtlasTile| AtlasTile {
++            bounds: Bounds {
++                origin: point(
++                    crate::DevicePixels(next.bounds.origin.x.0 + tile.bounds.origin.x.0 - previous.bounds.origin.x.0),
++                    crate::DevicePixels(next.bounds.origin.y.0 + tile.bounds.origin.y.0 - previous.bounds.origin.y.0),
++                ),
++                size: tile.bounds.size,
++            },
++            ..next
++        };
++        let mut found = false;
++        for sprite in self.polychrome_sprites.iter().filter(|sprite| sprite.pad == key) {
++            if !shows_previous(sprite) {
++                return false;
++            }
++            found = true;
++        }
++        if !found {
++            return false;
++        }
++        for sprite in self.polychrome_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            sprite.tile = moved(sprite.tile);
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(Primitive::PolychromeSprite(sprite)) = operation
++                && sprite.pad == key
++                && shows_previous(&*sprite)
++            {
++                sprite.tile = moved(sprite.tile);
++            }
++        }
++        true
++    }
++
+     pub fn finish(&mut self) {
+         self.shadows.sort_by_key(|shadow| shadow.order);
+         self.quads.sort_by_key(|quad| quad.order);
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1274,6 +1274,7 @@
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
+     pub(crate) glyph_swap_key: u32,
++    pub(crate) image_swap_key: u32,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+     pub(crate) surface_corner_clip_stack: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
+     pub(crate) transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
+@@ -2044,6 +2045,7 @@
+             transformation_stack: Vec::new(),
+             element_opacity: 1.0,
+             glyph_swap_key: 0,
++            image_swap_key: 0,
+             requested_autoscroll: None,
+             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+@@ -4240,12 +4242,70 @@
+     /// glyph of the frame carries the key; the caller then repaints through its view.
+     pub fn swap_glyph_colours(&mut self, key: u32, colour: &dyn Fn(f32) -> Hsla) -> bool {
+         let found = self.rendered_frame.scene.swap_glyph_colours(key, colour);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
++    }
++
++    /// Marks every image `f` paints with `key` (Riseonly 0057), so [`Self::swap_image`] can give
++    /// it another picture in the frame on screen. Zero names nothing.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    pub fn with_image_swap_key<R>(&mut self, key: u32, f: impl FnOnce(&mut Self) -> R) -> R {
++        self.invalidator.debug_assert_paint();
++        let previous = self.image_swap_key;
++        self.image_swap_key = key;
++        let result = f(self);
++        self.image_swap_key = previous;
++        result
++    }
++
++    /// Gives every image of the frame on screen painted under `key` with frame `frame_index` of
++    /// `previous` frame `frame_index` of `next` in the same place, and presents (Riseonly 0057): an
++    /// animated sticker or GIF plays without rendering, laying out or painting any view. Call it
++    /// outside a draw, before `previous` leaves the atlas. False when no image of the frame carries
++    /// the key, one shows another picture than `previous`, or the pictures differ in size; the
++    /// caller then repaints through its view.
++    pub fn swap_image(
++        &mut self,
++        key: u32,
++        previous: &Arc<RenderImage>,
++        next: &Arc<RenderImage>,
++        frame_index: usize,
++    ) -> bool {
++        if key == 0 || previous.size(frame_index) != next.size(frame_index) {
++            return false;
++        }
++        let (Some(previous_tile), Some(next_tile)) = (
++            self.image_tile(previous, frame_index),
++            self.image_tile(next, frame_index),
++        ) else {
++            return false;
++        };
++        let found = self
++            .rendered_frame
++            .scene
++            .swap_image_tile(key, previous_tile, next_tile);
+         if found {
+             self.needs_present.set(true);
+         }
+         found
+     }
+ 
++    fn image_tile(&mut self, data: &Arc<RenderImage>, frame_index: usize) -> Option<AtlasTile> {
++        let bytes = data.as_bytes(frame_index)?;
++        let params = RenderImageParams {
++            image_id: data.id,
++            frame_index,
++        };
++        let size = data.size(frame_index);
++        self.sprite_atlas
++            .get_or_insert_with(&params.into(), &mut || Ok(Some((size, Cow::Borrowed(bytes)))))
++            .ok()
++            .flatten()
++    }
++
+     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
+     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
+     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
+@@ -5371,7 +5431,7 @@
+ 
+         self.next_frame.scene.insert_primitive(PolychromeSprite {
+             order: 0,
+-            pad: 0,
++            pad: self.image_swap_key,
+             grayscale: grayscale.into(),
+             bounds: visible_bounds_snapped,
+             content_mask,

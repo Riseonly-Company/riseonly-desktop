@@ -1,0 +1,70 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -331,6 +331,7 @@
+     bounds: Bounds<Pixels>,
+     content_mask: ContentMask<Pixels>,
+     text_style: TextStyle,
++    env_fingerprint: u64,
+ }
+ 
+ impl<V: View> Element for ViewElement<V> {
+@@ -420,11 +421,13 @@
+                     |element_state, window| {
+                         let content_mask = window.content_mask();
+                         let text_style = window.text_style();
++                        let env_fingerprint = window.env_fingerprint;
+ 
+                         if let Some(mut element_state) = element_state
+                             && element_state.cache_key.bounds == bounds
+                             && element_state.cache_key.content_mask == content_mask
+                             && element_state.cache_key.text_style == text_style
++                            && element_state.cache_key.env_fingerprint == env_fingerprint
+                             && !window.dirty_views.contains(&entity_id)
+                             && !window.refreshing
+                             && element_state.prepainted_frame + 1 == window.draw_count
+@@ -495,6 +498,7 @@
+                                     bounds,
+                                     content_mask,
+                                     text_style,
++                                    env_fingerprint,
+                                 },
+                                 parked: None,
+                                 dropped_deferred: window.hidden_dropped_deferred != dropped_before,
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1174,6 +1174,9 @@
+     /// Number of the frame being drawn, raised at the start of every draw. A cached view replays
+     /// its recorded ranges only when they were recorded in the frame just before this one.
+     pub(crate) draw_count: u64,
++    /// Riseonly 0036: fingerprint of the environment values the elements being prepainted sit in.
++    /// A cached view keeps it in its cache key, so a changed value above it renders it fresh.
++    pub(crate) env_fingerprint: u64,
+     /// Number of `Visibility::Hidden` divs around the element being prepainted (Riseonly 0034).
+     pub(crate) hidden_depth: usize,
+     /// Deferred draws dropped so far because a hidden div held them (Riseonly 0034).
+@@ -1932,6 +1935,7 @@
+             last_input_modality: InputModality::Mouse,
+             refreshing: false,
+             draw_count: 0,
++            env_fingerprint: 0,
+             hidden_depth: 0,
+             hidden_dropped_deferred: 0,
+             image_drops: 0,
+@@ -2162,6 +2166,17 @@
+         &self.text_system
+     }
+ 
++    /// Riseonly 0036: fingerprint of the environment values around the element being prepainted.
++    pub fn env_fingerprint(&self) -> u64 {
++        self.env_fingerprint
++    }
++
++    /// Riseonly 0036: sets the environment fingerprint for the children prepainted next and
++    /// returns the previous one, which the caller restores after them.
++    pub fn set_env_fingerprint(&mut self, fingerprint: u64) -> u64 {
++        std::mem::replace(&mut self.env_fingerprint, fingerprint)
++    }
++
+     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
+     pub fn text_style(&self) -> TextStyle {
+         let mut style = TextStyle::default();

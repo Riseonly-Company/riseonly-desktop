@@ -1,0 +1,40 @@
+// Windows resources of riseonly.exe. app/build.rs fills the at-sign fields from the build table
+// (scripts/windows_resource.rs) and compiles the result for the windows target only.
+// The manifest (PerMonitorV2, supportedOS) comes from gpui's own resource, so none is declared here.
+// https://learn.microsoft.com/windows/win32/menurc/icon-resource
+// https://learn.microsoft.com/windows/win32/menurc/versioninfo-resource
+
+// The shell takes the first icon group of the file for Explorer and the taskbar; the tray and the
+// toasts load the same group by this id.
+1 ICON "@ICON_PATH@"
+
+// FILEOS 0x40004 is VOS_NT_WINDOWS32, FILETYPE 0x1 is VFT_APP, FILEFLAGS 0x1 is VS_FF_DEBUG; the
+// numbers are spelled out so the file needs no winver.h from the SDK.
+1 VERSIONINFO
+FILEVERSION @FILE_VERSION@
+PRODUCTVERSION @FILE_VERSION@
+FILEFLAGSMASK 0x3fL
+FILEFLAGS @FILE_FLAGS@
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // en-US, Unicode: the block the shell reads when no other language matches.
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Riseonly"
+            VALUE "FileDescription", "@APP_NAME@"
+            VALUE "FileVersion", "@FILE_VERSION_TEXT@"
+            VALUE "InternalName", "riseonly"
+            VALUE "OriginalFilename", "riseonly.exe"
+            VALUE "ProductName", "@APP_NAME@"
+            VALUE "ProductVersion", "@SHORT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

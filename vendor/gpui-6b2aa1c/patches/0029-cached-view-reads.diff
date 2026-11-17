@@ -1,0 +1,116 @@
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1084,15 +1084,13 @@
+         &mut self,
+         callback: impl FnOnce(&mut App) -> R,
+     ) -> (R, FxHashSet<EntityId>) {
+-        let accessed_entities_start = self.entities.accessed_entities.get_mut().clone();
++        // Every entity the callback reads, also one an earlier element of the frame read first:
++        // a cached view must hear each store it depends on (Riseonly 0029).
++        let outer = mem::take(self.entities.accessed_entities.get_mut());
+         let result = callback(self);
+-        let entities_accessed_in_callback = self
+-            .entities
+-            .accessed_entities
+-            .get_mut()
+-            .difference(&accessed_entities_start)
+-            .copied()
+-            .collect::<FxHashSet<EntityId>>();
++        let entities_accessed_in_callback =
++            mem::replace(self.entities.accessed_entities.get_mut(), outer);
++        self.entities.extend_accessed(&entities_accessed_in_callback);
+         (result, entities_accessed_in_callback)
+     }
+ 
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -8,6 +8,7 @@
+ use collections::FxHashSet;
+ use refineable::Refineable;
+ use std::mem;
++use std::rc::Rc;
+ use std::{any::TypeId, fmt, ops::Range};
+ 
+ /// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
+@@ -288,7 +289,7 @@
+     prepaint_range: Range<PrepaintStateIndex>,
+     paint_range: Range<PaintIndex>,
+     cache_key: ViewElementCacheKey,
+-    accessed_entities: FxHashSet<EntityId>,
++    accessed_entities: Rc<FxHashSet<EntityId>>,
+ }
+ 
+ struct ViewElementCacheKey {
+@@ -396,6 +397,10 @@
+                             window.reuse_prepaint(element_state.prepaint_range.clone());
+                             cx.entities
+                                 .extend_accessed(&element_state.accessed_entities);
++                            window.next_frame.cached_views.push((
++                                entity_id,
++                                element_state.accessed_entities.clone(),
++                            ));
+                             let prepaint_end = window.prepaint_index();
+                             element_state.prepaint_range = prepaint_start..prepaint_end;
+ 
+@@ -418,6 +423,11 @@
+ 
+                         let prepaint_end = window.prepaint_index();
+                         window.refreshing = refreshing;
++                        let accessed_entities = Rc::new(accessed_entities);
++                        window
++                            .next_frame
++                            .cached_views
++                            .push((entity_id, accessed_entities.clone()));
+ 
+                         (
+                             Some(element),
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -935,6 +935,8 @@
+     #[cfg(any(feature = "inspector", debug_assertions))]
+     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
+     pub(crate) tab_stops: TabStopMap,
++    /// Every cached view drawn in this frame with the entities its render read (Riseonly 0029).
++    pub(crate) cached_views: Vec<(EntityId, Rc<FxHashSet<EntityId>>)>,
+ }
+ 
+ #[derive(Clone, Default)]
+@@ -984,6 +986,7 @@
+             #[cfg(any(feature = "inspector", debug_assertions))]
+             inspector_hitboxes: FxHashMap::default(),
+             tab_stops: TabStopMap::default(),
++            cached_views: Vec::new(),
+         }
+     }
+ 
+@@ -1000,6 +1003,7 @@
+         self.window_control_hitboxes.clear();
+         self.deferred_draws.clear();
+         self.tab_stops.clear();
++        self.cached_views.clear();
+         self.focus = None;
+ 
+         #[cfg(any(test, feature = "test-support"))]
+@@ -3009,9 +3013,22 @@
+ 
+     fn invalidate_entities(&mut self) {
+         let mut views = self.invalidator.take_views();
++        let mut readers = Vec::new();
+         for entity in views.drain() {
+             self.mark_view_dirty(entity);
++            // A cached view replays until its own id is dirty, so an entity it only read (a
++            // store, a keyed state) would never reach it: its readers go dirty with it.
++            readers.extend(
++                self.rendered_frame
++                    .cached_views
++                    .iter()
++                    .filter(|(view_id, accessed)| *view_id != entity && accessed.contains(&entity))
++                    .map(|(view_id, _)| *view_id),
++            );
+         }
++        for view_id in readers {
++            self.mark_view_dirty(view_id);
++        }
+         self.invalidator.replace_views(views);
+     }
+ 

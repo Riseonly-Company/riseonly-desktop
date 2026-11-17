@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=@APP_NAME@
+Comment=Social network and messenger
+Exec=riseonly %U
+Icon=@BUNDLE_ID@
+Terminal=false
+StartupNotify=true
+StartupWMClass=@BUNDLE_ID@
+Categories=Network;InstantMessaging;Chat;
+MimeType=x-scheme-handler/@URL_SCHEME@;image/*;video/*;audio/*;image/jpeg;image/png;image/gif;image/webp;image/heic;image/heif;image/avif;image/bmp;image/tiff;video/mp4;video/quicktime;video/webm;video/x-matroska;audio/mpeg;audio/mp4;audio/ogg;audio/flac;audio/x-wav;application/octet-stream;

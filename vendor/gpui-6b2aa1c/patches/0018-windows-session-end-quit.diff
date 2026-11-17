@@ -1,0 +1,75 @@
+--- a/crates/gpui_windows/src/events.rs	2026-11-05 03:51:47
++++ b/crates/gpui_windows/src/events.rs	2026-11-05 03:51:47
+@@ -28,6 +28,7 @@
+ pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
+ pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
+ pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
++pub(crate) const WM_GPUI_SESSION_ENDING: u32 = WM_USER + 11;
+ 
+ const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
+ 
+@@ -159,6 +160,7 @@
+             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
+             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
++            WM_ENDSESSION => self.handle_end_session_msg(wparam),
+             WM_GPUI_START_EXTERNAL_DRAG => self.handle_start_external_drag(handle),
+             WM_GPUI_EXTERNAL_DRAG_ENDED => self.handle_external_drag_ended(handle),
+             DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(wparam),
+@@ -169,7 +171,25 @@
+             LRESULT(n)
+         } else {
+             unsafe { DefWindowProcW(handle, msg, wparam, lparam) }
++        }
++    }
++
++    // Riseonly: the quit callback belongs to the platform window. The message-only window gets no
++    // session broadcast, so a top-level window hands it over and waits, the process may end the
++    // moment this returns.
++    // https://learn.microsoft.com/windows/win32/shutdown/wm-endsession
++    fn handle_end_session_msg(&self, wparam: WPARAM) -> Option<isize> {
++        if wparam.0 != 0 {
++            unsafe {
++                SendMessageW(
++                    self.platform_window_handle,
++                    WM_GPUI_SESSION_ENDING,
++                    Some(WPARAM(self.validation_number)),
++                    Some(LPARAM(0)),
++                );
++            }
+         }
++        Some(0)
+     }
+ 
+     fn handle_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+--- a/crates/gpui_windows/src/platform.rs	2026-11-05 03:51:47
++++ b/crates/gpui_windows/src/platform.rs	2026-11-05 03:51:47
+@@ -953,6 +953,7 @@
+             | WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD
+             | WM_GPUI_DOCK_MENU_ACTION
+             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
++            | WM_GPUI_SESSION_ENDING
+             | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
+             WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
+             _ => None,
+@@ -978,10 +979,20 @@
+             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
+             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
++            WM_GPUI_SESSION_ENDING => self.handle_session_ending(),
+             _ => unreachable!(),
+         }
+     }
+ 
++    // Riseonly: the session ends without the message loop finishing, so run() never reaches its quit.
++    // Taken for good: every top-level window reports the end, and quit runs once.
++    fn handle_session_ending(&self) -> Option<isize> {
++        if let Some(mut callback) = self.state.callbacks.quit.take() {
++            callback();
++        }
++        Some(0)
++    }
++
+     fn close_one_window(&self, target_window: HWND) -> bool {
+         let Some(all_windows) = self.raw_window_handles.upgrade() else {
+             log::error!("Failed to upgrade raw window handles");

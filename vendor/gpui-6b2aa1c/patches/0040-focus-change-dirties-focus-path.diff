@@ -1,0 +1,99 @@
+--- a/crates/gpui/src/key_dispatch.rs
++++ b/crates/gpui/src/key_dispatch.rs
+@@ -583,6 +583,20 @@
+         }
+         focus_path.reverse(); // Reverse the path so it goes from the root to the focused node.
+         focus_path
++    }
++
++    /// The views from the element that tracks `focus_id` up to the root (Riseonly 0040).
++    pub fn focus_view_path(&self, focus_id: FocusId) -> SmallVec<[EntityId; 16]> {
++        let mut views = SmallVec::new();
++        let mut current_node_id = self.focusable_node_ids.get(&focus_id).copied();
++        while let Some(node_id) = current_node_id {
++            let node = self.node(node_id);
++            if let Some(view_id) = node.view_id {
++                views.push(view_id);
++            }
++            current_node_id = node.parent;
++        }
++        views
+     }
+ 
+     pub fn view_path_reversed(&self, view_id: EntityId) -> impl Iterator<Item = EntityId> {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -194,6 +194,16 @@
+ 
+     fn take_frame_dirty(&self) -> FrameDirtyAccumulator {
+         mem::take(&mut self.inner.borrow_mut().frame_dirty)
++    }
++
++    /// Dirties `views` and schedules a frame without the notify effect of `invalidate_view`: a
++    /// focus move is no change of a view's data, so its observers must not hear one (Riseonly 0040).
++    pub fn mark_views_dirty(&self, views: impl IntoIterator<Item = EntityId>) {
++        let mut inner = self.inner.borrow_mut();
++        inner.update_count += 1;
++        inner.dirty_views.extend(views);
++        Self::record_frame_dirty(&mut inner);
++        inner.dirty = true;
+     }
+ 
+     pub fn take_views(&self) -> FxHashSet<EntityId> {
+@@ -2102,7 +2112,7 @@
+             return;
+         }
+ 
+-        self.focus = Some(handle.id);
++        let previous = self.focus.replace(handle.id);
+         self.focus_generation = self.focus_generation.wrapping_add(1);
+         self.clear_pending_keystrokes();
+ 
+@@ -2117,9 +2127,26 @@
+                 .ok();
+         });
+ 
+-        self.refresh();
++        self.invalidate_focus_change(previous, Some(handle.id));
+     }
+ 
++    /// Riseonly 0040: a focus move dirties only the views on the old and the new focus path (the
++    /// focused element, the views around it, their ancestors) instead of refreshing the window.
++    /// Every cached view re-rendered on each focus move before: opening the media viewer over a
++    /// chat drew the chat list, the chat and the hidden feed twice (X1278). A view that styles by
++    /// a handle outside its own subtree must observe that handle's focus events itself.
++    fn invalidate_focus_change(&mut self, previous: Option<FocusId>, next: Option<FocusId>) {
++        if !self.invalidator.not_drawing() {
++            return;
++        }
++        let tree = &self.rendered_frame.dispatch_tree;
++        let mut views: SmallVec<[EntityId; 32]> = SmallVec::new();
++        for focus_id in [previous, next].into_iter().flatten() {
++            views.extend(tree.focus_view_path(focus_id));
++        }
++        self.invalidator.mark_views_dirty(views);
++    }
++
+     /// Remove focus from all elements within this context's window.
+     pub fn blur(&mut self) {
+         if !self.focus_enabled {
+@@ -2129,8 +2156,8 @@
+         if self.focus.is_some() {
+             self.focus_generation = self.focus_generation.wrapping_add(1);
+         }
+-        self.focus = None;
+-        self.refresh();
++        let previous = self.focus.take();
++        self.invalidate_focus_change(previous, None);
+     }
+ 
+     /// Blur the window and don't allow anything in it to be focused again.
+@@ -3032,7 +3059,7 @@
+         // schedule another frame here to render the new focus state and dispatch the
+         // resulting focus events.
+         if self.focus != focus_before_listeners {
+-            self.refresh();
++            self.invalidate_focus_change(focus_before_listeners, self.focus);
+         }
+         self.needs_present.set(true);
+ 

@@ -1,0 +1,50 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -792,6 +792,9 @@
+     /// Paint layer the hitbox was inserted on: 0 for the root pass, deferred priority + 1 inside a
+     /// deferred draw, `usize::MAX` for prompts, drags and tooltips (Riseonly 0032).
+     pub(crate) layer: usize,
++    /// Inserted or replayed under a hidden element (Riseonly 0050): it keeps its bounds for the
++    /// views that read them, but the mouse never finds it.
++    pub(crate) hidden: bool,
+ }
+ 
+ impl Hitbox {
+@@ -1154,6 +1157,12 @@
+         });
+         for position_ix in (0..self.hitboxes.len()).rev() {
+             let hitbox = &self.hitboxes[order.as_ref().map_or(position_ix, |order| order[position_ix])];
++            // Riseonly 0050: a hidden subtree still prepaints, and a parked cached page replays its
++            // hitboxes at the bounds it had when shown; an occluding one swallowed clicks on what
++            // is drawn there now (X1418).
++            if hitbox.hidden {
++                continue;
++            }
+             let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+             if bounds.contains(&position) {
+                 hit_test.ids.push(hitbox.id);
+@@ -3557,10 +3566,15 @@
+                 .iter()
+                 .cloned(),
+         );
++        let hidden = self.hidden_depth > 0;
+         self.next_frame.hitboxes.extend(
+             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
+                 .iter()
+-                .cloned(),
++                .cloned()
++                .map(|mut hitbox| {
++                    hitbox.hidden = hidden;
++                    hitbox
++                }),
+         );
+         self.next_frame.tooltip_requests.extend(
+             self.rendered_frame.tooltip_requests
+@@ -5422,6 +5436,7 @@
+             content_mask,
+             behavior,
+             layer: self.hitbox_layer,
++            hidden: self.hidden_depth > 0,
+         };
+         self.next_frame.hitboxes.push(hitbox.clone());
+         hitbox

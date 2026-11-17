@@ -1,0 +1,65 @@
+--- a/crates/gpui_windows/src/keyboard.rs	2026-11-05 01:42:11
++++ b/crates/gpui_windows/src/keyboard.rs	2026-11-05 01:42:11
+@@ -151,12 +151,58 @@
+     modifiers: &mut Modifiers,
+ ) -> Option<String> {
+     if modifiers.shift && need_to_convert_to_shifted_key(vkey) {
+-        get_shifted_key(vkey, scan_code).inspect(|_| {
+-            modifiers.shift = false;
+-        })
++        get_shifted_key(vkey, scan_code)
++            .inspect(|_| {
++                modifiers.shift = false;
++            })
++            .map(|key| latin_key_for_bindings(vkey, key, true))
+     } else {
+-        get_key_from_vkey(vkey)
++        get_key_from_vkey(vkey).map(|key| latin_key_for_bindings(vkey, key, false))
++    }
++}
++
++// Riseonly: MapVirtualKeyW answers in the active layout, so on a Russian one the V key is reported
++// as a Cyrillic letter and "ctrl-v" and every other binding never matches. A key the layout names
++// outside ASCII takes its US layout name by virtual key, as guess_ascii does in gpui_linux; the
++// typed text stays in key_char.
++// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-mapvirtualkeyw
++fn latin_key_for_bindings(vkey: VIRTUAL_KEY, key: String, shifted: bool) -> String {
++    if key.is_ascii() {
++        return key;
++    }
++    us_layout_key(vkey, shifted).unwrap_or(key)
++}
++
++fn us_layout_key(vkey: VIRTUAL_KEY, shifted: bool) -> Option<String> {
++    if let VIRTUAL_KEY(code @ 0x41..=0x5A) = vkey {
++        // VK_A to VK_Z are the ASCII capitals; shift stays a modifier for letters.
++        return Some(char::from(code as u8).to_ascii_lowercase().to_string());
+     }
++    let (plain, with_shift) = match vkey {
++        VK_OEM_3 => ("`", "~"),
++        VK_1 => ("1", "!"),
++        VK_2 => ("2", "@"),
++        VK_3 => ("3", "#"),
++        VK_4 => ("4", "$"),
++        VK_5 => ("5", "%"),
++        VK_6 => ("6", "^"),
++        VK_7 => ("7", "&"),
++        VK_8 => ("8", "*"),
++        VK_9 => ("9", "("),
++        VK_0 => ("0", ")"),
++        VK_OEM_MINUS => ("-", "_"),
++        VK_OEM_PLUS => ("=", "+"),
++        VK_OEM_4 => ("[", "{"),
++        VK_OEM_6 => ("]", "}"),
++        VK_OEM_5 => ("\\", "|"),
++        VK_OEM_1 => (";", ":"),
++        VK_OEM_7 => ("'", "\""),
++        VK_OEM_COMMA => (",", "<"),
++        VK_OEM_PERIOD => (".", ">"),
++        VK_OEM_2 => ("/", "?"),
++        _ => return None,
++    };
++    Some(if shifted { with_shift } else { plain }.to_string())
+ }
+ 
+ fn get_key_from_vkey(vkey: VIRTUAL_KEY) -> Option<String> {

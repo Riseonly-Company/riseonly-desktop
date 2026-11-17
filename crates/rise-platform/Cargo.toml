@@ -1,0 +1,82 @@
+[package]
+name = "rise-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+web_view_helper = ["gpui", "dep:gtk", "dep:gdkx11", "dep:webkit2gtk", "dep:javascriptcore-rs"]
+# why: rise-engine reaches this crate for secure_store, file_manager, system_activity and
+# url_resource_values only and stays gpui-free in its dependency graph (X30); every seam that touches
+# gpui sits behind this feature through the cfg list of scripts/crate-map.json.
+default = ["gpui"]
+gpui = ["dep:gpui", "dep:gpui_platform"]
+# why: the tester stealth mode of the app's dev-drive feature (X186): hidden windows and secrets
+# in files; nothing of it is compiled into a product build.
+dev-drive = []
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+directories.workspace = true
+keyring.workspace = true
+base64.workspace = true
+fs4.workspace = true
+parking_lot.workspace = true
+sha2.workspace = true
+ring = "=0.17.14"
+gpui = { workspace = true, optional = true }
+gpui_platform = { workspace = true, optional = true }
+rise-core.workspace = true
+rise-deeplink.workspace = true
+rise-notify.workspace = true
+rise-canon.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-app-kit.workspace = true
+raw-window-handle.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# AppCapability (camera and microphone consent for a packaged app) is used only by capture_permission;
+# UISettings (the "Transparency effects" switch) only by accessibility; DWM dark caption and the
+# per-monitor caption metric only by window_chrome; Geolocator only by location (AppCapability
+# "location" reads its consent too); WinHTTP (IE proxy settings, WPAD and PAC) only by network_proxy;
+# the clipboard (DataExchange, CF_UNICODETEXT of Ole) only by pasteboard_write; DirectWrite, Direct2D,
+# DXGI formats and WIC only by emoji_raster (colour emoji into a WIC bitmap); Time (the zone key name)
+# only by system_clock.
+windows = { workspace = true, features = ["Devices_Geolocation", "Foundation_Collections", "Media", "Security_Authorization_AppCapabilityAccess", "Storage_Streams", "UI_ViewManagement", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dwm", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Imaging", "Win32_Networking_WinHttp", "Win32_System_DataExchange", "Win32_System_Ole", "Win32_System_Time", "Win32_System_WinRT", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse"] }
+futures.workspace = true
+windows-collections.workspace = true
+# WebView2 child window of the bot mini app page, only by web_view (P109).
+webview2-com.workspace = true
+raw-window-handle.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Helper binary only (web_view_helper, P144).
+gtk = { workspace = true, optional = true }
+gdkx11 = { workspace = true, optional = true }
+webkit2gtk = { workspace = true, optional = true }
+javascriptcore-rs = { workspace = true, optional = true }
+zbus.workspace = true
+futures.workspace = true
+tokio.workspace = true
+raw-window-handle.workspace = true
+x11rb.workspace = true
+wayland-client.workspace = true
+wayland-backend.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+# why: emoji_raster (P199) shapes and rasterises colour emoji off screen; same versions gpui_wgpu
+# already locks, see docs/DEPENDENCIES.md.
+cosmic-text = "=0.19.0"
+swash = "=0.2.10"

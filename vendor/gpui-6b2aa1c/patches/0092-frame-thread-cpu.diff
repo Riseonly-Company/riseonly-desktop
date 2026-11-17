@@ -1,0 +1,157 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -737,6 +737,12 @@
+     /// `prompt`, `drag`, `inspector`, `no_hole:<view type>`, `order`, `size:<view type>`); empty
+     /// when no draw pass ran.
+     pub splice: &'static str,
++    /// Riseonly 0092: CPU time the drawing thread consumed inside `Window::draw`; `None` where the
++    /// platform has no per-thread clock. Far below the draw duration means the thread waited
++    /// (a lock, a page fault, the scheduler) instead of working.
++    pub thread_cpu: Option<Duration>,
++    /// Riseonly 0092: page faults (minor and major) the whole process took during the draw.
++    pub page_faults: Option<u64>,
+ }
+ 
+ impl FrameTiming {
+@@ -991,6 +997,111 @@
+     FRAME_PHASES.with(|phases| phases.replace(FramePhases::default()))
+ }
+ 
++/// Riseonly 0092: the calling thread's CPU clock and the process page fault count, read at the start
++/// and the end of a traced draw.
++#[derive(Debug, Copy, Clone)]
++pub(crate) struct ThreadUsage {
++    cpu: Option<Duration>,
++    faults: Option<u64>,
++}
++
++impl ThreadUsage {
++    pub(crate) fn now() -> Self {
++        Self {
++            cpu: thread_usage::thread_cpu_time(),
++            faults: thread_usage::process_page_faults(),
++        }
++    }
++
++    /// CPU time and page faults from `start` to `self`.
++    pub(crate) fn since(self, start: Self) -> (Option<Duration>, Option<u64>) {
++        let cpu = match (start.cpu, self.cpu) {
++            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
++            _ => None,
++        };
++        let faults = match (start.faults, self.faults) {
++            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
++            _ => None,
++        };
++        (cpu, faults)
++    }
++}
++
++#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
++mod thread_usage {
++    use std::ffi::{c_int, c_long};
++    use std::time::Duration;
++
++    #[repr(C)]
++    struct Timespec {
++        tv_sec: c_long,
++        tv_nsec: c_long,
++    }
++
++    // why: struct rusage is two timevals (16 bytes each on 64-bit targets) and fourteen longs on
++    // macOS, Linux and FreeBSD; only ru_minflt and ru_majflt are read.
++    #[repr(C)]
++    struct Rusage {
++        times: [c_long; 4],
++        counters: [c_long; 14],
++    }
++
++    unsafe extern "C" {
++        fn clock_gettime(clock_id: c_int, tp: *mut Timespec) -> c_int;
++        fn getrusage(who: c_int, usage: *mut Rusage) -> c_int;
++    }
++
++    #[cfg(target_os = "macos")]
++    const CLOCK_THREAD_CPUTIME_ID: c_int = 16;
++    #[cfg(target_os = "linux")]
++    const CLOCK_THREAD_CPUTIME_ID: c_int = 3;
++    #[cfg(target_os = "freebsd")]
++    const CLOCK_THREAD_CPUTIME_ID: c_int = 14;
++    const RUSAGE_SELF: c_int = 0;
++    const RU_MINFLT: usize = 4;
++    const RU_MAJFLT: usize = 5;
++
++    pub(super) fn thread_cpu_time() -> Option<Duration> {
++        let mut time = Timespec { tv_sec: 0, tv_nsec: 0 };
++        // SAFETY: `time` is a valid, writable timespec for the call.
++        let status = unsafe { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mut time) };
++        if status != 0 {
++            return None;
++        }
++        let seconds = u64::try_from(time.tv_sec).ok()?;
++        let nanos = u32::try_from(time.tv_nsec).ok()?;
++        Some(Duration::new(seconds, nanos))
++    }
++
++    pub(super) fn process_page_faults() -> Option<u64> {
++        let mut usage = Rusage {
++            times: [0; 4],
++            counters: [0; 14],
++        };
++        // SAFETY: `usage` has the size and layout of struct rusage and is writable for the call.
++        let status = unsafe { getrusage(RUSAGE_SELF, &mut usage) };
++        if status != 0 {
++            return None;
++        }
++        let minor = u64::try_from(usage.counters[RU_MINFLT]).ok()?;
++        let major = u64::try_from(usage.counters[RU_MAJFLT]).ok()?;
++        Some(minor.saturating_add(major))
++    }
++}
++
++#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
++mod thread_usage {
++    use std::time::Duration;
++
++    pub(super) fn thread_cpu_time() -> Option<Duration> {
++        None
++    }
++
++    pub(super) fn process_page_faults() -> Option<u64> {
++        None
++    }
++}
++
+ /// Enables or disables frame timing collection at runtime.
+ ///
+ /// When transitioning from enabled to disabled, the buffered frame timings are
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3464,6 +3464,7 @@
+         // leak into a later frame across enable/disable of frame tracing.
+         let frame_dirty = self.invalidator.take_frame_dirty();
+         let draw_started_at = profiler::frame_trace_enabled().then(Instant::now);
++        let draw_usage_start = draw_started_at.map(|_| profiler::ThreadUsage::now());
+         // Drop marks a frame drawn while tracing was being switched on may have left.
+         profiler::take_frame_phases();
+ 
+@@ -3578,6 +3579,10 @@
+ 
+         if let Some(draw_start) = draw_started_at {
+             let phases = profiler::take_frame_phases();
++            let (thread_cpu, page_faults) = match draw_usage_start {
++                Some(start) => profiler::ThreadUsage::now().since(start),
++                None => (None, None),
++            };
+             profiler::record_frame_timing(profiler::FrameTiming {
+                 window_id: self.handle.window_id(),
+                 dirty_at: frame_dirty.dirty_at,
+@@ -3592,6 +3597,8 @@
+                 resolved_fonts: phases.resolved_fonts,
+                 font_resolve_time: phases.font_resolve_time,
+                 splice: phases.splice.unwrap_or_default(),
++                thread_cpu,
++                page_faults,
+             });
+         }
+ 

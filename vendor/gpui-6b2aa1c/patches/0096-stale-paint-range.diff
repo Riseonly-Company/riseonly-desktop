@@ -1,0 +1,99 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4390,12 +4390,17 @@
+                         });
+                     })
+                 })
+-            } else {
++            } else if self.paint_range_in_frame(&deferred_draw.paint_range) {
+                 let range = deferred_draw.paint_range.clone();
+                 self.reuse_paint(range.clone());
+                 // Riseonly 0080: the cached views inside the replayed draw replayed with it.
+                 let replayed = paint_start.clone()..self.paint_index();
+                 crate::view::rebase_nested_paints(&range, &replayed, self);
++            } else {
++                // Riseonly 0096: a range of another frame cannot replay; the draw shows nothing
++                // for this frame and its view renders it fresh in the next one.
++                self.note_stale_paint_range("deferred", deferred_draw.current_view, &deferred_draw.paint_range);
++                cx.notify(deferred_draw.current_view);
+             }
+             let paint_end = self.paint_index();
+             deferred_draw.paint_range = paint_start..paint_end;
+@@ -4764,8 +4769,37 @@
+             .extend(parked.accessed_element_states);
+         self.next_frame.tab_stops.replay(&parked.tab_stops);
+         self.next_frame.scene.replay_operations(&parked.scene);
++    }
++
++    /// Riseonly 0096: whether `range` still indexes the paint of the frame just drawn, every list
++    /// it slices included. A cached view a frame behind replays only such a range: one recorded
++    /// against another frame (X1986: the gift shop sheet closing) aborted the app on the slice.
++    pub(crate) fn paint_range_in_frame(&self, range: &Range<PaintIndex>) -> bool {
++        let frame = &self.rendered_frame;
++        range.start.le(&range.end)
++            && range.end.scene_index <= frame.scene.len()
++            && range.end.mouse_listeners_index <= frame.mouse_listeners.len()
++            && range.end.input_handlers_index <= frame.input_handlers.len()
++            && range.end.cursor_styles_index <= frame.cursor_styles.len()
++            && range.end.accessed_element_states_index <= frame.accessed_element_states.len()
++            && range.end.tab_handle_index <= frame.tab_stops.insertion_history.len()
+     }
+ 
++    /// Riseonly 0096: names a paint range that does not index the frame just drawn, once per
++    /// frame and source, so the log tells which replay kept a range of another frame.
++    pub(crate) fn note_stale_paint_range(&self, source: &str, view_id: EntityId, range: &Range<PaintIndex>) {
++        log::warn!(
++            "gpui 0096 stale paint range source={source} view={} scene={}..{} of {} listeners={} of {} frame={}",
++            crate::profiler::view_type_name(view_id),
++            range.start.scene_index,
++            range.end.scene_index,
++            self.rendered_frame.scene.len(),
++            range.end.mouse_listeners_index,
++            self.rendered_frame.mouse_listeners.len(),
++            self.draw_count,
++        );
++    }
++
+     pub(crate) fn paint_index(&self) -> PaintIndex {
+         PaintIndex {
+             scene_index: self.next_frame.scene.len(),
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -613,7 +613,7 @@
+         if self.dropped_deferred || self.stale_while_hidden {
+             return false;
+         }
+-        self.painted_frame + 1 == window.draw_count
++        (self.painted_frame + 1 == window.draw_count && window.paint_range_in_frame(&self.paint_range))
+             || self
+                 .parked
+                 .as_ref()
+@@ -1067,6 +1067,7 @@
+                                 // now on; keep it for the frame that shows the view again.
+                                 if element_state.parked.is_none()
+                                     && element_state.painted_frame + 1 == window.draw_count
++                                    && window.paint_range_in_frame(&element_state.paint_range)
+                                 {
+                                     element_state.parked =
+                                         Some(window.park_paint(element_state.paint_range.clone()));
+@@ -1220,7 +1221,9 @@
+                                 window.refreshing = refreshing;
+                                 element_state.painted_frame = window.draw_count;
+                                 element_state.painted_under = window.paint_context();
+-                            } else if element_state.painted_frame + 1 == window.draw_count {
++                            } else if element_state.painted_frame + 1 == window.draw_count
++                                && window.paint_range_in_frame(&element_state.paint_range)
++                            {
+                                 let range = element_state.paint_range.clone();
+                                 let now = window.paint_context();
+                                 match element_state.moved_by.take() {
+@@ -1320,6 +1323,9 @@
+                                 // previous frame (the view sat under a hidden div): its range
+                                 // no longer indexes the rendered frame. Skip this frame and
+                                 // render the view fresh in the next one.
++                                if element_state.painted_frame + 1 == window.draw_count {
++                                    window.note_stale_paint_range("view", entity_id, &element_state.paint_range);
++                                }
+                                 cx.notify(entity_id);
+                             }
+ 

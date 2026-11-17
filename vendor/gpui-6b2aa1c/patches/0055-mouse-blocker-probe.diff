@@ -1,0 +1,38 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3058,6 +3058,35 @@
+         self.captured_hitbox
+     }
+ 
++    /// Riseonly 0055: the frontmost hitbox that blocks the mouse at `position` in the frame on
++    /// screen, in the hit test's paint order, with its paint layer and how many hitboxes lie in
++    /// front of it. A diagnostic for a column that stops answering (X1556): it names the size and
++    /// place of the layer that swallows the pointer. Hidden hitboxes are skipped as in the hit test.
++    pub fn mouse_blocker_at(
++        &self,
++        position: Point<Pixels>,
++    ) -> Option<(Bounds<Pixels>, HitboxBehavior, usize, usize)> {
++        let hitboxes = &self.rendered_frame.hitboxes;
++        let mut order: Vec<usize> = (0..hitboxes.len()).collect();
++        order.sort_by_key(|ix| hitboxes[*ix].layer);
++        let mut in_front = 0;
++        for ix in order.into_iter().rev() {
++            let hitbox = &hitboxes[ix];
++            if hitbox.hidden {
++                continue;
++            }
++            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
++            if !bounds.contains(&position) {
++                continue;
++            }
++            if hitbox.behavior != HitboxBehavior::Normal {
++                return Some((bounds, hitbox.behavior, hitbox.layer, in_front));
++            }
++            in_front += 1;
++        }
++        None
++    }
++
+     /// The current state of the keyboard's modifiers
+     pub fn modifiers(&self) -> Modifiers {
+         self.modifiers

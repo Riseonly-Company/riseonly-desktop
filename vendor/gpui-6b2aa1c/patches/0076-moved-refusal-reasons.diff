@@ -1,0 +1,133 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -345,6 +345,21 @@
+         env_fingerprint: u64,
+         window: &Window,
+     ) -> Option<(Point<Pixels>, Point<Pixels>)> {
++        self.moved_replay(entity_id, bounds, content_mask, text_style, env_fingerprint, window).ok()
++    }
++
++    /// [`Self::moved_offset`], or the first check that refused the moved replay, for the frame
++    /// trace (Riseonly 0076): an "origin" miss alone does not say whether a clip, the mouse, a
++    /// fractional step or the environment made the view render.
++    fn moved_replay(
++        &self,
++        entity_id: EntityId,
++        bounds: Bounds<Pixels>,
++        content_mask: &ContentMask<Pixels>,
++        text_style: &TextStyle,
++        env_fingerprint: u64,
++        window: &Window,
++    ) -> Result<(Point<Pixels>, Point<Pixels>), &'static str> {
+         let key = &self.cache_key;
+         let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.001;
+         if window.hidden_depth > 0
+@@ -352,32 +367,34 @@
+             || window.dirty_views.contains(&entity_id)
+             || self.dropped_deferred
+             || self.stale_while_hidden
+-            || self.prepainted_frame + 1 != window.draw_count
+-            || self.painted_frame + 1 != window.draw_count
+         {
+-            return None;
++            return Err("origin:state");
+         }
+-        if key.bounds.size != bounds.size
+-            || key.bounds.origin == bounds.origin
+-            || key.text_style != *text_style
+-            || key.env_fingerprint != env_fingerprint
+-            || !window.ranges_replay_moved(&self.prepaint_range, &self.paint_range)
+-        {
+-            return None;
++        if self.prepainted_frame + 1 != window.draw_count || self.painted_frame + 1 != window.draw_count {
++            return Err("origin:gap");
++        }
++        if key.bounds.size != bounds.size || key.bounds.origin == bounds.origin {
++            return Err("origin:bounds");
++        }
++        if key.text_style != *text_style || key.env_fingerprint != env_fingerprint {
++            return Err("origin:env");
+         }
++        if !window.ranges_replay_moved(&self.prepaint_range, &self.paint_range) {
++            return Err("origin:pinned");
++        }
+         // Riseonly 0067: shown nothing before and nothing after (a pager neighbour outside its clip
+         // on a page sliding in): the replay draws the same nothing, so neither pixel snapping nor
+         // the mouse matter, and the recorded clips move along with it.
+         let offset = bounds.origin - key.bounds.origin;
+         if window.ranges_hidden_by_mask(&self.prepaint_range, &self.paint_range, content_mask.bounds, offset) {
+-            return Some((offset, offset));
++            return Ok((offset, offset));
+         }
+         // Riseonly 0074: shown nothing before, but maybe something now. A moved replay moves every
+         // recorded clip with the view (Primitive::translate), and the clip that hid it was the outer
+         // mask: replayed into the mask it would keep that clip and stay blank for good (gift grid
+         // cells built below the viewport came up black, X1277). It renders instead.
+         if window.ranges_wholly_hidden(&self.prepaint_range, &self.paint_range) {
+-            return None;
++            return Err("origin:wholly_hidden");
+         }
+         // Riseonly 0044: listeners and element states keep the old origin, so a view the mouse is
+         // over before or after the move renders: hover, clicks and drags read fresh positions.
+@@ -385,12 +402,12 @@
+         if window.paint_range_listens(&self.paint_range)
+             && (key.bounds.contains(&mouse) || bounds.contains(&mouse))
+         {
+-            return None;
++            return Err("origin:mouse");
+         }
+         let device = offset.scale(window.scale_factor());
+         let whole = |value: f32| (value - value.round()).abs() < 0.001;
+         if !whole(device.x.0) || !whole(device.y.0) {
+-            return None;
++            return Err("origin:fraction");
+         }
+         // The mask moved along (a clipped cell scrolled whole): every recorded clip moves with it.
+         let old_mask = key.content_mask.bounds;
+@@ -411,11 +428,11 @@
+             && window.ranges_clear_of_mask(&self.prepaint_range, &self.paint_range, new_mask, offset);
+         // Riseonly 0043: the second offset is how far the mask moved, for the callbacks that read it.
+         if mask_moved_along || mask_reshaped_clear {
+-            Some((offset, offset))
++            Ok((offset, offset))
+         } else if mask_stays_clear {
+-            Some((offset, Point::default()))
++            Ok((offset, Point::default()))
+         } else {
+-            None
++            Err("origin:mask")
+         }
+     }
+ 
+@@ -465,6 +482,7 @@
+         content_mask: &ContentMask<Pixels>,
+         text_style: &TextStyle,
+         env_fingerprint: u64,
++        replays_moved: bool,
+         window: &Window,
+     ) -> &'static str {
+         let key = &self.cache_key;
+@@ -475,7 +493,14 @@
+         } else if key.bounds.size != bounds.size {
+             "size"
+         } else if key.bounds.origin != bounds.origin {
+-            "origin"
++            // Riseonly 0076: which check of the moved replay refused it.
++            if replays_moved {
++                self.moved_replay(entity_id, bounds, content_mask, text_style, env_fingerprint, window)
++                    .err()
++                    .unwrap_or("origin")
++            } else {
++                "origin:not_replayable"
++            }
+         } else if key.content_mask != *content_mask && !self.mask_change_clear(content_mask, window) {
+             "mask"
+         } else if key.text_style != *text_style {
+@@ -740,6 +765,7 @@
+                                     &content_mask,
+                                     &text_style,
+                                     env_fingerprint,
++                                    self.replays_moved,
+                                     window,
+                                 ),
+                                 None => "new",

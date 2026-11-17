@@ -1,0 +1,139 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -480,6 +480,34 @@
+     });
+ }
+ 
++/// Riseonly 0063: a cached view that replays its paint in place copies the paint of every cached
++/// view nested in it, but their states kept the paint range and frame of the render that recorded
++/// them, so the next frame that renders the outer view (a settings page after a hover frame) found
++/// each nested view unable to replay (painted_frame) and rendered it too: every wallpaper tile and
++/// switch of the page on every tap (X1284). Each nested view painted in the frame just before and
++/// prepainted in this one (0045 rebased it) now takes the range its paint was copied to and this
++/// frame, as if it had replayed itself. A moved or transformed replay leaves them as they were.
++fn rebase_nested_paints(old: &Range<PaintIndex>, replayed: &Range<PaintIndex>, window: &mut Window) {
++    let frame = window.draw_count;
++    window.update_replayed_paint_states(replayed, view_element_state_type_id(), |state, _| {
++        let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
++            return;
++        };
++        if state.painted_frame + 1 != frame
++            || state.prepainted_frame != frame
++            || state.moved_by.is_some()
++            || state.parked.is_some()
++        {
++            return;
++        }
++        let Some(range) = PaintIndex::rebase_within(&state.paint_range, old, &replayed.start) else {
++            return;
++        };
++        state.paint_range = range;
++        state.painted_frame = frame;
++    });
++}
++
+ struct ViewElementCacheKey {
+     bounds: Bounds<Pixels>,
+     content_mask: ContentMask<Pixels>,
+@@ -784,7 +812,10 @@
+                                     // Riseonly 0041: the prepaint replayed at a new origin.
+                                     Some(offset) => window.reuse_moved_paint(range, offset),
+                                     None if element_state.painted_under.places_alike(&now) => {
+-                                        window.reuse_paint(range)
++                                        window.reuse_paint(range.clone());
++                                        // Riseonly 0063: the cached views inside replayed with it.
++                                        let replayed = paint_start.clone()..window.paint_index();
++                                        rebase_nested_paints(&range, &replayed, window);
+                                     }
+                                     // Riseonly 0053: the transformation around the view moved (a
+                                     // zoom flight): its frame follows the matrix and the clip.
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1109,6 +1109,55 @@
+     accessed_element_states_index: usize,
+     tab_handle_index: usize,
+     line_layout_index: LineLayoutIndex,
++}
++
++impl PaintIndex {
++    /// Where the paint range `inner`, recorded inside `old`, lies after `old` was replayed unmoved
++    /// starting at `new_start` (Riseonly 0063), or None when `inner` is not inside `old`. A same
++    /// place replay copies scene operations, mouse listeners, input handlers, cursor styles,
++    /// element state keys, tab stops and line layouts in order, so every index keeps its distance
++    /// from the start.
++    pub(crate) fn rebase_within(
++        inner: &Range<Self>,
++        old: &Range<Self>,
++        new_start: &Self,
++    ) -> Option<Range<Self>> {
++        let within = |field: fn(&Self) -> usize| {
++            field(&old.start) <= field(&inner.start)
++                && field(&inner.start) <= field(&inner.end)
++                && field(&inner.end) <= field(&old.end)
++        };
++        let layouts = old.start.line_layout_index.clone()..old.end.line_layout_index.clone();
++        if !(within(|index| index.scene_index)
++            && within(|index| index.mouse_listeners_index)
++            && within(|index| index.input_handlers_index)
++            && within(|index| index.cursor_styles_index)
++            && within(|index| index.accessed_element_states_index)
++            && within(|index| index.tab_handle_index)
++            && inner.start.line_layout_index.within(&layouts)
++            && inner.end.line_layout_index.within(&layouts))
++        {
++            return None;
++        }
++        let rebase = |index: &Self| Self {
++            scene_index: index.scene_index - old.start.scene_index + new_start.scene_index,
++            mouse_listeners_index: index.mouse_listeners_index - old.start.mouse_listeners_index
++                + new_start.mouse_listeners_index,
++            input_handlers_index: index.input_handlers_index - old.start.input_handlers_index
++                + new_start.input_handlers_index,
++            cursor_styles_index: index.cursor_styles_index - old.start.cursor_styles_index
++                + new_start.cursor_styles_index,
++            accessed_element_states_index: index.accessed_element_states_index
++                - old.start.accessed_element_states_index
++                + new_start.accessed_element_states_index,
++            tab_handle_index: index.tab_handle_index - old.start.tab_handle_index
++                + new_start.tab_handle_index,
++            line_layout_index: index
++                .line_layout_index
++                .rebased(&old.start.line_layout_index, &new_start.line_layout_index),
++        };
++        Some(rebase(&inner.start)..rebase(&inner.end))
++    }
+ }
+ 
+ impl Frame {
+@@ -3861,6 +3910,31 @@
+     pub(crate) fn update_replayed_states(
+         &mut self,
+         replayed: &Range<PrepaintStateIndex>,
++        type_id: TypeId,
++        mut update: impl FnMut(&mut dyn Any, &mut Self),
++    ) {
++        let keys = self.next_frame.accessed_element_states[replayed
++            .start
++            .accessed_element_states_index
++            ..replayed.end.accessed_element_states_index]
++            .iter()
++            .filter(|(_, state_type)| *state_type == type_id)
++            .cloned()
++            .collect::<Vec<_>>();
++        for key in keys {
++            if let Some(mut state) = self.rendered_frame.element_states.remove(&key) {
++                update(&mut *state.inner, self);
++                self.rendered_frame.element_states.insert(key, state);
++            }
++        }
++    }
++
++    /// Hands every element state of type `type_id` whose key the replayed paint range `replayed`
++    /// copied to `update`, with this window (Riseonly 0063): the cached views nested in a view that
++    /// replayed its paint learn where their paint went, as 0045 does for the prepaint.
++    pub(crate) fn update_replayed_paint_states(
++        &mut self,
++        replayed: &Range<PaintIndex>,
+         type_id: TypeId,
+         mut update: impl FnMut(&mut dyn Any, &mut Self),
+     ) {

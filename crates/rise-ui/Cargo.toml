@@ -1,0 +1,59 @@
+[package]
+name = "rise-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# LottieView rasterises through rise-media's vendored rlottie; without it every
+# animation is the static placeholder iOS draws when the Lottie package is absent.
+rlottie = ["rise-media/rlottie"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# `Shared<Task<_>>`: two elements asking for the same image on one frame must
+# await ONE decode, not start two. gpui's own image cache does the same thing
+# with the same combinator.
+futures.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+tracing.workspace = true
+gpui.workspace = true
+rise-core.workspace = true
+# FlagUi is the one component whose drawing depends on what the host's text
+# stack can render. It still never names an OS: rise-platform answers whether a
+# regional-indicator pair becomes a flag on this machine.
+rise-platform.workspace = true
+rise-theme.workspace = true
+rise-i18n.workspace = true
+rise-energy = { path = "../rise-energy" }
+rise-diagnostics = { path = "../rise-diagnostics" }
+# RiseQRCodeRenderer draws to an RGBA bitmap, not a gpui canvas: the same
+# bitmap goes to the screen and to the JPEG export.
+qrcode.workspace = true
+tiny-skia.workspace = true
+# LottieView: the container check, frame sequence and rasteriser live one crate
+# below the kit; image builds the multi-frame RenderImage the same way rise-media does.
+rise-media.workspace = true
+image = { version = "0.25", default-features = false }
+rise-canon.workspace = true
+rise-engine.workspace = true
+rise-regions.workspace = true
+
+[dev-dependencies]
+# The bundled faces have to be proved to RESOLVE, not merely to exist on disk:
+# Inter's Medium and SemiBold carry their own legacy family names, so a family
+# query can silently answer Regular. Proving otherwise needs a real text system.
+gpui = { workspace = true, features = ["test-support"] }
+
+[build-dependencies]
+# Reads assets/icons/sf-to-lucide.json once, at build time, so a missing icon is
+# a build failure rather than a blank square in a screenshot.
+serde = { workspace = true }
+serde_json.workspace = true

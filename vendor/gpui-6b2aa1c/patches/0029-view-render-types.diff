@@ -1,0 +1,57 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -789,11 +789,33 @@
+     });
+ }
+ 
+-/// Counts a view render of the frame being drawn. No-op unless frame tracing is enabled.
+-pub(crate) fn note_view_rendered() {
++static VIEW_RENDERS_BY_TYPE: spin::Mutex<Option<HashMap<&'static str, u64>>> = spin::Mutex::new(None);
++
++/// Counts a view render of the frame being drawn, and its `Render` type in the run totals.
++/// No-op unless frame tracing is enabled.
++pub(crate) fn note_view_rendered(type_name: &'static str) {
++    if !frame_trace_enabled() {
++        return;
++    }
+     update_frame_phases(|phases| phases.rendered_views = phases.rendered_views.saturating_add(1));
++    let mut counts = VIEW_RENDERS_BY_TYPE.lock();
++    *counts
++        .get_or_insert_with(HashMap::default)
++        .entry(type_name)
++        .or_insert(0) += 1;
+ }
+ 
++/// Renders per view type since frame tracing was enabled, the most rendered first.
++pub fn view_render_counts() -> Vec<(&'static str, u64)> {
++    let counts = VIEW_RENDERS_BY_TYPE.lock();
++    let mut counts: Vec<(&'static str, u64)> = counts
++        .as_ref()
++        .map(|counts| counts.iter().map(|(name, count)| (*name, *count)).collect())
++        .unwrap_or_default();
++    counts.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
++    counts
++}
++
+ /// Marks the start of the paint phase. No-op unless frame tracing is enabled.
+ pub(crate) fn note_paint_start() {
+     update_frame_phases(|phases| phases.paint_start = Some(Instant::now()));
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -164,7 +164,7 @@
+             .a11y
+             .view_type_names
+             .insert(view.entity_id(), std::any::type_name::<V>());
+-        crate::profiler::note_view_rendered();
++        crate::profiler::note_view_rendered(std::any::type_name::<V>());
+         view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+     }
+ }
+@@ -215,6 +215,7 @@
+ 
+     #[inline]
+     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
++        crate::profiler::note_view_rendered(std::any::type_name::<T>());
+         self.update(cx, |this, cx| {
+             Render::render(this, window, cx).into_any_element()
+         })

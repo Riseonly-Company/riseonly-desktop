@@ -1,0 +1,84 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -24,6 +24,17 @@
+ /// Whether `pad` is a glyph swap key whose glyphs may slide (Riseonly 0079).
+ pub fn is_glyph_shift_key(pad: u32) -> bool {
+     pad & GLYPH_SHIFT_KEY_BITS == GLYPH_SHIFT_KEY_BITS
++}
++
++/// Bit 29 of a glyph swap key whose SVG icons carry the key too (Riseonly 0097), with both top bits
++/// clear: an icon painted under such a key can fade in the frame on screen through
++/// [`Scene::fade_glyph_sprites`]. The other glyph key families leave their SVGs unkeyed, so a
++/// recoloured or sliding label keeps its icons as painted.
++pub const SVG_FADE_KEY_BIT: u32 = 1 << 29;
++
++/// Whether `pad` is a glyph swap key whose SVG icons carry it (Riseonly 0097).
++pub fn is_svg_fade_key(pad: u32) -> bool {
++    pad & (GLYPH_SHIFT_KEY_BITS | SVG_FADE_KEY_BIT) == SVG_FADE_KEY_BIT
+ }
+ 
+ #[allow(non_camel_case_types, unused)]
+@@ -674,6 +685,31 @@
+                 && shows_previous(&*sprite)
+             {
+                 sprite.tile = moved(sprite.tile);
++            }
++        }
++        true
++    }
++
++    /// Scales the alpha of every monochrome sprite (glyph or SVG icon) painted under `key` by
++    /// `factor`, in the scene and in the paint operations kept for replay (Riseonly 0097). False
++    /// when no sprite carries the key.
++    pub fn fade_glyph_sprites(&mut self, key: u32, factor: f32) -> bool {
++        if key == 0 || !factor.is_finite() || factor < 0.0 {
++            return false;
++        }
++        let mut found = false;
++        for sprite in self.monochrome_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            sprite.color.a = (sprite.color.a * factor).min(1.0);
++            found = true;
++        }
++        if !found {
++            return false;
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)) = operation
++                && sprite.pad == key
++            {
++                sprite.color.a = (sprite.color.a * factor).min(1.0);
+             }
+         }
+         true
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5344,6 +5344,20 @@
+     /// through its view.
+     pub fn fade_swapped_image(&mut self, key: u32, factor: f32) -> bool {
+         let found = self.rendered_frame.scene.fade_image_sprites(key, factor);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
++    }
++
++    /// Scales the alpha of every glyph and SVG icon of the frame on screen painted under `key` by
++    /// `factor` and presents (Riseonly 0097). SVG icons carry the key only when it is an SVG fade
++    /// key (see [`crate::SVG_FADE_KEY_BIT`] and [`Self::with_glyph_swap_key`]): a pulsing icon
++    /// costs a present, not a render of its view and of every view above it. Call it outside a
++    /// draw. False when no sprite of the frame carries the key; the caller then repaints through
++    /// its view. A fade to zero must stay above zero, or the ratio cannot bring it back.
++    pub fn fade_swapped_glyphs(&mut self, key: u32, factor: f32) -> bool {
++        let found = self.rendered_frame.scene.fade_glyph_sprites(key, factor);
+         if found {
+             self.needs_present.set(true);
+         }
+@@ -6434,7 +6448,7 @@
+ 
+         self.next_frame.scene.insert_primitive(MonochromeSprite {
+             order: 0,
+-            pad: 0,
++            pad: if crate::is_svg_fade_key(self.glyph_swap_key) { self.glyph_swap_key } else { 0 },
+             bounds: final_bounds,
+             content_mask,
+             color: color.opacity(element_opacity),

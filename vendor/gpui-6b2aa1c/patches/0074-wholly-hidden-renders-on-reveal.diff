@@ -1,0 +1,91 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -372,6 +372,13 @@
+         if window.ranges_hidden_by_mask(&self.prepaint_range, &self.paint_range, content_mask.bounds, offset) {
+             return Some((offset, offset));
+         }
++        // Riseonly 0074: shown nothing before, but maybe something now. A moved replay moves every
++        // recorded clip with the view (Primitive::translate), and the clip that hid it was the outer
++        // mask: replayed into the mask it would keep that clip and stay blank for good (gift grid
++        // cells built below the viewport came up black, X1277). It renders instead.
++        if window.ranges_wholly_hidden(&self.prepaint_range, &self.paint_range) {
++            return None;
++        }
+         // Riseonly 0044: listeners and element states keep the old origin, so a view the mouse is
+         // over before or after the move renders: hover, clicks and drags read fresh positions.
+         let mouse = window.mouse_position();
+@@ -418,20 +425,31 @@
+     /// clips stay valid, so the clip alone does not render the view. The key keeps the mask the
+     /// view rendered under, which its recorded primitives carry.
+     fn mask_change_clear(&self, content_mask: &ContentMask<Pixels>, window: &Window) -> bool {
+-        self.painted_frame + 1 == window.draw_count
+-            && self.prepainted_frame + 1 == window.draw_count
+-            && window.ranges_clear_of_mask(
+-                &self.prepaint_range,
+-                &self.paint_range,
+-                self.cache_key.content_mask.bounds,
+-                Point::default(),
+-            )
+-            && window.ranges_clear_of_mask(
++        if self.painted_frame + 1 != window.draw_count || self.prepainted_frame + 1 != window.draw_count {
++            return false;
++        }
++        // Riseonly 0074: a view the old mask hid whole replays only while the new one hides it too;
++        // a mask growing over it (a page sliding in) renders it, its recorded clips are the old mask.
++        if window.ranges_wholly_hidden(&self.prepaint_range, &self.paint_range) {
++            return window.ranges_hidden_by_mask(
+                 &self.prepaint_range,
+                 &self.paint_range,
+                 content_mask.bounds,
+                 Point::default(),
+-            )
++            );
++        }
++        window.ranges_clear_of_mask(
++            &self.prepaint_range,
++            &self.paint_range,
++            self.cache_key.content_mask.bounds,
++            Point::default(),
++        )
++        && window.ranges_clear_of_mask(
++            &self.prepaint_range,
++            &self.paint_range,
++            content_mask.bounds,
++            Point::default(),
++        )
+     }
+ 
+     /// Whether the recorded prepaint may replay in this frame (Riseonly 0034). Under a hidden div it
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3838,6 +3838,30 @@
+     /// whenever the mouse is over it.
+     pub(crate) fn paint_range_listens(&self, paint: &Range<PaintIndex>) -> bool {
+         paint.start.mouse_listeners_index != paint.end.mouse_listeners_index
++    }
++
++    /// Whether a cached view drew and hit-tests something in the frame just drawn, all of it cut away
++    /// whole by the clip it recorded (Riseonly 0074). Such a view keeps the outer mask in those clips,
++    /// so a replay that shows it again (moved, or under a grown mask) would still show nothing.
++    pub(crate) fn ranges_wholly_hidden(
++        &self,
++        prepaint: &Range<PrepaintStateIndex>,
++        paint: &Range<PaintIndex>,
++    ) -> bool {
++        let hitboxes = &self.rendered_frame.hitboxes[prepaint.start.hitboxes_index..prepaint.end.hitboxes_index];
++        let mut any = !hitboxes.is_empty();
++        if !hitboxes.iter().all(|hitbox| !hitbox.bounds.intersects(&hitbox.content_mask.bounds)) {
++            return false;
++        }
++        for operation in &self.rendered_frame.scene.paint_operations[paint.start.scene_index..paint.end.scene_index] {
++            if let crate::scene::PaintOperation::Primitive(primitive) = operation {
++                if primitive.painted_bounds().intersects(&primitive.content_mask().bounds) {
++                    return false;
++                }
++                any = true;
++            }
++        }
++        any
+     }
+ 
+     /// Whether a cached view showed nothing in the frame just drawn and shows nothing once moved by

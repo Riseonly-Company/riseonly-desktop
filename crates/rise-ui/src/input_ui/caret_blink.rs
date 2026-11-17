@@ -1,0 +1,181 @@
+use std::time::Duration;
+
+use gpui::{AnyWindowHandle, Bounds, EntityId, Hsla, Path, Pixels, Size};
+
+pub const BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
+pub const PAUSE_AFTER_EDIT: Duration = Duration::from_millis(500);
+
+/// where the caret was last painted
+/// a blink tick recolors that path in the frame on screen instead of notifying the field
+/// a notify dirties every ancestor
+#[derive(Clone, Copy, Debug)]
+pub struct CaretSwap {
+    pub key: u64,
+    pub size: Size<Pixels>,
+    pub color: Hsla,
+    pub window: AnyWindowHandle,
+}
+
+/// swap key of a field caret
+/// its entity id under its own tag so it never clashes with other swappable paths
+pub fn caret_swap_key(field: EntityId) -> u64 {
+    field.as_u64() ^ (0x43 << 56)
+}
+
+/// the caret as a path, two triangles over bounds
+pub fn caret_path(bounds: Bounds<Pixels>) -> Path<Pixels> {
+    let mut path = Path::new(bounds.origin);
+    path.line_to(bounds.top_right());
+    path.line_to(bounds.bottom_right());
+    path.line_to(bounds.bottom_left());
+    path
+}
+
+/// the blink cycle with no timer in it
+/// every wake up carries its epoch and disturbing the cycle bumps it
+/// so an in flight timer does nothing
+#[derive(Clone, Copy, Debug)]
+pub struct CaretBlink {
+    visible: bool,
+    paused: bool,
+    focused: bool,
+    epoch: u64,
+}
+
+impl Default for CaretBlink {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            paused: true,
+            focused: false,
+            epoch: 0,
+        }
+    }
+}
+
+impl CaretBlink {
+    pub fn is_visible(&self) -> bool {
+        self.focused && self.visible
+    }
+
+    /// true when focused, a caret is drawn lit or dark by phase
+    pub fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub fn is_current(&self, epoch: u64) -> bool {
+        self.epoch == epoch
+    }
+
+    /// shows the caret, stops the cycle and returns the epoch a resume must carry
+    pub fn interrupt(&mut self) -> u64 {
+        self.visible = true;
+        self.paused = true;
+        self.epoch += 1;
+        self.epoch
+    }
+
+    pub fn focus(&mut self) -> u64 {
+        self.focused = true;
+        self.interrupt()
+    }
+
+    pub fn blur(&mut self) -> u64 {
+        self.focused = false;
+        self.visible = true;
+        self.paused = true;
+        self.epoch += 1;
+        self.epoch
+    }
+
+    /// restarts the cycle if this wake up is still the current one
+    pub fn resume(&mut self, epoch: u64) -> bool {
+        if self.epoch != epoch || !self.focused {
+            return false;
+        }
+        self.paused = false;
+        true
+    }
+
+    /// flips the caret if this wake up is still current, false means drop the timer
+    pub fn tick(&mut self, epoch: u64) -> bool {
+        if self.epoch != epoch || self.paused || !self.focused {
+            return false;
+        }
+        self.visible = !self.visible;
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unfocused_caret_is_never_drawn() {
+        let blink = CaretBlink::default();
+        assert!(!blink.is_visible());
+    }
+
+    #[test]
+    fn a_focused_caret_starts_solid_and_then_blinks() {
+        let mut blink = CaretBlink::default();
+        let epoch = blink.focus();
+        assert!(blink.is_visible());
+
+        assert!(blink.resume(epoch));
+        assert!(blink.tick(epoch));
+        assert!(!blink.is_visible());
+        assert!(blink.tick(epoch));
+        assert!(blink.is_visible());
+    }
+
+    #[test]
+    fn typing_stops_the_blink_and_keeps_the_caret_solid() {
+        let mut blink = CaretBlink::default();
+        let epoch = blink.focus();
+        blink.resume(epoch);
+        blink.tick(epoch);
+        assert!(!blink.is_visible());
+
+        let typed = blink.interrupt();
+        assert!(blink.is_visible());
+
+        assert!(!blink.tick(typed), "paused ticks must not flip the caret");
+        assert!(blink.is_visible());
+
+        for _ in 0..30 {
+            blink.interrupt();
+            assert!(blink.is_visible());
+        }
+    }
+
+    #[test]
+    fn a_timer_from_before_an_edit_resolves_into_nothing() {
+        let mut blink = CaretBlink::default();
+        let stale = blink.focus();
+        blink.resume(stale);
+        blink.interrupt();
+
+        assert!(!blink.tick(stale));
+        assert!(!blink.resume(stale));
+        assert!(blink.is_visible());
+    }
+
+    #[test]
+    fn blurring_invalidates_the_cycle() {
+        let mut blink = CaretBlink::default();
+        let epoch = blink.focus();
+        blink.resume(epoch);
+        let blurred = blink.blur();
+
+        assert!(!blink.is_visible());
+        assert!(!blink.tick(blurred));
+        assert!(!blink.resume(blurred));
+    }
+}

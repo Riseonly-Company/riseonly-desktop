@@ -1,0 +1,129 @@
+--- a/crates/gpui/src/text_system/line_wrapper.rs
++++ b/crates/gpui/src/text_system/line_wrapper.rs
+@@ -1,4 +1,4 @@
+-use crate::{FontId, Pixels, SharedString, TextRun, TextSystem, px};
++use crate::{FontId, LineLayout, Pixels, SharedString, TextRun, TextSystem, px};
+ use collections::HashMap;
+ use std::{borrow::Cow, iter, sync::Arc};
+ 
+@@ -304,6 +304,49 @@
+         }
+     }
+ 
++    /// Truncate one line from the end at its shaped glyph positions: every glyph whose right edge
++    /// (the next glyph's origin) fits in `truncate_width` minus the affix stays (patch 0025).
++    pub fn truncate_shaped_line_end<'a>(
++        &mut self,
++        line: SharedString,
++        layout: &LineLayout,
++        truncate_width: Pixels,
++        truncation_affix: &str,
++        runs: &'a [TextRun],
++    ) -> (SharedString, Cow<'a, [TextRun]>) {
++        if layout.width <= truncate_width {
++            return (line, Cow::Borrowed(runs));
++        }
++        let affix_width = truncation_affix
++            .chars()
++            .map(|c| self.width_for_char(c))
++            .fold(px(0.0), |a, x| a + x);
++        let limit = truncate_width - affix_width;
++        let mut glyphs = layout
++            .runs
++            .iter()
++            .flat_map(|run| run.glyphs.iter())
++            .map(|glyph| (glyph.index, glyph.position.x))
++            .peekable();
++        let mut truncate_ix = 0;
++        while let Some((index, _)) = glyphs.next() {
++            let right = glyphs.peek().map_or(layout.width, |(_, x)| *x);
++            if right > limit {
++                truncate_ix = index;
++                break;
++            }
++            truncate_ix = glyphs.peek().map_or(line.len(), |(next, _)| *next);
++        }
++        let truncate_ix = line.floor_char_boundary(truncate_ix.min(line.len()));
++        let result = SharedString::from(format!(
++            "{}{truncation_affix}",
++            line[..truncate_ix].trim_end_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
++        ));
++        let mut runs = runs.to_vec();
++        update_runs_after_truncation(&result, truncation_affix, &mut runs, TruncateFrom::End);
++        (result, Cow::Owned(runs))
++    }
++
+     /// Truncate text to fit within a given number of wrapped lines.
+     ///
+     /// Unlike `truncate_line` which treats the text as a flat width budget
+--- a/crates/gpui/src/elements/text.rs
++++ b/crates/gpui/src/elements/text.rs
+@@ -706,29 +706,46 @@
+                             &runs,
+                             truncate_from,
+                         )
+-                    } else if let Some(unclipped) = window
+-                        .text_system()
+-                        .shape_text(text.clone(), font_size, &runs, None, None)
+-                        .log_err()
+-                        && unclipped
+-                            .iter()
+-                            .all(|line| line.size(line_height).width <= truncate_width)
+-                    {
+-                        // The truncation decision below sums per-character advances,
+-                        // which overestimates the shaped width (no kerning), truncating
+-                        // text that fits exactly in its measured width. Skip truncation
+-                        // whenever the honestly-shaped text fits; the shaping result
+-                        // comes from the line layout cache when the same text was
+-                        // already measured untruncated this frame.
+-                        (text.clone(), Cow::Borrowed(&*runs))
+                     } else {
+-                        line_wrapper.truncate_line(
+-                            text.clone(),
+-                            truncate_width,
+-                            &truncation_affix,
+-                            &runs,
+-                            truncate_from,
+-                        )
++                        let unclipped = window
++                            .text_system()
++                            .shape_text(text.clone(), font_size, &runs, None, None)
++                            .log_err();
++                        if let Some(unclipped) = unclipped.as_ref()
++                            && unclipped
++                                .iter()
++                                .all(|line| line.size(line_height).width <= truncate_width)
++                        {
++                            // The truncation decision below sums per-character advances,
++                            // which overestimates the shaped width (no kerning), truncating
++                            // text that fits exactly in its measured width. Skip truncation
++                            // whenever the honestly-shaped text fits; the shaping result
++                            // comes from the line layout cache when the same text was
++                            // already measured untruncated this frame.
++                            (text.clone(), Cow::Borrowed(&*runs))
++                        } else if let Some(unclipped) = unclipped.as_ref()
++                            && truncate_from == TruncateFrom::End
++                            && let [line] = unclipped.as_slice()
++                        {
++                            // Patch 0025: cut where the shaped glyphs overflow, not where the
++                            // summed advances do, so the kept text ends at the box edge with
++                            // no gap of overestimated width before the next element.
++                            line_wrapper.truncate_shaped_line_end(
++                                text.clone(),
++                                &line.unwrapped_layout,
++                                truncate_width,
++                                &truncation_affix,
++                                &runs,
++                            )
++                        } else {
++                            line_wrapper.truncate_line(
++                                text.clone(),
++                                truncate_width,
++                                &truncation_affix,
++                                &runs,
++                                truncate_from,
++                            )
++                        }
+                     }
+                 } else {
+                     (text.clone(), Cow::Borrowed(&*runs))

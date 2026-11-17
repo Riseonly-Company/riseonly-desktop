@@ -1,0 +1,131 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -280,6 +280,58 @@
+             }
+         }
+         slots.values().all(|&slot| found[slot])
++    }
++
++    /// Recolours in place every glyph sprite carrying `key` in its pad (Riseonly 0056): `colour`
++    /// gets the place of the glyph centre across the span of all glyphs of the key, 0 at the
++    /// left edge and 1 at the right; the sprite keeps its alpha. The copies kept for replay take
++    /// it too. False when no glyph carries the key.
++    pub fn swap_glyph_colours(&mut self, key: u32, colour: &dyn Fn(f32) -> Hsla) -> bool {
++        if key == 0 {
++            return false;
++        }
++        let mut span: Option<(f32, f32)> = None;
++        let mut widen = |bounds: &Bounds<ScaledPixels>| {
++            let (left, right) = (bounds.origin.x.0, bounds.origin.x.0 + bounds.size.width.0);
++            span = Some(match span {
++                Some((min, max)) => (min.min(left), max.max(right)),
++                None => (left, right),
++            });
++        };
++        for sprite in self.monochrome_sprites.iter().filter(|sprite| sprite.pad == key) {
++            widen(&sprite.bounds);
++        }
++        for sprite in self.subpixel_sprites.iter().filter(|sprite| sprite.pad == key) {
++            widen(&sprite.bounds);
++        }
++        let Some((min, max)) = span else {
++            return false;
++        };
++        let width = (max - min).max(1.0);
++        let recolour = |bounds: &Bounds<ScaledPixels>, color: &mut Hsla| {
++            let place = ((bounds.origin.x.0 + bounds.size.width.0 / 2.0 - min) / width).clamp(0.0, 1.0);
++            let alpha = color.a;
++            *color = colour(place);
++            color.a = alpha;
++        };
++        for sprite in self.monochrome_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            recolour(&sprite.bounds, &mut sprite.color);
++        }
++        for sprite in self.subpixel_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            recolour(&sprite.bounds, &mut sprite.color);
++        }
++        for operation in &mut self.paint_operations {
++            match operation {
++                PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)) if sprite.pad == key => {
++                    recolour(&sprite.bounds, &mut sprite.color);
++                }
++                PaintOperation::Primitive(Primitive::SubpixelSprite(sprite)) if sprite.pad == key => {
++                    recolour(&sprite.bounds, &mut sprite.color);
++                }
++                _ => {}
++            }
++        }
++        true
+     }
+ 
+     pub fn finish(&mut self) {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1273,6 +1273,7 @@
+     pub(crate) rendered_entity_stack: Vec<EntityId>,
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
++    pub(crate) glyph_swap_key: u32,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+     pub(crate) surface_corner_clip_stack: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
+     pub(crate) transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
+@@ -2042,6 +2043,7 @@
+             surface_corner_clip_stack: Vec::new(),
+             transformation_stack: Vec::new(),
+             element_opacity: 1.0,
++            glyph_swap_key: 0,
+             requested_autoscroll: None,
+             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+@@ -4215,7 +4217,33 @@
+         self.element_opacity = previous_opacity * opacity;
+         let result = f(self);
+         self.element_opacity = previous_opacity;
++        result
++    }
++
++    /// Marks every glyph `f` paints with `key` (Riseonly 0056), so [`Self::swap_glyph_colours`]
++    /// can recolour them in the frame on screen. Zero names nothing.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    pub fn with_glyph_swap_key<R>(&mut self, key: u32, f: impl FnOnce(&mut Self) -> R) -> R {
++        self.invalidator.debug_assert_paint();
++        let previous = self.glyph_swap_key;
++        self.glyph_swap_key = key;
++        let result = f(self);
++        self.glyph_swap_key = previous;
+         result
++    }
++
++    /// Gives every glyph of the frame on screen painted under `key` the colour `colour` returns
++    /// for its place across the span of those glyphs (0 at the left edge, 1 at the right), keeping
++    /// the alpha it was painted with, and presents (Riseonly 0056): a sweep over a label moves
++    /// with a present, without a render, layout or paint of the views around it. False when no
++    /// glyph of the frame carries the key; the caller then repaints through its view.
++    pub fn swap_glyph_colours(&mut self, key: u32, colour: &dyn Fn(f32) -> Hsla) -> bool {
++        let found = self.rendered_frame.scene.swap_glyph_colours(key, colour);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
+     }
+ 
+     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
+@@ -5076,7 +5104,7 @@
+             if subpixel_rendering {
+                 self.next_frame.scene.insert_primitive(SubpixelSprite {
+                     order: 0,
+-                    pad: 0,
++                    pad: self.glyph_swap_key,
+                     bounds,
+                     content_mask,
+                     color: color.opacity(element_opacity),
+@@ -5086,7 +5114,7 @@
+             } else {
+                 self.next_frame.scene.insert_primitive(MonochromeSprite {
+                     order: 0,
+-                    pad: 0,
++                    pad: self.glyph_swap_key,
+                     bounds,
+                     content_mask,
+                     color: color.opacity(element_opacity),

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>        <string>en</string>
+    <key>CFBundleName</key>                     <string>@APP_NAME@</string>
+    <key>CFBundleDisplayName</key>              <string>@APP_NAME@</string>
+    <key>CFBundleIdentifier</key>               <string>@BUNDLE_ID@</string>
+    <key>CFBundleExecutable</key>               <string>riseonly</string>
+    <key>CFBundleIconFile</key>                 <string>AppIcon</string>
+    <key>CFBundlePackageType</key>              <string>APPL</string>
+    <key>CFBundleShortVersionString</key>       <string>@SHORT_VERSION@</string>
+    <key>CFBundleVersion</key>                  <string>@BUILD_NUMBER@</string>
+    <key>LSMinimumSystemVersion</key>           <string>13.0</string>
+    <key>NSHighResolutionCapable</key>          <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key> <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>         <string>Editor</string>
+            <key>CFBundleURLName</key>          <string>@BUNDLE_ID@</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>@URL_SCHEME@</string></array>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>         <string>Media and files</string>
+            <key>CFBundleTypeRole</key>         <string>Viewer</string>
+            <key>LSHandlerRank</key>            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+                <string>public.movie</string>
+                <string>public.audio</string>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict><key>default</key><string>Send to @APP_NAME@</string></dict>
+            <key>NSMessage</key>                <string>shareToRiseonly</string>
+            <key>NSPortName</key>               <string>@APP_NAME@</string>
+            <key>NSRequiredContext</key>        <dict/>
+            <key>NSSendTypes</key>
+            <array><string>public.utf8-plain-text</string></array>
+            <key>NSSendFileTypes</key>
+            <array><string>public.item</string></array>
+        </dict>
+    </array>
+    <key>NSUserActivityTypes</key>
+    <array><string>INSendMessageIntent</string></array>
+    <key>NSMicrophoneUsageDescription</key>     <string>Riseonly needs microphone access for voice messages, calls, and voice or video rooms.</string>
+    <key>NSCameraUsageDescription</key>         <string>Riseonly needs camera access for video messages, video calls, and live video rooms.</string>
+    <key>NSLocationUsageDescription</key>       <string>Riseonly shows your position to the map friends you chose and draws the routes you travel. Nothing is shared until you turn the map on.</string>
+    <key>NSLocationWhenInUseUsageDescription</key> <string>Riseonly shows your position to the map friends you chose and draws the routes you travel. Nothing is shared until you turn the map on.</string>
+    <key>NSContactsUsageDescription</key>     <string>Riseonly uses your contacts to find people you know and notify you when they join Riseonly.</string>
+    <key>NSPhotoLibraryUsageDescription</key> <string>Riseonly needs access to your photo library so you can attach and edit photos and videos in chats, and so that shots you take can appear on your map routes as drafts only you see.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key> <string>Riseonly saves photos and videos you created in the app to your photo library.</string>
+</dict>
+</plist>

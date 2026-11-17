@@ -1,0 +1,106 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -326,6 +326,29 @@
+         }
+     }
+ 
++    /// Replays a range of the previous scene moved by `offset` under another element opacity
++    /// (Riseonly 0085): a cached row riding a fade keeps its frame instead of rendering.
++    pub(crate) fn replay_moved_faded(
++        &mut self,
++        range: Range<usize>,
++        prev_scene: &Scene,
++        offset: Point<ScaledPixels>,
++        factor: f32,
++    ) {
++        for operation in &prev_scene.paint_operations[range] {
++            match operation {
++                PaintOperation::Primitive(primitive) => {
++                    let mut primitive = primitive.clone();
++                    primitive.translate(offset);
++                    primitive.fade(factor);
++                    self.insert_primitive(primitive);
++                }
++                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds + offset),
++                PaintOperation::EndLayer => self.pop_layer(),
++            }
++        }
++    }
++
+     /// Replays a range of the previous scene in place under another element opacity (Riseonly
+     /// 0065): each colour takes `factor`, the new opacity over the one it was painted with.
+     pub(crate) fn replay_faded(&mut self, range: Range<usize>, prev_scene: &Scene, factor: f32) {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1011,6 +1011,8 @@
+     Transformed(TransformedReplay),
+     /// In place under another element opacity, colours times the factor (Riseonly 0065).
+     Faded(f32),
++    /// Moved by an offset in scaled pixels under another element opacity (Riseonly 0085).
++    MovedFaded(Point<ScaledPixels>, f32),
+ }
+ 
+ /// A prepaint callback that reads window positions, recorded so a cached view replayed at a new
+@@ -4230,6 +4232,25 @@
+         self.reuse_paint_at(range, PaintReplay::Moved(offset));
+     }
+ 
++    /// Replays a paint range of the frame just drawn moved by `offset`, painted under the opacity
++    /// of `painted`, as the paint under the opacity of `now` (Riseonly 0085). False, replaying
++    /// nothing, when either opacity is zero, as [`Self::reuse_faded_paint`].
++    pub(crate) fn reuse_moved_faded_paint(
++        &mut self,
++        range: Range<PaintIndex>,
++        offset: Point<Pixels>,
++        painted: &PaintContext,
++        now: &PaintContext,
++    ) -> bool {
++        if painted.opacity <= 0.0 || now.opacity <= 0.0 {
++            return false;
++        }
++        let offset = offset.scale(self.scale_factor());
++        let factor = now.opacity / painted.opacity;
++        self.reuse_paint_at(range, PaintReplay::MovedFaded(offset, factor));
++        true
++    }
++
+     fn reuse_paint_at(&mut self, range: Range<PaintIndex>, replay: PaintReplay) {
+         self.next_frame.cursor_styles.extend(
+             self.rendered_frame.cursor_styles
+@@ -4279,6 +4300,12 @@
+                     .scene
+                     .replay_faded(scene_range, &self.rendered_frame.scene, factor)
+             }
++            PaintReplay::MovedFaded(offset, factor) => self.next_frame.scene.replay_moved_faded(
++                scene_range,
++                &self.rendered_frame.scene,
++                offset,
++                factor,
++            ),
+             PaintReplay::Same => self
+                 .next_frame
+                 .scene
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -1040,6 +1040,21 @@
+                                 let now = window.paint_context();
+                                 match element_state.moved_by.take() {
+                                     // Riseonly 0041: the prepaint replayed at a new origin.
++                                    // Riseonly 0085: moved inside a fade (rows sliding while the
++                                    // list fades a refresh in): the replay takes the offset and the
++                                    // fade at once. Nested cached views are not rebased, as after
++                                    // the in-place faded replay, so they render once.
++                                    Some(offset)
++                                        if !Window::same_opacity(&element_state.painted_under, &now)
++                                            && window.reuse_moved_faded_paint(
++                                                range.clone(),
++                                                offset,
++                                                &element_state.painted_under,
++                                                &now,
++                                            ) =>
++                                    {
++                                        element_state.painted_under = now;
++                                    }
+                                     Some(offset) => {
+                                         window.reuse_moved_paint(range.clone(), offset);
+                                         // Riseonly 0073: the cached views inside moved with it.

@@ -1,0 +1,118 @@
+use gpui::{App, Global, KeyBinding, actions};
+
+pub const KEY_CONTEXT: &str = "InputUi";
+
+actions!(
+    rise_input,
+    [
+        Backspace,
+        BackspaceLine,
+        BackspaceWord,
+        Cancel,
+        Confirm,
+        Copy,
+        Cut,
+        Delete,
+        DeleteLine,
+        DeleteWord,
+        FocusNext,
+        FocusPrevious,
+        MoveDocumentEnd,
+        MoveDocumentStart,
+        MoveDown,
+        MoveLeft,
+        MoveLineEnd,
+        MoveLineStart,
+        MoveRight,
+        MoveUp,
+        MoveWordLeft,
+        MoveWordRight,
+        Paste,
+        Redo,
+        SelectAll,
+        SelectDocumentEnd,
+        SelectDocumentStart,
+        SelectDown,
+        SelectLeft,
+        SelectLineEnd,
+        SelectLineStart,
+        SelectRight,
+        SelectUp,
+        SelectWordLeft,
+        SelectWordRight,
+        ShowCharacterPalette,
+        Undo,
+    ]
+);
+
+struct KeyBindingsInstalled;
+
+impl Global for KeyBindingsInstalled {}
+
+/// safe to call from anywhere and more than once
+pub fn install_key_bindings(cx: &mut App) {
+    if cx.has_global::<KeyBindingsInstalled>() {
+        return;
+    }
+    cx.set_global(KeyBindingsInstalled);
+    crate::layer_keys::install_key_bindings(cx);
+
+    let context = Some(KEY_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("left", MoveLeft, context),
+        KeyBinding::new("right", MoveRight, context),
+        KeyBinding::new("up", MoveUp, context),
+        KeyBinding::new("down", MoveDown, context),
+        KeyBinding::new("shift-left", SelectLeft, context),
+        KeyBinding::new("shift-right", SelectRight, context),
+        KeyBinding::new("shift-up", SelectUp, context),
+        KeyBinding::new("shift-down", SelectDown, context),
+        KeyBinding::new("alt-left", MoveWordLeft, context),
+        KeyBinding::new("alt-right", MoveWordRight, context),
+        KeyBinding::new("ctrl-left", MoveWordLeft, context),
+        KeyBinding::new("ctrl-right", MoveWordRight, context),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, context),
+        KeyBinding::new("alt-shift-right", SelectWordRight, context),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, context),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, context),
+        KeyBinding::new("home", MoveLineStart, context),
+        KeyBinding::new("end", MoveLineEnd, context),
+        KeyBinding::new("cmd-left", MoveLineStart, context),
+        KeyBinding::new("cmd-right", MoveLineEnd, context),
+        KeyBinding::new("shift-home", SelectLineStart, context),
+        KeyBinding::new("shift-end", SelectLineEnd, context),
+        KeyBinding::new("cmd-shift-left", SelectLineStart, context),
+        KeyBinding::new("cmd-shift-right", SelectLineEnd, context),
+        KeyBinding::new("cmd-up", MoveDocumentStart, context),
+        KeyBinding::new("cmd-down", MoveDocumentEnd, context),
+        KeyBinding::new("ctrl-home", MoveDocumentStart, context),
+        KeyBinding::new("ctrl-end", MoveDocumentEnd, context),
+        KeyBinding::new("cmd-shift-up", SelectDocumentStart, context),
+        KeyBinding::new("cmd-shift-down", SelectDocumentEnd, context),
+        KeyBinding::new("ctrl-shift-home", SelectDocumentStart, context),
+        KeyBinding::new("ctrl-shift-end", SelectDocumentEnd, context),
+        KeyBinding::new("backspace", Backspace, context),
+        KeyBinding::new("delete", Delete, context),
+        KeyBinding::new("alt-backspace", BackspaceWord, context),
+        KeyBinding::new("ctrl-backspace", BackspaceWord, context),
+        KeyBinding::new("alt-delete", DeleteWord, context),
+        KeyBinding::new("ctrl-delete", DeleteWord, context),
+        KeyBinding::new("cmd-backspace", BackspaceLine, context),
+        KeyBinding::new("cmd-delete", DeleteLine, context),
+        KeyBinding::new("secondary-a", SelectAll, context),
+        KeyBinding::new("secondary-c", Copy, context),
+        KeyBinding::new("secondary-x", Cut, context),
+        KeyBinding::new("secondary-v", Paste, context),
+        KeyBinding::new("shift-insert", Paste, context),
+        KeyBinding::new("ctrl-insert", Copy, context),
+        KeyBinding::new("shift-delete", Cut, context),
+        KeyBinding::new("secondary-z", Undo, context),
+        KeyBinding::new("secondary-shift-z", Redo, context),
+        KeyBinding::new("ctrl-y", Redo, context),
+        KeyBinding::new("enter", Confirm, context),
+        KeyBinding::new("escape", Cancel, context),
+        KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
+        KeyBinding::new("tab", FocusNext, context),
+        KeyBinding::new("shift-tab", FocusPrevious, context),
+    ]);
+}

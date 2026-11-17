@@ -1,0 +1,15 @@
+--- a/crates/gpui/src/text_system/line_layout.rs	2026-11-12 17:17:28
++++ b/crates/gpui/src/text_system/line_layout.rs	2026-11-12 17:17:33
+@@ -165,7 +165,11 @@
+             // Here is very similar to `LineWrapper::wrap_line` to determine text wrapping,
+             // but there are some differences, so we have to duplicate the code here.
+             if LineWrapper::is_word_char(ch) {
+-                if prev_ch == ' ' && ch != ' ' && first_non_whitespace_ix.is_some() {
++                // The same break after a hyphen inside a word as `LineWrapper::wrap_line`
++                // (patch 0023): shaped text wraps here, not in the wrapper.
++                let after_hyphen = prev_ch == '-' && ch.is_alphabetic();
++                if (prev_ch == ' ' || after_hyphen) && ch != ' ' && first_non_whitespace_ix.is_some()
++                {
+                     last_candidate_ix = Some(boundary);
+                     last_candidate_x = x;
+                 }

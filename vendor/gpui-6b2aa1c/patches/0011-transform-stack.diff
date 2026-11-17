@@ -1,0 +1,321 @@
+--- a/crates/gpui/src/window.rs	2026-11-04 20:01:37
++++ b/crates/gpui/src/window.rs	2026-11-04 20:01:37
+@@ -1096,6 +1096,7 @@
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
++    pub(crate) transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
+     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+     pub(crate) image_cache_stack: Vec<AnyImageCache>,
+     pub(crate) rendered_frame: Frame,
+@@ -1846,6 +1847,7 @@
+             rendered_entity_stack: Vec::new(),
+             element_offset_stack: Vec::new(),
+             content_mask_stack: Vec::new(),
++            transformation_stack: Vec::new(),
+             element_opacity: 1.0,
+             requested_autoscroll: None,
+             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+@@ -3514,6 +3516,36 @@
+         let result = f(self);
+         self.element_offset_stack.pop();
+         result
++    }
++
++    /// Paints what `f` paints through `transformation`, given in scaled pixels of the window and
++    /// composed with the transformation already active. Layout and hit testing stay
++    /// untransformed. Quads and paths become transformed paths, glyphs and svgs carry the matrix
++    /// on their sprite; images, emoji, shadows, underlines and surfaces stay untransformed. The
++    /// content mask active here clips everything `f` paints; masks pushed inside `f` are ignored.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    pub fn with_transformation<R>(
++        &mut self,
++        transformation: TransformationMatrix,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        self.invalidator.debug_assert_paint();
++        let mask = self.content_mask();
++        let composed = self.transformation().compose(transformation);
++        self.transformation_stack.push((composed, mask));
++        let result = f(self);
++        self.transformation_stack.pop();
++        result
++    }
++
++    /// The transformation [`Window::with_transformation`] applies to what is painted now, in
++    /// scaled pixels of the window.
++    pub fn transformation(&self) -> TransformationMatrix {
++        self.transformation_stack
++            .last()
++            .map(|(transformation, _)| *transformation)
++            .unwrap_or_default()
+     }
+ 
+     pub(crate) fn with_element_opacity<R>(
+@@ -3636,6 +3668,11 @@
+     /// Obtain the current content mask. This method should only be called during element drawing.
+     pub fn content_mask(&self) -> ContentMask<Pixels> {
+         self.invalidator.debug_assert_paint_or_prepaint();
++        // Masks pushed under a transformation are in untransformed coordinates while the scene
++        // clips in window coordinates, so the mask active when it was pushed clips all of it.
++        if let Some((_, mask)) = self.transformation_stack.last() {
++            return mask.clone();
++        }
+         self.content_mask_stack
+             .last()
+             .cloned()
+@@ -4018,6 +4055,12 @@
+     pub fn paint_quad(&mut self, quad: PaintQuad) {
+         self.invalidator.debug_assert_paint();
+ 
++        let transformation = self.transformation();
++        if transformation != TransformationMatrix::unit() {
++            self.paint_transformed_quad(quad, transformation);
++            return;
++        }
++
+         let opacity = self.element_opacity();
+         let snapped_bounds = self.snap_bounds(quad.bounds);
+         let snapped_border_widths = self.snap_border_widths(quad.border_widths);
+@@ -4095,11 +4138,105 @@
+         path.content_mask = content_mask;
+         let color: Background = color.into();
+         path.color = color.opacity(opacity);
++        let transformation = self.transformation();
++        if transformation != TransformationMatrix::unit() {
++            transform_path(&mut path, &transformation, scale_factor);
++        }
+         self.next_frame
+             .scene
+             .insert_primitive(path.scale(scale_factor));
+     }
+ 
++    fn paint_transformed_quad(&mut self, quad: PaintQuad, transformation: TransformationMatrix) {
++        let opacity = self.element_opacity();
++        let scale_factor = self.scale_factor();
++        let bounds = quad.bounds;
++        let radii = quad.corner_radii.clamp_radii_for_quad_size(bounds.size);
++        let outer = rounded_rect_outline(bounds, radii);
++
++        let background = quad.background.opacity(opacity);
++        if !background.is_transparent() {
++            let center = bounds.center();
++            let triangles = outer
++                .iter()
++                .zip(outer.iter().cycle().skip(1))
++                .map(|(from, to)| [center, *from, *to]);
++            self.insert_transformed_triangles(
++                triangles,
++                rotated_background(background, &transformation),
++                &transformation,
++                scale_factor,
++            );
++        }
++
++        let widths = quad.border_widths;
++        let border_color = quad.border_color.opacity(opacity);
++        let has_border = widths.top > Pixels::ZERO
++            || widths.right > Pixels::ZERO
++            || widths.bottom > Pixels::ZERO
++            || widths.left > Pixels::ZERO;
++        if has_border && !border_color.is_transparent() {
++            let inner_bounds = Bounds {
++                origin: point(bounds.origin.x + widths.left, bounds.origin.y + widths.top),
++                size: size(
++                    (bounds.size.width - widths.left - widths.right).max(Pixels::ZERO),
++                    (bounds.size.height - widths.top - widths.bottom).max(Pixels::ZERO),
++                ),
++            };
++            let inner_radii = Corners {
++                top_left: (radii.top_left - widths.top.max(widths.left)).max(Pixels::ZERO),
++                top_right: (radii.top_right - widths.top.max(widths.right)).max(Pixels::ZERO),
++                bottom_right: (radii.bottom_right - widths.bottom.max(widths.right))
++                    .max(Pixels::ZERO),
++                bottom_left: (radii.bottom_left - widths.bottom.max(widths.left))
++                    .max(Pixels::ZERO),
++            }
++            .clamp_radii_for_quad_size(inner_bounds.size);
++            let inner = rounded_rect_outline(inner_bounds, inner_radii);
++            let count = outer.len();
++            let triangles = (0..count).flat_map(|index| {
++                let next = (index + 1) % count;
++                [
++                    [outer[index], outer[next], inner[index]],
++                    [inner[index], outer[next], inner[next]],
++                ]
++            });
++            self.insert_transformed_triangles(
++                triangles,
++                Background::from(border_color),
++                &transformation,
++                scale_factor,
++            );
++        }
++    }
++
++    fn insert_transformed_triangles(
++        &mut self,
++        triangles: impl IntoIterator<Item = [Point<Pixels>; 3]>,
++        color: Background,
++        transformation: &TransformationMatrix,
++        scale_factor: f32,
++    ) {
++        let mut path: Option<Path<Pixels>> = None;
++        for triangle in triangles {
++            let [a, b, c] =
++                triangle.map(|vertex| transform_point(transformation, vertex, scale_factor));
++            let path = path.get_or_insert_with(|| Path::new(a));
++            path.push_triangle(
++                (a, b, c),
++                (point(0., 1.), point(0., 1.), point(0., 1.)),
++            );
++        }
++        let Some(mut path) = path else {
++            return;
++        };
++        path.content_mask = self.content_mask();
++        path.color = color;
++        self.next_frame
++            .scene
++            .insert_primitive(path.scale(scale_factor));
++    }
++
+     /// Paint an underline into the scene for the next frame at the current z-index.
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+@@ -4199,6 +4336,7 @@
+         );
+         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
+         let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
++        let transformation = self.transformation();
+         let dilation = self.text_system().glyph_dilation_for_color(color);
+         let params = RenderGlyphParams {
+             font_id,
+@@ -4234,7 +4372,7 @@
+                     content_mask,
+                     color: color.opacity(element_opacity),
+                     tile,
+-                    transformation: TransformationMatrix::unit(),
++                    transformation,
+                 });
+             } else {
+                 self.next_frame.scene.insert_primitive(MonochromeSprite {
+@@ -4244,7 +4382,7 @@
+                     content_mask,
+                     color: color.opacity(element_opacity),
+                     tile,
+-                    transformation: TransformationMatrix::unit(),
++                    transformation,
+                 });
+             }
+         }
+@@ -4347,6 +4485,7 @@
+         self.invalidator.debug_assert_paint();
+ 
+         let element_opacity = self.element_opacity();
++        let transformation = self.transformation().compose(transformation);
+         let bounds = self.snap_bounds(bounds);
+ 
+         let params = RenderSvgParams {
+@@ -6796,8 +6935,100 @@
+         border_color: border_color.into(),
+         border_style,
+     }
++}
++
++/// Segments each rounded corner of a transformed quad is tessellated into.
++const TRANSFORMED_CORNER_SEGMENTS: usize = 8;
++
++/// Maps a point in window pixels through a transformation given in scaled pixels.
++fn transform_point(
++    transformation: &TransformationMatrix,
++    point: Point<Pixels>,
++    scale_factor: f32,
++) -> Point<Pixels> {
++    let scaled = transformation.apply(Point::new(
++        Pixels(point.x.0 * scale_factor),
++        Pixels(point.y.0 * scale_factor),
++    ));
++    Point::new(
++        Pixels(scaled.x.0 / scale_factor),
++        Pixels(scaled.y.0 / scale_factor),
++    )
+ }
+ 
++fn transform_path(path: &mut Path<Pixels>, transformation: &TransformationMatrix, scale_factor: f32) {
++    let mut bounds: Option<Bounds<Pixels>> = None;
++    for vertex in &mut path.vertices {
++        vertex.xy_position = transform_point(transformation, vertex.xy_position, scale_factor);
++        let corner = Bounds {
++            origin: vertex.xy_position,
++            size: Size::default(),
++        };
++        bounds = Some(match bounds {
++            Some(bounds) => bounds.union(&corner),
++            None => corner,
++        });
++    }
++    if let Some(bounds) = bounds {
++        path.bounds = bounds;
++    }
++}
++
++/// The outline of a rounded rectangle, clockwise from the top left corner, with the same number
++/// of points for any radii so two outlines can be stitched into a ring.
++fn rounded_rect_outline(bounds: Bounds<Pixels>, radii: Corners<Pixels>) -> Vec<Point<Pixels>> {
++    let corners = [
++        (
++            radii.top_left,
++            point(bounds.left() + radii.top_left, bounds.top() + radii.top_left),
++            std::f32::consts::PI,
++        ),
++        (
++            radii.top_right,
++            point(bounds.right() - radii.top_right, bounds.top() + radii.top_right),
++            std::f32::consts::PI * 1.5,
++        ),
++        (
++            radii.bottom_right,
++            point(
++                bounds.right() - radii.bottom_right,
++                bounds.bottom() - radii.bottom_right,
++            ),
++            0.,
++        ),
++        (
++            radii.bottom_left,
++            point(bounds.left() + radii.bottom_left, bounds.bottom() - radii.bottom_left),
++            std::f32::consts::FRAC_PI_2,
++        ),
++    ];
++    let mut outline = Vec::with_capacity(corners.len() * (TRANSFORMED_CORNER_SEGMENTS + 1));
++    for (radius, center, start) in corners {
++        for step in 0..=TRANSFORMED_CORNER_SEGMENTS {
++            let angle = start
++                + std::f32::consts::FRAC_PI_2 * step as f32 / TRANSFORMED_CORNER_SEGMENTS as f32;
++            outline.push(point(
++                center.x + Pixels(radius.0 * angle.cos()),
++                center.y + Pixels(radius.0 * angle.sin()),
++            ));
++        }
++    }
++    outline
++}
++
++/// A linear gradient turns with the content it fills; the other backgrounds have no direction.
++fn rotated_background(background: Background, transformation: &TransformationMatrix) -> Background {
++    if background.tag != crate::color::BackgroundTag::LinearGradient {
++        return background;
++    }
++    let degrees = transformation.rotation_scale[1][0]
++        .atan2(transformation.rotation_scale[0][0])
++        .to_degrees();
++    let mut rotated = background;
++    rotated.gradient_angle_or_pattern_height += degrees;
++    rotated
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{

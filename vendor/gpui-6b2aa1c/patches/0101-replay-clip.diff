@@ -1,0 +1,57 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -1229,6 +1229,14 @@
+                             // boundary, outside its paint range, so each replay opens it anew.
+                             let boundary = reopened || (self.replays_moved && window.begin_clip_boundary());
+                             let fresh = element.is_some();
++                            // Riseonly 0101: primitives painted inside a boundary keep masks
++                            // relative to it. Replayed where no boundary opens (under a
++                            // transformation), the scene cuts them by the mask around the view, so a
++                            // row does not spill out of the scroll clip.
++                            let replay_clip = !boundary
++                                && !fresh
++                                && element_state.relative_clips
++                                && window.begin_replay_clip();
+                             let paint_start = window.paint_index();
+                             // Riseonly 0088: the state this paint runs under, for a hole record.
+                             let mut hole_paint = if self.hole_prepaint.is_some() {
+@@ -1358,10 +1366,14 @@
+ 
+                             let paint_end = window.paint_index();
+                             element_state.paint_range = paint_start..paint_end;
+-                            element_state.relative_clips = boundary && (fresh || element_state.relative_clips);
++                            element_state.relative_clips =
++                                (boundary || replay_clip) && (fresh || element_state.relative_clips);
+                             if boundary && !reopened {
+                                 window.end_clip_boundary();
+                             }
++                            if replay_clip {
++                                window.end_replay_clip();
++                            }
+ 
+                             let hole_prepaint = self.hole_prepaint.take();
+                             let hole_view = self.hole_view.take();
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5855,6 +5855,21 @@
+         self.next_frame.scene.pop_clip();
+     }
+ 
++    /// Opens a scene clip around the replay of a paint recorded inside a clip boundary when no
++    /// boundary opens now (Riseonly 0101): under a transformation the masks are those of
++    /// the window, so the mask around the view cuts the relative primitives. Nothing is painted
++    /// fresh inside, so the paint mask stays. False when not opened.
++    pub(crate) fn begin_replay_clip(&mut self) -> bool {
++        let clip = self.cover_bounds(self.content_mask().bounds);
++        self.next_frame.scene.push_clip(clip);
++        true
++    }
++
++    /// Closes the clip [`Self::begin_replay_clip`] opened (Riseonly 0101).
++    pub(crate) fn end_replay_clip(&mut self) {
++        self.next_frame.scene.pop_clip();
++    }
++
+     /// Obtain the current content mask. This method should only be called during element drawing.
+     pub fn content_mask(&self) -> ContentMask<Pixels> {
+         self.invalidator.debug_assert_paint_or_prepaint();

@@ -1,0 +1,22 @@
+--- a/crates/gpui/src/text_system.rs	2026-11-05 01:30:38
++++ b/crates/gpui/src/text_system.rs	2026-11-05 01:30:38
+@@ -321,7 +321,8 @@
+     }
+ 
+     /// Get the rasterized size and location of a specific, rendered glyph.
+-    pub(crate) fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
++    /// The device-pixel bounds of a glyph raster, relative to its pen position.
++    pub fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+         let raster_bounds = self.raster_bounds.upgradable_read();
+         if let Some(bounds) = raster_bounds.get(params) {
+             Ok(*bounds)
+@@ -333,7 +334,8 @@
+         }
+     }
+ 
+-    pub(crate) fn rasterize_glyph(
++    /// Rasterizes a glyph off the frame: its size and bytes, one per pixel, or BGRA for an emoji.
++    pub fn rasterize_glyph(
+         &self,
+         params: &RenderGlyphParams,
+     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {

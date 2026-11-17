@@ -1,0 +1,104 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -527,6 +527,9 @@
+                 *transformation = delta.compose(*transformation);
+             }
+         };
++        if replay.fade != 1.0 {
++            self.fade(replay.fade);
++        }
+         match self {
+             Primitive::Shadow(shadow) => shadow.content_mask = replay.snapped_mask.clone(),
+             Primitive::Quad(quad) => quad.content_mask = replay.snapped_mask.clone(),
+@@ -557,7 +560,40 @@
+                     surface.corner_clip_bounds = snapped(map_bounds(&surface.corner_clip_bounds));
+                 }
+                 surface.content_mask = replay.snapped_mask.clone();
++            }
++        }
++    }
++
++    /// Multiplies the element opacity the primitive was painted under by `factor` (Riseonly 0059),
++    /// above 1 too: a colour painted at alpha `a * o` takes `a * o * factor`. A surface carries no
++    /// element opacity.
++    fn fade(&mut self, factor: f32) {
++        fn faded(color: &mut Hsla, factor: f32) {
++            color.a = (color.a * factor).clamp(0.0, 1.0);
++        }
++        fn faded_background(background: &mut Background, factor: f32) {
++            faded(&mut background.solid, factor);
++            for stop in &mut background.colors {
++                faded(&mut stop.color, factor);
++            }
++        }
++        match self {
++            Primitive::Shadow(shadow) => faded(&mut shadow.color, factor),
++            Primitive::Quad(quad) => {
++                faded_background(&mut quad.background, factor);
++                faded(&mut quad.border_color, factor);
++            }
++            Primitive::Underline(underline) => faded(&mut underline.color, factor),
++            Primitive::Path(path) => {
++                faded_background(&mut path.color, factor);
++                path.swap_opacity = (path.swap_opacity * factor).clamp(0.0, 1.0);
++            }
++            Primitive::MonochromeSprite(sprite) => faded(&mut sprite.color, factor),
++            Primitive::SubpixelSprite(sprite) => faded(&mut sprite.color, factor),
++            Primitive::PolychromeSprite(sprite) => {
++                sprite.opacity = (sprite.opacity * factor).clamp(0.0, 1.0);
+             }
++            Primitive::Surface(_) => {}
+         }
+     }
+ 
+@@ -986,6 +1022,8 @@
+ pub(crate) struct TransformedReplay {
+     /// The new transformation after the inverse of the old one: an axis-aligned scale and a move.
+     pub(crate) delta: TransformationMatrix,
++    /// The opacity now over the opacity painted with (Riseonly 0059): 1 when it stayed.
++    pub(crate) fade: f32,
+     /// The mask the new transformation clips with, as a path keeps it.
+     pub(crate) path_mask: ContentMask<ScaledPixels>,
+     /// The same mask snapped out to device pixels, as every other primitive keeps it.
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3916,8 +3916,9 @@
+     /// Replays a paint range of the frame just drawn, painted under `painted`, as the paint under
+     /// `now` (Riseonly 0053): a cached view under a zoom flight keeps its frame while the matrix
+     /// and the clip around it move. False, replaying nothing, when the replay would not be what a
+-    /// paint draws: a turn or a mirror, a paint outside any transformation, another opacity, or a
+-    /// clip that now shows what the old one cut away (the scene dropped those primitives).
++    /// paint draws: a turn or a mirror, a paint outside any transformation, an opacity that was or
++    /// is zero, or a clip that now shows what the old one cut away (the scene dropped those
++    /// primitives). Another nonzero opacity fades the replayed colours (Riseonly 0059).
+     pub(crate) fn reuse_transformed_paint(
+         &mut self,
+         range: Range<PaintIndex>,
+@@ -3938,8 +3939,17 @@
+             let [[scale_x, shear_x], [shear_y, scale_y]] = matrix.rotation_scale;
+             shear_x == 0.0 && shear_y == 0.0 && scale_x > 0.0 && scale_y > 0.0
+         }
+-        if painted.opacity != now.opacity
+-            || !scales_only(&painted.transformation)
++        // Riseonly 0059: a modal appears scaling and fading at once; the replay fades its colours
++        // by the ratio instead of rendering every cached view under it in every frame (X1275).
++        // A paint at zero opacity dropped its transparent primitives, so it cannot fade back in.
++        let fade = if painted.opacity == now.opacity {
++            1.0
++        } else if painted.opacity > 0.0 && now.opacity > 0.0 {
++            now.opacity / painted.opacity
++        } else {
++            return None;
++        };
++        if !scales_only(&painted.transformation)
+             || !scales_only(&now.transformation)
+         {
+             return None;
+@@ -3987,6 +3997,7 @@
+         }
+         Some(TransformedReplay {
+             delta,
++            fade,
+             path_mask: new_mask.scale(scale),
+             snapped_mask: ContentMask {
+                 bounds: self.cover_bounds(new_mask.bounds),

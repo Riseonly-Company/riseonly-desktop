@@ -1,0 +1,23 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -423,11 +423,16 @@
+                         let text_style = window.text_style();
+                         let env_fingerprint = window.env_fingerprint;
+ 
++                        // Riseonly 0037: a hidden view paints nothing, so a moved key (the centre
++                        // narrowed by a panel, a new mask or environment) does not render it while
++                        // hidden. It replays its last frame and keeps the old key, so the frame that
++                        // shows it again renders it fresh when the key still differs.
+                         if let Some(mut element_state) = element_state
+-                            && element_state.cache_key.bounds == bounds
+-                            && element_state.cache_key.content_mask == content_mask
+-                            && element_state.cache_key.text_style == text_style
+-                            && element_state.cache_key.env_fingerprint == env_fingerprint
++                            && (window.hidden_depth > 0
++                                || (element_state.cache_key.bounds == bounds
++                                    && element_state.cache_key.content_mask == content_mask
++                                    && element_state.cache_key.text_style == text_style
++                                    && element_state.cache_key.env_fingerprint == env_fingerprint))
+                             && !window.dirty_views.contains(&entity_id)
+                             && !window.refreshing
+                             && element_state.prepainted_frame + 1 == window.draw_count

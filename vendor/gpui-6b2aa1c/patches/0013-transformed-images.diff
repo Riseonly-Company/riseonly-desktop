@@ -1,0 +1,243 @@
+--- a/crates/gpui/src/window.rs	2026-11-05 00:26:02
++++ b/crates/gpui/src/window.rs	2026-11-05 00:26:02
+@@ -3520,8 +3520,8 @@
+ 
+     /// Paints what `f` paints through `transformation`, given in scaled pixels of the window and
+     /// composed with the transformation already active. Layout and hit testing stay
+-    /// untransformed. Quads and paths become transformed paths, glyphs and svgs carry the matrix
+-    /// on their sprite; images, emoji, shadows, underlines and surfaces stay untransformed. The
++    /// untransformed. Quads and paths become transformed paths; glyphs, svgs, images and emoji
++    /// carry the matrix on their sprite; shadows, underlines and surfaces stay untransformed. The
+     /// content mask active here clips everything `f` paints; masks pushed inside `f` are ignored.
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+@@ -4455,6 +4455,7 @@
+             };
+             let content_mask = self.snapped_content_mask();
+             let opacity = self.element_opacity();
++            let transformation = self.transformation();
+ 
+             self.next_frame.scene.insert_primitive(PolychromeSprite {
+                 order: 0,
+@@ -4465,6 +4466,7 @@
+                 content_mask,
+                 tile,
+                 opacity,
++                transformation,
+             });
+         }
+         Ok(())
+@@ -4628,6 +4630,7 @@
+             .clamp_radii_for_quad_size(visible_bounds.size)
+             .scale(self.scale_factor());
+         let opacity = self.element_opacity();
++        let transformation = self.transformation();
+ 
+         self.next_frame.scene.insert_primitive(PolychromeSprite {
+             order: 0,
+@@ -4638,6 +4641,7 @@
+             corner_radii,
+             tile: sub_tile,
+             opacity,
++            transformation,
+         });
+         Ok(())
+     }
+--- a/crates/gpui/src/scene.rs	2026-11-05 00:26:02
++++ b/crates/gpui/src/scene.rs	2026-11-05 00:26:02
+@@ -253,6 +253,9 @@
+                 transformed_bounds(&sprite.bounds, &sprite.transformation)
+             }
+             Primitive::SubpixelSprite(sprite) => {
++                transformed_bounds(&sprite.bounds, &sprite.transformation)
++            }
++            Primitive::PolychromeSprite(sprite) => {
+                 transformed_bounds(&sprite.bounds, &sprite.transformation)
+             }
+             primitive => *primitive.bounds(),
+@@ -801,6 +804,7 @@
+     pub content_mask: ContentMask<ScaledPixels>,
+     pub corner_radii: Corners<ScaledPixels>,
+     pub tile: AtlasTile,
++    pub transformation: TransformationMatrix,
+ }
+ 
+ impl From<PolychromeSprite> for Primitive {
+--- a/crates/gpui_macos/src/shaders.metal	2026-11-05 00:26:02
++++ b/crates/gpui_macos/src/shaders.metal	2026-11-05 00:26:02
+@@ -675,6 +675,7 @@
+ struct PolychromeSpriteVertexOutput {
+   float4 position [[position]];
+   float2 tile_position;
++  float2 local_position;
+   uint sprite_id [[flat]];
+   float clip_distance [[clip_distance]][4];
+ };
+@@ -682,6 +683,7 @@
+ struct PolychromeSpriteFragmentInput {
+   float4 position [[position]];
+   float2 tile_position;
++  float2 local_position;
+   uint sprite_id [[flat]];
+ };
+ 
+@@ -697,13 +699,17 @@
+   float2 unit_vertex = unit_vertices[unit_vertex_id];
+   PolychromeSprite sprite = sprites[sprite_id];
+   float4 device_position =
+-      to_device_position(unit_vertex, sprite.bounds, viewport_size);
+-  float4 clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds,
+-                                                 sprite.content_mask.bounds);
++      to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation, viewport_size);
++  float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds,
++                                                 sprite.content_mask.bounds, sprite.transformation);
+   float2 tile_position = to_tile_position(unit_vertex, sprite.tile, atlas_size);
++  float2 local_position =
++      unit_vertex * float2(sprite.bounds.size.width, sprite.bounds.size.height) +
++      float2(sprite.bounds.origin.x, sprite.bounds.origin.y);
+   return PolychromeSpriteVertexOutput{
+       device_position,
+       tile_position,
++      local_position,
+       sprite_id,
+       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+ }
+@@ -717,8 +723,12 @@
+                                           min_filter::linear);
+   float4 sample =
+       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
++  // The edge is measured in the sprite's own space so it turns with the sprite; the scale keeps
++  // it one device pixel wide.
+   float distance =
+-      quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
++      quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii) *
++      sqrt(abs(sprite.transformation.rotation_scale[0][0] * sprite.transformation.rotation_scale[1][1] -
++               sprite.transformation.rotation_scale[0][1] * sprite.transformation.rotation_scale[1][0]));
+ 
+   float4 color = sample;
+   if (sprite.grayscale) {
+--- a/crates/gpui_wgpu/src/shaders.wgsl	2026-11-05 00:26:02
++++ b/crates/gpui_wgpu/src/shaders.wgsl	2026-11-05 00:26:02
+@@ -1268,6 +1268,7 @@
+     content_mask: Bounds,
+     corner_radii: Corners,
+     tile: AtlasTile,
++    transformation: TransformationMatrix,
+ }
+ 
+ 
+@@ -1275,6 +1276,7 @@
+     @builtin(position) position: vec4<f32>,
+     @location(0) tile_position: vec2<f32>,
+     @location(1) @interpolate(flat) sprite_id: u32,
++    @location(2) local_position: vec2<f32>,
+     @location(3) clip_distances: vec4<f32>,
+ }
+ 
+@@ -1284,10 +1286,11 @@
+     let sprite = load_poly_sprite(instance_id);
+ 
+     var out = PolySpriteVarying();
+-    out.position = to_device_position(unit_vertex, sprite.bounds);
++    out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
+     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+     out.sprite_id = instance_id;
+-    out.clip_distances = distance_from_clip_rect(unit_vertex, sprite.bounds, sprite.content_mask);
++    out.local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
++    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
+     return out;
+ }
+ 
+@@ -1300,7 +1303,9 @@
+     }
+ 
+     let sprite = load_poly_sprite(input.sprite_id);
+-    let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
++    // The edge is measured in the sprite's own space so it turns with the sprite; the scale keeps
++    // it one device pixel wide.
++    let distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii) * sqrt(abs(determinant(sprite.transformation.rotation_scale)));
+ 
+     var color = sample;
+     if (sprite.grayscale != 0u) {
+--- a/crates/gpui_wgpu/src/shaders_webgl.wgsl	2026-11-05 00:26:02
++++ b/crates/gpui_wgpu/src/shaders_webgl.wgsl	2026-11-05 00:26:02
+@@ -207,7 +207,7 @@
+ }
+ 
+ fn load_poly_sprite(instance_id: u32) -> PolychromeSprite {
+-    var cursor = instance_cursor(instance_id * 24u);
++    var cursor = instance_cursor(instance_id * 30u);
+     return PolychromeSprite(
+         read_word(&cursor),
+         read_word(&cursor),
+@@ -217,5 +217,6 @@
+         read_bounds(&cursor),
+         read_corners(&cursor),
+         read_atlas_tile(&cursor),
++        read_transformation(&cursor),
+     );
+ }
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs	2026-11-05 00:26:02
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs	2026-11-05 00:26:02
+@@ -2501,6 +2501,6 @@
+         assert_eq!(std::mem::size_of::<Underline>(), 16 * 4);
+         assert_eq!(std::mem::size_of::<MonochromeSprite>(), 28 * 4);
+         assert_eq!(std::mem::size_of::<SubpixelSprite>(), 28 * 4);
+-        assert_eq!(std::mem::size_of::<PolychromeSprite>(), 24 * 4);
++        assert_eq!(std::mem::size_of::<PolychromeSprite>(), 30 * 4);
+     }
+ }
+--- a/crates/gpui_windows/src/shaders.hlsl	2026-11-05 00:26:02
++++ b/crates/gpui_windows/src/shaders.hlsl	2026-11-05 00:26:02
+@@ -1219,12 +1219,14 @@
+     Bounds content_mask;
+     Corners corner_radii;
+     AtlasTile tile;
++    TransformationMatrix transformation;
+ };
+ 
+ struct PolychromeSpriteVertexOutput {
+     nointerpolation uint sprite_id: TEXCOORD0;
+     float4 position: SV_Position;
+     float2 tile_position: POSITION;
++    float2 local_position: TEXCOORD1;
+     float4 clip_distance: SV_ClipDistance;
+ };
+ 
+@@ -1232,6 +1234,7 @@
+     nointerpolation uint sprite_id: TEXCOORD0;
+     float4 position: SV_Position;
+     float2 tile_position: POSITION;
++    float2 local_position: TEXCOORD1;
+ };
+ 
+ StructuredBuffer<PolychromeSprite> poly_sprites: register(t1);
+@@ -1240,14 +1243,14 @@
+     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
+     uint sprite_id = batch_start_index + instance_id;
+     PolychromeSprite sprite = poly_sprites[sprite_id];
+-    float4 device_position = to_device_position(unit_vertex, sprite.bounds);
+-    float4 clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds,
+-                                                    sprite.content_mask);
++    float4 device_position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
++    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
+     float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
+ 
+     PolychromeSpriteVertexOutput output;
+     output.position = device_position;
+     output.tile_position = tile_position;
++    output.local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
+     output.sprite_id = sprite_id;
+     output.clip_distance = clip_distance;
+     return output;
+@@ -1256,7 +1259,9 @@
+ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
+     PolychromeSprite sprite = poly_sprites[input.sprite_id];
+     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
+-    float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
++    // The edge is measured in the sprite's own space so it turns with the sprite; the scale keeps
++    // it one device pixel wide.
++    float distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii) * sqrt(abs(determinant(sprite.transformation.rotation_scale)));
+ 
+     float4 color = sample;
+     if (sprite.grayscale != 0u) {

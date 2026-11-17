@@ -1,0 +1,108 @@
+diff -ruN a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+--- a/crates/gpui_linux/src/linux/wayland/client.rs	2026-11-04 18:32:03
++++ b/crates/gpui_linux/src/linux/wayland/client.rs	2026-11-04 18:32:41
+@@ -1188,6 +1188,13 @@
+             return;
+         };
+         if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
++            // An image is offered under its own MIME type (Clipboard::send serves its bytes);
++            // the text types are offered when the item has text or holds no image at all.
++            let image_mime_type = item.entries().iter().find_map(|entry| match entry {
++                gpui::ClipboardEntry::Image(image) => Some(image.format.mime_type()),
++                _ => None,
++            });
++            let offers_text = item.text().is_some() || image_mime_type.is_none();
+             state.clipboard.set(item);
+             let Some(serial) = state.serial_tracker.selection_serial() else {
+                 log::warn!(
+@@ -1197,8 +1204,13 @@
+             };
+             let data_source = data_device_manager
+                 .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
+-            for mime_type in TEXT_MIME_TYPES {
++            if let Some(mime_type) = image_mime_type {
+                 data_source.offer(mime_type.to_string());
++            }
++            if offers_text {
++                for mime_type in TEXT_MIME_TYPES {
++                    data_source.offer(mime_type.to_string());
++                }
+             }
+             data_source.offer(state.clipboard.self_mime());
+             data_device.set_selection(Some(&data_source), serial.as_raw());
+diff -ruN a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+--- a/crates/gpui_linux/src/linux/wayland/clipboard.rs	2026-11-04 18:32:03
++++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs	2026-11-04 18:32:41
+@@ -180,8 +180,17 @@
+         self.self_mime.clone()
+     }
+ 
+-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
+-        if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
++    pub fn send(&self, mime_type: String, fd: OwnedFd) {
++        let Some(contents) = self.contents.as_ref() else {
++            return;
++        };
++        let image = contents.entries().iter().find_map(|entry| match entry {
++            ClipboardEntry::Image(image) if image.format.mime_type() == mime_type => Some(image),
++            _ => None,
++        });
++        if let Some(image) = image {
++            self.send_bytes(fd, image.bytes.clone());
++        } else if let Some(text) = contents.text() {
+             self.send_bytes(fd, text.as_bytes().to_owned());
+         }
+     }
+diff -ruN a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+--- a/crates/gpui_linux/src/linux/x11/client.rs	2026-11-04 18:32:03
++++ b/crates/gpui_linux/src/linux/x11/client.rs	2026-11-04 18:32:41
+@@ -1750,13 +1750,24 @@
+ 
+     fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
+         let mut state = self.0.borrow_mut();
+-        state
+-            .clipboard
+-            .set_text(
+-                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
++        // An item with no text but an image owns CLIPBOARD under the image's own type.
++        let image = item.entries().iter().find_map(|entry| match entry {
++            gpui::ClipboardEntry::Image(image) => Some(image.clone()),
++            _ => None,
++        });
++        let written = match (item.text(), image) {
++            (None, Some(image)) => state.clipboard.set_image(
++                image,
+                 clipboard::ClipboardKind::Clipboard,
+                 clipboard::WaitConfig::None,
+-            )
++            ),
++            (text, _) => state.clipboard.set_text(
++                std::borrow::Cow::Owned(text.unwrap_or_default()),
++                clipboard::ClipboardKind::Clipboard,
++                clipboard::WaitConfig::None,
++            ),
++        };
++        written
+             .context("X11: Failed to write to clipboard (clipboard)")
+             .log_with_level(log::Level::Debug);
+         state.clipboard_item.replace(item);
+diff -ruN a/crates/gpui_linux/src/linux/x11/clipboard.rs b/crates/gpui_linux/src/linux/x11/clipboard.rs
+--- a/crates/gpui_linux/src/linux/x11/clipboard.rs	2026-11-04 18:32:03
++++ b/crates/gpui_linux/src/linux/x11/clipboard.rs	2026-11-04 18:32:41
+@@ -1004,7 +1004,6 @@
+         }
+     }
+ 
+-    #[allow(unused)]
+     pub(crate) fn set_image(
+         &self,
+         image: Image,
+@@ -1014,7 +1013,7 @@
+         let format = self.image_format_atom(image.format);
+         let data = vec![ClipboardData {
+             bytes: image.bytes,
+-            format: self.inner.atoms.PNG__MIME,
++            format,
+         }];
+         self.inner.write(data, selection, wait)
+     }

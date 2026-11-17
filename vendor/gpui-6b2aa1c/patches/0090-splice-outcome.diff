@@ -1,0 +1,182 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -18,7 +18,7 @@
+ 
+ use serde::{Deserialize, Serialize};
+ 
+-use crate::{SharedString, TasksIncluded, WindowId};
++use crate::{EntityId, SharedString, TasksIncluded, WindowId};
+ 
+ #[cfg(feature = "profiler")]
+ #[doc(hidden)]
+@@ -732,6 +732,11 @@
+     pub resolved_fonts: u32,
+     /// Riseonly 0081: time spent resolving those fonts.
+     pub font_resolve_time: Duration,
++    /// Riseonly 0090: how the frame was drawn with respect to the 0088 splice: `spliced`, or why
++    /// the full draw ran (`refresh`, `root`, `no_notify`, `unspliceable`, `viewport`, `a11y`,
++    /// `prompt`, `drag`, `inspector`, `no_hole:<view type>`, `order`, `size:<view type>`); empty
++    /// when no draw pass ran.
++    pub splice: &'static str,
+ }
+ 
+ impl FrameTiming {
+@@ -784,8 +789,38 @@
+     pub(crate) shape_time: Duration,
+     pub(crate) resolved_fonts: u32,
+     pub(crate) font_resolve_time: Duration,
++    pub(crate) splice: Option<&'static str>,
++}
++
++/// Riseonly 0090: the splice outcome of the frame being drawn on this thread (see
++/// [`FrameTiming::splice`]). No-op unless frame tracing is enabled.
++pub(crate) fn note_splice(outcome: &'static str) {
++    update_frame_phases(|phases| phases.splice = Some(outcome));
+ }
+ 
++static VIEW_TYPES: spin::Mutex<Option<HashMap<EntityId, &'static str>>> = spin::Mutex::new(None);
++
++/// Riseonly 0090: remembers the `Render` type of a view that rendered, so a splice refusal can name
++/// the notified view. No-op unless frame tracing is enabled.
++pub(crate) fn note_view_type(view_id: EntityId, type_name: &'static str) {
++    if !frame_trace_enabled() {
++        return;
++    }
++    VIEW_TYPES
++        .lock()
++        .get_or_insert_with(HashMap::default)
++        .insert(view_id, type_name);
++}
++
++/// Riseonly 0090: the `Render` type a view last rendered as, `?` when unknown.
++pub(crate) fn view_type_name(view_id: EntityId) -> &'static str {
++    VIEW_TYPES
++        .lock()
++        .as_ref()
++        .and_then(|types| types.get(&view_id).copied())
++        .unwrap_or("?")
++}
++
+ /// Riseonly 0081: counts a line the platform text system shaped on this thread's frame.
+ /// No-op unless frame tracing is enabled.
+ pub(crate) fn note_text_shaped(elapsed: Duration) {
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -169,6 +169,7 @@
+             .view_type_names
+             .insert(view.entity_id(), std::any::type_name::<V>());
+         crate::profiler::note_view_rendered(std::any::type_name::<V>());
++        crate::profiler::note_view_type(view.entity_id(), std::any::type_name::<V>());
+         view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+     }
+ }
+@@ -220,6 +221,7 @@
+     #[inline]
+     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+         crate::profiler::note_view_rendered(std::any::type_name::<T>());
++        crate::profiler::note_view_type(Entity::entity_id(&self), std::any::type_name::<T>());
+         self.update(cx, |this, cx| {
+             Render::render(this, window, cx).into_any_element()
+         })
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3561,6 +3561,7 @@
+                 shape_time: phases.shape_time,
+                 resolved_fonts: phases.resolved_fonts,
+                 font_resolve_time: phases.font_resolve_time,
++                splice: phases.splice.unwrap_or_default(),
+             });
+         }
+ 
+@@ -3819,19 +3820,44 @@
+     /// every view up to the root and laid out the window, 9-12 ms). False, with the frame being
+     /// drawn untouched, when the frame cannot be spliced.
+     fn try_splice(&mut self, cx: &mut App) -> bool {
+-        if self.refreshing
+-            || self.root_dirty
+-            || self.direct_dirty.is_empty()
+-            || !self.rendered_frame.spliceable
+-            || self.rendered_frame.viewport != (self.viewport_size, self.scale_factor)
+-            || self.a11y.is_active()
+-            || self.prompt.is_some()
+-            || cx.active_drag.is_some()
+-        {
+-            return false;
++        let spliced = self.splice_frame(cx);
++        if spliced {
++            profiler::note_splice("spliced");
+         }
+-        #[cfg(any(feature = "inspector", debug_assertions))]
+-        if self.inspector.is_some() {
++        spliced
++    }
++
++    /// Riseonly 0090: the first reason the frame cannot be spliced, before any hole is looked at.
++    fn splice_refusal(&self, cx: &App) -> Option<&'static str> {
++        let refusal = if self.refreshing {
++            "refresh"
++        } else if self.root_dirty {
++            "root"
++        } else if self.direct_dirty.is_empty() {
++            "no_notify"
++        } else if !self.rendered_frame.spliceable {
++            "unspliceable"
++        } else if self.rendered_frame.viewport != (self.viewport_size, self.scale_factor) {
++            "viewport"
++        } else if self.a11y.is_active() {
++            "a11y"
++        } else if self.prompt.is_some() {
++            "prompt"
++        } else if cx.active_drag.is_some() {
++            "drag"
++        } else {
++            #[cfg(any(feature = "inspector", debug_assertions))]
++            if self.inspector.is_some() {
++                return Some("inspector");
++            }
++            return None;
++        };
++        Some(refusal)
++    }
++
++    fn splice_frame(&mut self, cx: &mut App) -> bool {
++        if let Some(refusal) = self.splice_refusal(cx) {
++            profiler::note_splice(refusal);
+             return false;
+         }
+ 
+@@ -3839,6 +3865,9 @@
+         let mut holes: Vec<EntityId> = Vec::new();
+         for view_id in self.direct_dirty.iter().copied() {
+             if !self.rendered_frame.holes.contains_key(&view_id) {
++                if profiler::frame_trace_enabled() {
++                    profiler::note_splice(profiler::detailed_reason("no_hole", profiler::view_type_name(view_id)));
++                }
+                 return false;
+             }
+             let nested = self
+@@ -3863,12 +3892,14 @@
+                 || !paint_cursor.le(&record.paint_range.start)
+                 || !record.paint_range.start.le(&record.paint_range.end)
+             {
++                profiler::note_splice("order");
+                 return false;
+             }
+             prepaint_cursor = record.prepaint_range.end.clone();
+             paint_cursor = record.paint_range.end.clone();
+         }
+         if !prepaint_cursor.le(&self.rendered_frame.prepaint_end) || !paint_cursor.le(&self.rendered_frame.paint_end) {
++            profiler::note_splice("order");
+             return false;
+         }
+ 
+@@ -3893,6 +3924,9 @@
+             // why: a cached view lays out as a styled leaf without rendering, so a refusal here
+             // left nothing in the frame being drawn (no cached views, reads or states twice).
+             if size != bounds.size {
++                if profiler::frame_trace_enabled() {
++                    profiler::note_splice(profiler::detailed_reason("size", profiler::view_type_name(*view_id)));
++                }
+                 return false;
+             }
+             drawn.push((element, inner, bounds));

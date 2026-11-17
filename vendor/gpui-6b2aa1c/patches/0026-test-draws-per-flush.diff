@@ -1,0 +1,36 @@
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -74,6 +74,10 @@
+ 
+ /// The duration for which futures returned from [Context::on_app_quit] can run before the application fully quits.
+ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
++
++/// Draws of one window inside one `flush_effects` before the rest waits for the next update.
++#[cfg(any(test, feature = "test-support", feature = "bench"))]
++const MAX_TEST_DRAWS_PER_FLUSH: u8 = 8;
+ 
+ /// Temporary(?) wrapper around [`RefCell<App>`] to help us debug any double borrows.
+ /// Strongly consider removing after stabilization.
+@@ -1608,6 +1612,10 @@
+     /// such as notifying observers, emitting events, etc. Effects can themselves
+     /// cause effects, so we continue looping until all effects are processed.
+     fn flush_effects(&mut self) {
++        // why: a draw that leaves its window dirty (an animation notifying from render) would
++        // redraw forever inside one flush; riseonly dev-drive builds hung with the main thread here
++        #[cfg(any(test, feature = "test-support", feature = "bench"))]
++        let mut draws: FxHashMap<WindowId, u8> = FxHashMap::default();
+         loop {
+             self.release_dropped_entities();
+             self.release_dropped_focus_handles();
+@@ -1653,6 +1661,11 @@
+                     })
+                     .collect::<Vec<_>>()
+                 {
++                    let count = draws.entry(window.window_id()).or_default();
++                    if *count >= MAX_TEST_DRAWS_PER_FLUSH {
++                        continue;
++                    }
++                    *count += 1;
+                     self.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+                         .unwrap();
+                 }

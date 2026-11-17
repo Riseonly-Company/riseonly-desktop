@@ -1,0 +1,58 @@
+--- a/crates/gpui_macos/src/text_system.rs
++++ b/crates/gpui_macos/src/text_system.rs
+@@ -76,6 +76,7 @@
+ impl MacTextSystem {
+     /// Create a new MacTextSystem.
+     pub fn new() -> Self {
++        warm_font_fallback();
+         Self(RwLock::new(MacTextSystemState {
+             memory_source: MemSource::empty(),
+             system_source: SystemSource::new(),
+@@ -86,6 +87,47 @@
+             postscript_names_by_font_id: HashMap::default(),
+         }))
+     }
++}
++
++/// Riseonly 0093: CoreText resolves a character the requested font lacks (emoji, symbols, other
++/// scripts) through the system font cascade, and the first such lookup in a process loads the
++/// fallback fonts: 17 to 40 ms of shaping inside one frame, the frame that first draws chat rows.
++/// A background thread shapes one line through those fallbacks at startup, so the main thread
++/// finds the cascade and the fallback fonts already loaded. CoreText is thread safe and the line
++/// is thrown away; nothing in the text system state is touched.
++fn warm_font_fallback() {
++    static STARTED: OnceLock<()> = OnceLock::new();
++    STARTED.get_or_init(|| {
++        let _ = std::thread::Builder::new()
++            .name("gpui-font-fallback-warmup".into())
++            .spawn(|| {
++                const SAMPLE: &str = "Aa \u{0416}\u{0436} \u{2713}\u{2192}\u{2022}\u{2026}\u{2116}\u{20bd} \
++                    \u{1f600}\u{1f602}\u{1f970}\u{1f44d}\u{1f525}\u{1f389}\u{2705}\u{2b50}\u{fe0f}\u{2764}\u{fe0f}\u{1f64f}\u{1f1f0}\u{1f1ff} \
++                    \u{4e2d}\u{6587} \u{3042}\u{30a2} \u{d55c} \u{0627}\u{0644} \u{05d0} \u{0915} \u{0e01} \u{10d0} \u{0531}";
++                for name in [".AppleSystemUIFont", "Helvetica"] {
++                    let Ok(font) = core_text::font::new_from_name(name, 15.0) else {
++                        continue;
++                    };
++                    for size in [13.0, 15.0, 17.0] {
++                        let mut string = CFMutableAttributedString::new();
++                        string.replace_str(&CFString::new(SAMPLE), CFRange::init(0, 0));
++                        let range = CFRange::init(0, string.char_len());
++                        unsafe {
++                            string.set_attribute(
++                                range,
++                                kCTFontAttributeName,
++                                &font.clone_with_font_size(size),
++                            );
++                        }
++                        let line = CTLine::new_with_attributed_string(string.as_concrete_TypeRef());
++                        for run in line.glyph_runs().into_iter() {
++                            let _ = run.glyph_count();
++                        }
++                    }
++                    break;
++                }
++            });
++    });
+ }
+ 
+ impl Default for MacTextSystem {

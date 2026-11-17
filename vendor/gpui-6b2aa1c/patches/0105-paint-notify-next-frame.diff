@@ -1,0 +1,51 @@
+--- a/crates/gpui/src/window.rs	2026-11-15 23:38:36
++++ b/crates/gpui/src/window.rs	2026-11-15 23:38:36
+@@ -122,6 +122,9 @@
+     pub dirty_views: FxHashSet<EntityId>,
+     pub update_count: usize,
+     pub frame_dirty: FrameDirtyAccumulator,
++    /// Riseonly 0105: a view notified while the frame paints (a cached view replayed under another
++    /// opacity or transformation, or a range of an older frame) asks for the next frame.
++    pub notified_in_paint: bool,
+ }
+ 
+ /// Per-frame invalidation bookkeeping, drained at draw time and emitted to the
+@@ -148,6 +151,7 @@
+                 dirty_views: FxHashSet::default(),
+                 update_count: 0,
+                 frame_dirty: FrameDirtyAccumulator::default(),
++                notified_in_paint: false,
+             })),
+         }
+     }
+@@ -162,6 +166,13 @@
+             cx.push_effect(Effect::Notify { emitter: entity });
+             true
+         } else {
++            // why: Riseonly 0105, a replay that shows a stale frame once notifies its view during
++            // paint to render it in the next frame (0053, 0065, 0083, 0096); without a scheduled
++            // frame a quiet window kept the stale one (X1603, X2006: a cached root host frozen on
++            // its first open frame). A notify while rendering stays unscheduled, as upstream.
++            if inner.draw_phase == DrawPhase::Paint {
++                inner.notified_in_paint = true;
++            }
+             false
+         }
+     }
+@@ -180,7 +191,15 @@
+     }
+ 
+     pub fn set_phase(&self, phase: DrawPhase) {
+-        self.inner.borrow_mut().draw_phase = phase
++        let mut inner = self.inner.borrow_mut();
++        inner.draw_phase = phase;
++        // invariant: Riseonly 0105, the frame just drawn is done, so a view notified during its
++        // paint (still in dirty_views) draws in the next frame.
++        if phase == DrawPhase::None && mem::take(&mut inner.notified_in_paint) {
++            inner.dirty = true;
++            inner.update_count += 1;
++            Self::record_frame_dirty(&mut inner);
++        }
+     }
+ 
+     pub fn update_count(&self) -> usize {

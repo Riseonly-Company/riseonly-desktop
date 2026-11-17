@@ -1,0 +1,143 @@
+--- a/crates/gpui/src/text_system.rs
++++ b/crates/gpui/src/text_system.rs
+@@ -693,6 +693,11 @@
+         self.line_layout_cache.finish_frame()
+     }
+ 
++    /// A handle that shapes lines for this window off the main thread (Riseonly 0068).
++    pub fn line_layout_retainer(&self) -> LineLayoutRetainer {
++        self.line_layout_cache.retainer()
++    }
++
+     /// Layout the given line of text, at the given font_size.
+     /// Subsets of the line can be styled independently with the `runs` parameter.
+     /// Generally, you should prefer to use [`Self::shape_line`] instead, which
+--- a/crates/gpui/src/text_system/line_layout.rs
++++ b/crates/gpui/src/text_system/line_layout.rs
+@@ -401,8 +401,56 @@
+     previous_frame: Mutex<FrameCache>,
+     current_frame: RwLock<FrameCache>,
+     platform_text_system: Arc<dyn PlatformTextSystem>,
++    // Riseonly 0068: lines shaped ahead of use off the main thread; kept across frames.
++    retained: Arc<Mutex<FxHashMap<Arc<CacheKey>, Arc<LineLayout>>>>,
+ }
+ 
++/// Shapes single-run lines on any thread into the window's retained layouts (Riseonly 0068), so
++/// the frame that first shows them finds the layout instead of shaping it on the main thread.
++#[derive(Clone)]
++pub struct LineLayoutRetainer {
++    platform_text_system: Arc<dyn PlatformTextSystem>,
++    retained: Arc<Mutex<FxHashMap<Arc<CacheKey>, Arc<LineLayout>>>>,
++}
++
++impl LineLayoutRetainer {
++    const MAX_RETAINED_LINES: usize = 16_384;
++
++    /// Shapes `text` as one run of `font_id` at `font_size`, unless it is already retained.
++    pub fn retain(&self, text: SharedString, font_size: Pixels, font_id: FontId) {
++        if text.is_empty() {
++            return;
++        }
++        let runs = [FontRun {
++            len: text.len(),
++            font_id,
++        }];
++        let key = &CacheKeyRef {
++            text: text.as_ref(),
++            font_size,
++            runs: &runs,
++            wrap_width: None,
++            force_width: None,
++        } as &dyn AsCacheKeyRef;
++        if self.retained.lock().contains_key(key) {
++            return;
++        }
++        let layout = Arc::new(self.platform_text_system.layout_line(&text, font_size, &runs));
++        let key = Arc::new(CacheKey {
++            text,
++            font_size,
++            runs: SmallVec::from(&runs[..]),
++            wrap_width: None,
++            force_width: None,
++        });
++        let mut retained = self.retained.lock();
++        if retained.len() >= Self::MAX_RETAINED_LINES {
++            retained.clear();
++        }
++        retained.insert(key, layout);
++    }
++}
++
+ #[derive(Default)]
+ struct FrameCache {
+     lines: FxHashMap<Arc<CacheKey>, Arc<LineLayout>>,
+@@ -474,9 +522,18 @@
+             previous_frame: Mutex::default(),
+             current_frame: RwLock::default(),
+             platform_text_system,
++            retained: Arc::default(),
+         }
+     }
+ 
++    /// A handle that shapes lines into this cache from a background thread (Riseonly 0068).
++    pub fn retainer(&self) -> LineLayoutRetainer {
++        LineLayoutRetainer {
++            platform_text_system: self.platform_text_system.clone(),
++            retained: self.retained.clone(),
++        }
++    }
++
+     pub fn layout_index(&self) -> LineLayoutIndex {
+         let frame = self.current_frame.read();
+         LineLayoutIndex {
+@@ -649,6 +706,20 @@
+             current_frame.lines.insert(key.clone(), layout.clone());
+             current_frame.used_lines.push(key);
+             layout
++        } else if let Some((key, layout)) = force_width
++            .is_none()
++            .then(|| {
++                self.retained
++                    .lock()
++                    .get_key_value(key)
++                    .map(|(key, layout)| (key.clone(), layout.clone()))
++            })
++            .flatten()
++        {
++            // Riseonly 0068: shaped ahead by a LineLayoutRetainer.
++            current_frame.lines.insert(key.clone(), layout.clone());
++            current_frame.used_lines.push(key);
++            layout
+         } else {
+             let text = SharedString::from(text);
+             let mut layout = self
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5424,6 +5424,27 @@
+         })
+     }
+ 
++    /// Shapes each of `texts` as one run of `font` at `font_size` on the background executor and
++    /// keeps the layouts in this window's line cache across frames (Riseonly 0068), so the frame
++    /// that first lays out one of them reads it instead of shaping on the main thread: a wheel
++    /// step through an emoji grid shaped close to a hundred single-emoji lines in its layout.
++    /// Nothing is notified. Dropping the task stops the shaping not yet done.
++    pub fn prewarm_line_layouts(
++        &self,
++        texts: Vec<SharedString>,
++        font: crate::Font,
++        font_size: Pixels,
++        cx: &App,
++    ) -> Task<()> {
++        let font_id = self.text_system.resolve_font(&font);
++        let retainer = self.text_system.line_layout_retainer();
++        cx.background_executor().spawn(async move {
++            for text in texts {
++                retainer.retain(text, font_size, font_id);
++            }
++        })
++    }
++
+     /// Paints an emoji glyph into the scene for the next frame at the current z-index.
+     ///
+     /// The y component of the origin is the baseline of the glyph.

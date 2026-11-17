@@ -1,0 +1,125 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -798,13 +798,47 @@
+         return;
+     }
+     update_frame_phases(|phases| phases.rendered_views = phases.rendered_views.saturating_add(1));
++    if let Some(reason) = PENDING_CACHE_MISS.with(|pending| pending.take()) {
++        *CACHE_MISSES
++            .lock()
++            .get_or_insert_with(HashMap::default)
++            .entry((type_name, reason))
++            .or_insert(0) += 1;
++    }
+     let mut counts = VIEW_RENDERS_BY_TYPE.lock();
+     *counts
+         .get_or_insert_with(HashMap::default)
+         .entry(type_name)
+         .or_insert(0) += 1;
++}
++
++static CACHE_MISSES: spin::Mutex<Option<HashMap<(&'static str, &'static str), u64>>> = spin::Mutex::new(None);
++
++thread_local! {
++    static PENDING_CACHE_MISS: Cell<Option<&'static str>> = const { Cell::new(None) };
++}
++
++/// Riseonly 0070: the reason the cached view about to render missed its replay; the render that
++/// follows counts it under its type. No-op unless frame tracing is enabled.
++pub(crate) fn note_cache_miss(reason: &'static str) {
++    if !frame_trace_enabled() {
++        return;
++    }
++    PENDING_CACHE_MISS.with(|pending| pending.set(Some(reason)));
+ }
+ 
++/// Riseonly 0070: cached view renders per type and miss reason since frame tracing was enabled,
++/// the most frequent first.
++pub fn cache_miss_counts() -> Vec<((&'static str, &'static str), u64)> {
++    let counts = CACHE_MISSES.lock();
++    let mut counts: Vec<((&'static str, &'static str), u64)> = counts
++        .as_ref()
++        .map(|counts| counts.iter().map(|(key, count)| (*key, *count)).collect())
++        .unwrap_or_default();
++    counts.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
++    counts
++}
++
+ static DIRTY_SOURCES: spin::Mutex<Option<HashMap<&'static std::panic::Location<'static>, u64>>> =
+     spin::Mutex::new(None);
+ 
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -438,6 +438,43 @@
+     /// may unless it carries deferred draws, which would paint over what is shown. Shown, the paint
+     /// that follows must replay too: from the frame just before or from a valid parked paint;
+     /// otherwise the view renders now instead of drawing nothing for a frame.
++    /// Riseonly 0070: why a shown cached view renders instead of replaying, the first failed check
++    /// of the in-place replay, for the frame trace.
++    fn miss_reason(
++        &self,
++        entity_id: EntityId,
++        bounds: Bounds<Pixels>,
++        content_mask: &ContentMask<Pixels>,
++        text_style: &TextStyle,
++        env_fingerprint: u64,
++        window: &Window,
++    ) -> &'static str {
++        let key = &self.cache_key;
++        if window.dirty_views.contains(&entity_id) {
++            "dirty"
++        } else if window.refreshing {
++            "refresh"
++        } else if key.bounds.size != bounds.size {
++            "size"
++        } else if key.bounds.origin != bounds.origin {
++            "origin"
++        } else if key.content_mask != *content_mask && !self.mask_change_clear(content_mask, window) {
++            "mask"
++        } else if key.text_style != *text_style {
++            "text_style"
++        } else if key.env_fingerprint != env_fingerprint {
++            "env"
++        } else if self.prepainted_frame + 1 != window.draw_count {
++            "prepaint_gap"
++        } else if self.dropped_deferred {
++            "dropped_deferred"
++        } else if self.stale_while_hidden {
++            "stale_hidden"
++        } else {
++            "paint_gap"
++        }
++    }
++
+     fn can_replay(&self, window: &Window) -> bool {
+         if window.hidden_depth > 0 {
+             return !window.prepaint_range_defers(&self.prepaint_range);
+@@ -609,6 +646,18 @@
+                         let content_mask = window.content_mask();
+                         let text_style = window.text_style();
+                         let env_fingerprint = window.env_fingerprint;
++                        let miss = (crate::profiler::frame_trace_enabled() && window.hidden_depth == 0)
++                            .then(|| match element_state.as_ref() {
++                                Some(state) => state.miss_reason(
++                                    entity_id,
++                                    bounds,
++                                    &content_mask,
++                                    &text_style,
++                                    env_fingerprint,
++                                    window,
++                                ),
++                                None => "new",
++                            });
+ 
+                         // Riseonly 0041: a scroll moves every visible cached cell; one that only
+                         // moved replays its last frame at the new origin instead of rendering, and
+@@ -724,6 +773,9 @@
+                         let dropped_before = window.hidden_dropped_deferred;
+                         let moved_views_before = window.next_frame.moved_views.len();
+                         let prepaint_start = window.prepaint_index();
++                        if let Some(reason) = miss {
++                            crate::profiler::note_cache_miss(reason);
++                        }
+                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+                             let mut element = self
+                                 .view

@@ -1,0 +1,197 @@
+--- a/crates/gpui/src/text_system/line_layout.rs
++++ b/crates/gpui/src/text_system/line_layout.rs
+@@ -428,6 +428,44 @@
+     wrapped_lines_index: usize,
+     lines_by_hash_index: usize,
+     wrapped_lines_by_hash_index: usize,
++}
++
++impl LineLayoutIndex {
++    /// Whether this index lies within `range` in every list it counts (Riseonly 0045).
++    pub(crate) fn within(&self, range: &Range<Self>) -> bool {
++        let within = |index: usize, start: usize, end: usize| start <= index && index <= end;
++        within(self.lines_index, range.start.lines_index, range.end.lines_index)
++            && within(
++                self.wrapped_lines_index,
++                range.start.wrapped_lines_index,
++                range.end.wrapped_lines_index,
++            )
++            && within(
++                self.lines_by_hash_index,
++                range.start.lines_by_hash_index,
++                range.end.lines_by_hash_index,
++            )
++            && within(
++                self.wrapped_lines_by_hash_index,
++                range.start.wrapped_lines_by_hash_index,
++                range.end.wrapped_lines_by_hash_index,
++            )
++    }
++
++    /// The same position after the layouts from `old_start` were reused from `new_start` on
++    /// (Riseonly 0045): reuse_layouts copies every list in order.
++    pub(crate) fn rebased(&self, old_start: &Self, new_start: &Self) -> Self {
++        Self {
++            lines_index: self.lines_index - old_start.lines_index + new_start.lines_index,
++            wrapped_lines_index: self.wrapped_lines_index - old_start.wrapped_lines_index
++                + new_start.wrapped_lines_index,
++            lines_by_hash_index: self.lines_by_hash_index - old_start.lines_by_hash_index
++                + new_start.lines_by_hash_index,
++            wrapped_lines_by_hash_index: self.wrapped_lines_by_hash_index
++                - old_start.wrapped_lines_by_hash_index
++                + new_start.wrapped_lines_by_hash_index,
++        }
++    }
+ }
+ 
+ impl LineLayoutCache {
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -412,6 +412,39 @@
+                 .as_ref()
+                 .is_some_and(|parked| window.parked_paint_valid(parked))
+     }
++}
++
++/// Riseonly 0045: a cached view that replays its prepaint copies the prepaint of every cached view
++/// nested in it, but their states kept the ranges and frame of the render that recorded them, so
++/// the next frame that renders the outer view rendered and laid out each of them too (0030 check),
++/// the hidden feed under a pushed page included. Each nested view prepainted in the frame just
++/// before now takes the range its prepaint was copied to and this frame, and keeps its parked paint
++/// alive, as if it had replayed itself; its paint range is left as it was, so a shown nested view
++/// whose paint was not replayed by itself still renders.
++fn rebase_nested_views(
++    old: &Range<PrepaintStateIndex>,
++    replayed: &Range<PrepaintStateIndex>,
++    window: &mut Window,
++) {
++    let frame = window.draw_count;
++    window.update_replayed_states(replayed, view_element_state_type_id(), |state, window| {
++        let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
++            return;
++        };
++        if state.prepainted_frame + 1 != frame {
++            return;
++        }
++        let Some(range) = PrepaintStateIndex::rebase_within(&state.prepaint_range, old, &replayed.start)
++        else {
++            return;
++        };
++        state.prepaint_range = range;
++        state.prepainted_frame = frame;
++        state.moved_by = None;
++        if let Some(parked) = state.parked.as_ref() {
++            window.keep_parked_states(parked);
++        }
++    });
+ }
+ 
+ struct ViewElementCacheKey {
+@@ -600,6 +633,15 @@
+                                 element_state.accessed_entities.clone(),
+                             ));
+                             let prepaint_end = window.prepaint_index();
++                            // Riseonly 0045: the cached views inside replayed with it; a stale
++                            // replay leaves them on their old frame so they render when shown.
++                            if !element_state.stale_while_hidden {
++                                rebase_nested_views(
++                                    &element_state.prepaint_range,
++                                    &(prepaint_start.clone()..prepaint_end.clone()),
++                                    window,
++                                );
++                            }
+                             element_state.prepaint_range = prepaint_start..prepaint_end;
+                             element_state.prepainted_frame = window.draw_count;
+                             element_state.moved_by = None;
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -985,6 +985,57 @@
+     line_layout_index: LineLayoutIndex,
+     move_listeners_index: usize,
+     moved_views_index: usize,
++}
++
++impl PrepaintStateIndex {
++    /// Where the prepaint range `inner`, recorded inside `old`, lies after `old` was replayed
++    /// starting at `new_start` (Riseonly 0045), or None when `inner` is not inside `old`. A replay
++    /// copies hitboxes, tooltips, deferred draws, dispatch nodes, element state keys, line layouts
++    /// and move listeners in order, so every index keeps its distance from the start; moved views
++    /// are not copied by a replay, so the rebased range holds none.
++    pub(crate) fn rebase_within(
++        inner: &Range<Self>,
++        old: &Range<Self>,
++        new_start: &Self,
++    ) -> Option<Range<Self>> {
++        let within = |field: fn(&Self) -> usize| {
++            field(&old.start) <= field(&inner.start)
++                && field(&inner.start) <= field(&inner.end)
++                && field(&inner.end) <= field(&old.end)
++        };
++        let layouts = old.start.line_layout_index.clone()..old.end.line_layout_index.clone();
++        if !(within(|index| index.hitboxes_index)
++            && within(|index| index.tooltips_index)
++            && within(|index| index.deferred_draws_index)
++            && within(|index| index.dispatch_tree_index)
++            && within(|index| index.accessed_element_states_index)
++            && within(|index| index.move_listeners_index)
++            && inner.start.line_layout_index.within(&layouts)
++            && inner.end.line_layout_index.within(&layouts))
++        {
++            return None;
++        }
++        let rebase = |index: &Self| Self {
++            hitboxes_index: index.hitboxes_index - old.start.hitboxes_index
++                + new_start.hitboxes_index,
++            tooltips_index: index.tooltips_index - old.start.tooltips_index
++                + new_start.tooltips_index,
++            deferred_draws_index: index.deferred_draws_index - old.start.deferred_draws_index
++                + new_start.deferred_draws_index,
++            dispatch_tree_index: index.dispatch_tree_index - old.start.dispatch_tree_index
++                + new_start.dispatch_tree_index,
++            accessed_element_states_index: index.accessed_element_states_index
++                - old.start.accessed_element_states_index
++                + new_start.accessed_element_states_index,
++            line_layout_index: index
++                .line_layout_index
++                .rebased(&old.start.line_layout_index, &new_start.line_layout_index),
++            move_listeners_index: index.move_listeners_index - old.start.move_listeners_index
++                + new_start.move_listeners_index,
++            moved_views_index: new_start.moved_views_index,
++        };
++        Some(rebase(&inner.start)..rebase(&inner.end))
++    }
+ }
+ 
+ /// The paint of a cached view kept out of the frames in which a hidden div skips it, replayed when
+@@ -3697,6 +3748,31 @@
+         parked.image_drops == self.image_drops
+     }
+ 
++    /// Hands every element state of type `type_id` whose key the replayed prepaint range `replayed`
++    /// copied to `update`, with this window (Riseonly 0045): the cached views nested in a view that
++    /// replayed learn where their own ranges went, instead of holding ranges of an older frame.
++    pub(crate) fn update_replayed_states(
++        &mut self,
++        replayed: &Range<PrepaintStateIndex>,
++        type_id: TypeId,
++        mut update: impl FnMut(&mut dyn Any, &mut Self),
++    ) {
++        let keys = self.next_frame.accessed_element_states[replayed
++            .start
++            .accessed_element_states_index
++            ..replayed.end.accessed_element_states_index]
++            .iter()
++            .filter(|(_, state_type)| *state_type == type_id)
++            .cloned()
++            .collect::<Vec<_>>();
++        for key in keys {
++            if let Some(mut state) = self.rendered_frame.element_states.remove(&key) {
++                update(&mut *state.inner, self);
++                self.rendered_frame.element_states.insert(key, state);
++            }
++        }
++    }
++
+     /// Keeps the element states a parked paint reads alive through a frame that skips it.
+     pub(crate) fn keep_parked_states(&mut self, parked: &ParkedPaint) {
+         self.next_frame

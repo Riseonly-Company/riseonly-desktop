@@ -1,0 +1,22 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -458,7 +458,10 @@
+                             return (None, element_state);
+                         }
+ 
+-                        let refreshing = mem::replace(&mut window.refreshing, true);
++                        // Riseonly 0035: a view rendering fresh no longer forces its cached
++                        // descendants to render too. Each one still renders when it is dirty, its
++                        // cache key moved, the window refreshes, or its ranges are not of the frame
++                        // just before (0030), so an animated leaf re-renders its ancestors only.
+                         let dropped_before = window.hidden_dropped_deferred;
+                         let prepaint_start = window.prepaint_index();
+                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+@@ -474,7 +477,6 @@
+                         });
+ 
+                         let prepaint_end = window.prepaint_index();
+-                        window.refreshing = refreshing;
+                         let accessed_entities = Rc::new(accessed_entities);
+                         window
+                             .next_frame

@@ -1,0 +1,52 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3531,7 +3531,8 @@
+     /// Paints what `f` paints through `transformation`, given in scaled pixels of the window and
+     /// composed with the transformation already active. Layout and hit testing stay
+     /// untransformed. Quads and paths become transformed paths; glyphs, svgs, images and emoji
+-    /// carry the matrix on their sprite; shadows, underlines and surfaces stay untransformed. The
++    /// carry the matrix on their sprite; a surface takes its mapped box when the matrix only
++    /// scales and moves; shadows and underlines stay untransformed. The
+     /// content mask active here clips everything `f` paints; masks pushed inside `f` are ignored.
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+@@ -4245,6 +4246,21 @@
+         self.next_frame
+             .scene
+             .insert_primitive(path.scale(scale_factor));
++    }
++
++    // A surface primitive has no matrix in any renderer, but a box is enough without a turn or a
++    // mirror; under those the surface keeps its untransformed box.
++    fn surface_bounds_under_transformation(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
++        let transformation = self.transformation();
++        let [[scale_x, shear_x], [shear_y, scale_y]] = transformation.rotation_scale;
++        if shear_x != 0.0 || shear_y != 0.0 || scale_x <= 0.0 || scale_y <= 0.0 {
++            return bounds;
++        }
++        let scale_factor = self.scale_factor();
++        Bounds::from_corners(
++            transform_point(&transformation, bounds.origin, scale_factor),
++            transform_point(&transformation, bounds.bottom_right(), scale_factor),
++        )
+     }
+ 
+     /// Paint an underline into the scene for the next frame at the current z-index.
+@@ -4665,7 +4681,7 @@
+ 
+         self.invalidator.debug_assert_paint();
+ 
+-        let bounds = self.snap_bounds(bounds);
++        let bounds = self.snap_bounds(self.surface_bounds_under_transformation(bounds));
+         let content_mask = self.snapped_content_mask();
+         self.next_frame.scene.insert_primitive(PaintSurface {
+             order: 0,
+@@ -4685,7 +4701,7 @@
+ 
+         self.invalidator.debug_assert_paint();
+ 
+-        let bounds = self.snap_bounds(bounds);
++        let bounds = self.snap_bounds(self.surface_bounds_under_transformation(bounds));
+         let content_mask = self.snapped_content_mask();
+         self.next_frame.scene.insert_primitive(PaintSurface {
+             order: 0,

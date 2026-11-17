@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - riseonly-desktop-linux
+    - riseonly-desktop-windows

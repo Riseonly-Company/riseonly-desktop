@@ -1,0 +1,83 @@
+--- a/crates/gpui/src/window.rs	2026-11-14 13:50:08
++++ b/crates/gpui/src/window.rs	2026-11-14 13:50:08
+@@ -779,6 +779,9 @@
+     pub content_mask: ContentMask<Pixels>,
+     /// Flags that specify hitbox behavior.
+     pub behavior: HitboxBehavior,
++    /// Paint layer the hitbox was inserted on: 0 for the root pass, deferred priority + 1 inside a
++    /// deferred draw, `usize::MAX` for prompts, drags and tooltips (Riseonly 0032).
++    pub(crate) layer: usize,
+ }
+ 
+ impl Hitbox {
+@@ -1036,7 +1039,20 @@
+     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
+         let mut set_hover_hitbox_count = false;
+         let mut hit_test = HitTest::default();
+-        for hitbox in self.hitboxes.iter().rev() {
++        // Riseonly 0032: deferred draws paint in priority order across nesting rounds, but their
++        // hitboxes are inserted round by round, so a nested low priority layer used to sit above
++        // a root level high priority one for the mouse. Hit test in paint order instead.
++        let sorted = self
++            .hitboxes
++            .windows(2)
++            .all(|pair| pair[0].layer <= pair[1].layer);
++        let order = (!sorted).then(|| {
++            let mut order: Vec<usize> = (0..self.hitboxes.len()).collect();
++            order.sort_by_key(|ix| self.hitboxes[*ix].layer);
++            order
++        });
++        for position_ix in (0..self.hitboxes.len()).rev() {
++            let hitbox = &self.hitboxes[order.as_ref().map_or(position_ix, |order| order[position_ix])];
+             let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+             if bounds.contains(&position) {
+                 hit_test.ids.push(hitbox.id);
+@@ -1117,6 +1133,7 @@
+     pub(crate) rendered_frame: Frame,
+     pub(crate) next_frame: Frame,
+     next_hitbox_id: HitboxId,
++    hitbox_layer: usize,
+     pub(crate) next_tooltip_id: TooltipId,
+     pub(crate) tooltip_bounds: Option<TooltipBounds>,
+     next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
+@@ -1873,6 +1890,7 @@
+             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+             next_frame_callbacks,
+             next_hitbox_id: HitboxId(0),
++            hitbox_layer: 0,
+             next_tooltip_id: TooltipId::default(),
+             tooltip_bounds: None,
+             dirty_views: FxHashSet::default(),
+@@ -3101,12 +3119,14 @@
+             .as_mut()
+             .unwrap()
+             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
++        self.hitbox_layer = 0;
+         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
+ 
+         self.prepaint_deferred_draws(cx);
++        self.hitbox_layer = usize::MAX;
+ 
+         let mut prompt_element = None;
+         let mut active_drag_element = None;
+@@ -3296,6 +3316,9 @@
+                         deferred_draw.prepaint_range.clone(),
+                     )
+                 };
++                self.hitbox_layer = self.next_frame.deferred_draws[deferred_draw_ix]
++                    .priority
++                    .saturating_add(1);
+                 self.next_frame.dispatch_tree.set_active_node(parent_node);
+ 
+                 let prepaint_start = self.prepaint_index();
+@@ -4919,6 +4942,7 @@
+             bounds,
+             content_mask,
+             behavior,
++            layer: self.hitbox_layer,
+         };
+         self.next_frame.hitboxes.push(hitbox.clone());
+         hitbox

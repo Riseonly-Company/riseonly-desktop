@@ -1,0 +1,29 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -287,6 +287,16 @@
+     /// This allows multiple test Apps to have isolated arenas, preventing
+     /// cross-session corruption when the scheduler interleaves their tasks.
+     static CURRENT_ELEMENT_ARENA: Cell<Option<*const RefCell<Arena>>> = const { Cell::new(None) };
++
++    /// The view whose render, prepaint or paint runs now on this thread (Riseonly 0062).
++    static RENDERING_VIEW: Cell<Option<EntityId>> = const { Cell::new(None) };
++}
++
++/// The view whose render, prepaint or paint runs now, None outside a draw (Riseonly 0062). A store
++/// that has no `Context` at hand records it on a read and notifies only the views that read it,
++/// instead of refreshing every window (which renders every cached view again).
++pub fn rendering_view() -> Option<EntityId> {
++    RENDERING_VIEW.with(Cell::get)
+ }
+ 
+ /// Whether a window draw is currently in progress on this thread.
+@@ -5797,7 +5807,9 @@
+         f: impl FnOnce(&mut Self) -> R,
+     ) -> R {
+         self.rendered_entity_stack.push(id);
++        let previous = RENDERING_VIEW.with(|view| view.replace(Some(id)));
+         let result = f(self);
++        RENDERING_VIEW.with(|view| view.set(previous));
+         self.rendered_entity_stack.pop();
+         result
+     }

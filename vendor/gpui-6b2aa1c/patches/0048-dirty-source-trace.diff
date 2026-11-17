@@ -1,0 +1,95 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -805,6 +805,35 @@
+         .or_insert(0) += 1;
+ }
+ 
++static DIRTY_SOURCES: spin::Mutex<Option<HashMap<&'static std::panic::Location<'static>, u64>>> =
++    spin::Mutex::new(None);
++
++/// Riseonly 0048: counts a notify, refresh or animation frame request by its call site in the run
++/// totals. No-op unless frame tracing is enabled.
++pub(crate) fn note_dirty_source(location: &'static std::panic::Location<'static>) {
++    if !frame_trace_enabled() {
++        return;
++    }
++    std::hint::cold_path();
++    let mut counts = DIRTY_SOURCES.lock();
++    *counts
++        .get_or_insert_with(HashMap::default)
++        .entry(location)
++        .or_insert(0) += 1;
++}
++
++/// Notifies, refreshes and animation frame requests per call site since frame tracing was
++/// enabled, the most frequent first.
++pub fn dirty_source_counts() -> Vec<(&'static std::panic::Location<'static>, u64)> {
++    let counts = DIRTY_SOURCES.lock();
++    let mut counts: Vec<(&'static std::panic::Location<'static>, u64)> = counts
++        .as_ref()
++        .map(|counts| counts.iter().map(|(location, count)| (*location, *count)).collect())
++        .unwrap_or_default();
++    counts.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
++    counts
++}
++
+ /// Renders per view type since frame tracing was enabled, the most rendered first.
+ pub fn view_render_counts() -> Vec<(&'static str, u64)> {
+     let counts = VIEW_RENDERS_BY_TYPE.lock();
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1041,7 +1041,9 @@
+ 
+     /// Schedules all windows in the application to be redrawn. This can be called
+     /// multiple times in an update cycle and still result in a single redraw.
++    #[track_caller]
+     pub fn refresh_windows(&mut self) {
++        crate::profiler::note_dirty_source(std::panic::Location::caller());
+         self.pending_effects.push_back(Effect::RefreshWindows);
+     }
+ 
+@@ -2619,7 +2621,11 @@
+     }
+ 
+     /// Tell GPUI that an entity has changed and observers of it should be notified.
++    #[track_caller]
+     pub fn notify(&mut self, entity_id: EntityId) {
++        // Riseonly 0048: the call site of every notify goes to the frame trace, so an idle window
++        // that keeps drawing names the code that dirties it.
++        crate::profiler::note_dirty_source(std::panic::Location::caller());
+         let window_invalidators = mem::take(
+             self.window_invalidators_by_entity
+                 .entry(entity_id)
+--- a/crates/gpui/src/app/context.rs
++++ b/crates/gpui/src/app/context.rs
+@@ -226,6 +226,7 @@
+     }
+ 
+     /// Tell GPUI that this entity has changed and observers of it should be notified.
++    #[track_caller]
+     pub fn notify(&mut self) {
+         self.app.notify(self.entity_state.entity_id);
+     }
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2168,8 +2168,10 @@
+     }
+ 
+     /// Mark the window as dirty, scheduling it to be redrawn on the next frame.
++    #[track_caller]
+     pub fn refresh(&mut self) {
+         if self.invalidator.not_drawing() {
++            crate::profiler::note_dirty_source(std::panic::Location::caller());
+             self.refreshing = true;
+             self.invalidator.set_dirty(true);
+         }
+@@ -2536,7 +2538,9 @@
+     /// which automatically respects [`App::reduce_motion`]. When using this
+     /// method directly for decorative motion, check [`App::reduce_motion`]
+     /// and skip the frame request when it is set.
++    #[track_caller]
+     pub fn request_animation_frame(&self) {
++        crate::profiler::note_dirty_source(std::panic::Location::caller());
+         let entity = self.current_view();
+         self.on_next_frame(move |_, cx| cx.notify(entity));
+     }

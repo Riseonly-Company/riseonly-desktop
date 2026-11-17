@@ -1,0 +1,600 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -75,6 +75,10 @@
+     /// Paint operations painted under a shift key and how far their copies on screen moved
+     /// since (Riseonly 0084).
+     pub(crate) shift_groups: Vec<ShiftGroup>,
++    /// The clips of the cached views painting now, each cut by the ones around it (Riseonly
++    /// 0099): the frame draws a primitive cut by the last, while the paint operations keep the
++    /// clip it was painted with inside its view.
++    pub(crate) clip_stack: Vec<Bounds<ScaledPixels>>,
+ }
+ 
+ /// The paint operations [`crate::Window::with_shift_group`] recorded under `key`, and the offset
+@@ -84,6 +88,9 @@
+     key: u64,
+     operations: Range<usize>,
+     moved: Point<ScaledPixels>,
++    /// The clip of the cached view painting the group (Riseonly 0099): it stays while the group
++    /// moves.
++    outer: Option<Bounds<ScaledPixels>>,
+ }
+ 
+ /// Replaces the primitive of `list` (sorted by draw order) drawn at `order` with `bounds` by
+@@ -124,6 +131,7 @@
+         self.polychrome_sprites.clear();
+         self.surfaces.clear();
+         self.shift_groups.clear();
++        self.clip_stack.clear();
+     }
+ 
+     /// Names the paint operations from `start` to now `key` (Riseonly 0084). Zero names nothing.
+@@ -134,6 +142,7 @@
+                 key,
+                 operations: start..end,
+                 moved: Point::default(),
++                outer: self.clip_stack.last().copied(),
+             });
+         }
+     }
+@@ -160,6 +169,10 @@
+             shown.translate(group.moved);
+             let mut next = shown.clone();
+             next.translate(offset);
++            // Riseonly 0099: the clip of the cached view around the group stays where it is.
++            if let Some(clip) = group.outer {
++                next.clip_to(&clip);
++            }
+             found &= match (shown, next) {
+                 (Primitive::Shadow(shown), Primitive::Shadow(next)) => {
+                     shift_live(&mut self.shadows, shown.order, shown.bounds, |item| (item.order, item.bounds), |_| next)
+@@ -234,10 +247,49 @@
+     pub fn pop_layer(&mut self) {
+         self.layer_stack.pop();
+         self.paint_operations.push(PaintOperation::EndLayer);
++    }
++
++    /// Opens the clip boundary of a cached view (Riseonly 0099): `clip` is the mask around the view
++    /// as painted inside the boundary around it, and every primitive painted until
++    /// [`Self::pop_clip`] is drawn cut by it and by the clips around it. A replay of the paint at
++    /// another origin moves `clip` with it, while the clips around stay those of the frame.
++    pub(crate) fn push_clip(&mut self, clip: Bounds<ScaledPixels>) {
++        let shown = match self.clip_stack.last() {
++            Some(outer) => outer.intersect(&clip),
++            None => clip,
++        };
++        self.clip_stack.push(shown);
++        self.paint_operations.push(PaintOperation::PushClip(clip));
++    }
++
++    /// Closes the clip boundary [`Self::push_clip`] opened (Riseonly 0099).
++    pub(crate) fn pop_clip(&mut self) {
++        self.clip_stack.pop();
++        self.paint_operations.push(PaintOperation::PopClip);
+     }
+ 
+     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
+         let mut primitive = primitive.into();
++        // Riseonly 0099: under the clip boundary of a cached view the frame draws the primitive cut
++        // by it, while the paint operations keep the primitive as painted, even when cut away
++        // whole, for a replay at another origin or under another clip to cut again.
++        if let Some(clip) = self.clip_stack.last().copied() {
++            let mut shown = primitive.clone();
++            shown.clip_to(&clip);
++            if let Some(shown) = self.insert_shown(shown) {
++                primitive.take_slot(&shown);
++            }
++            self.paint_operations.push(PaintOperation::Primitive(primitive));
++            return;
++        }
++        if let Some(primitive) = self.insert_shown(primitive) {
++            self.paint_operations.push(PaintOperation::Primitive(primitive));
++        }
++    }
++
++    /// Puts `primitive` in the lists drawn this frame and gives it back with its draw order, or
++    /// nothing when its clip cuts it away whole.
++    fn insert_shown(&mut self, mut primitive: Primitive) -> Option<Primitive> {
+         let mut clipped_bounds = primitive
+             .painted_bounds()
+             .intersect(&primitive.content_mask().bounds);
+@@ -252,7 +304,7 @@
+                 _ => false,
+             };
+             if !slides || primitive.content_mask().bounds.is_empty() {
+-                return;
++                return None;
+             }
+             clipped_bounds = primitive.content_mask().bounds;
+         }
+@@ -297,8 +349,7 @@
+                 self.surfaces.push(surface.clone());
+             }
+         }
+-        self.paint_operations
+-            .push(PaintOperation::Primitive(primitive));
++        Some(primitive)
+     }
+ 
+     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
+@@ -312,6 +363,8 @@
+                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
++                PaintOperation::PushClip(clip) => self.push_clip(*clip),
++                PaintOperation::PopClip => self.pop_clip(),
+             }
+         }
+     }
+@@ -333,6 +386,8 @@
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds + offset),
+                 PaintOperation::EndLayer => self.pop_layer(),
++                PaintOperation::PushClip(clip) => self.push_clip(*clip + offset),
++                PaintOperation::PopClip => self.pop_clip(),
+             }
+         }
+     }
+@@ -356,6 +411,8 @@
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds + offset),
+                 PaintOperation::EndLayer => self.pop_layer(),
++                PaintOperation::PushClip(clip) => self.push_clip(*clip + offset),
++                PaintOperation::PopClip => self.pop_clip(),
+             }
+         }
+     }
+@@ -372,6 +429,8 @@
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
++                PaintOperation::PushClip(clip) => self.push_clip(*clip),
++                PaintOperation::PopClip => self.pop_clip(),
+             }
+         }
+     }
+@@ -395,6 +454,9 @@
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
++                // why: every primitive takes the clip of the new transformation instead.
++                PaintOperation::PushClip(_) => self.push_clip(replay.snapped_mask.bounds),
++                PaintOperation::PopClip => self.pop_clip(),
+             }
+         }
+     }
+@@ -807,6 +869,9 @@
+     Primitive(Primitive),
+     StartLayer(Bounds<ScaledPixels>),
+     EndLayer,
++    /// Riseonly 0099: the clip boundary of a cached view, see [`Scene::push_clip`].
++    PushClip(Bounds<ScaledPixels>),
++    PopClip,
+ }
+ 
+ #[derive(Clone)]
+@@ -1034,6 +1099,40 @@
+             Primitive::MonochromeSprite(sprite) => sprite.content_mask = mask,
+             Primitive::SubpixelSprite(sprite) => sprite.content_mask = mask,
+             Primitive::PolychromeSprite(sprite) => sprite.content_mask = mask,
++            _ => {}
++        }
++    }
++
++    /// Cuts the clip of the primitive by `clip` (Riseonly 0099).
++    pub(crate) fn clip_to(&mut self, clip: &Bounds<ScaledPixels>) {
++        let mask = match self {
++            Primitive::Shadow(shadow) => &mut shadow.content_mask,
++            Primitive::Quad(quad) => &mut quad.content_mask,
++            Primitive::Path(path) => &mut path.content_mask,
++            Primitive::Underline(underline) => &mut underline.content_mask,
++            Primitive::MonochromeSprite(sprite) => &mut sprite.content_mask,
++            Primitive::SubpixelSprite(sprite) => &mut sprite.content_mask,
++            Primitive::PolychromeSprite(sprite) => &mut sprite.content_mask,
++            Primitive::Surface(surface) => &mut surface.content_mask,
++        };
++        mask.bounds = mask.bounds.intersect(clip);
++    }
++
++    /// Takes the draw order (and path id) the scene gave `shown`, a cut copy of this primitive
++    /// (Riseonly 0099).
++    fn take_slot(&mut self, shown: &Primitive) {
++        match (self, shown) {
++            (Primitive::Shadow(this), Primitive::Shadow(shown)) => this.order = shown.order,
++            (Primitive::Quad(this), Primitive::Quad(shown)) => this.order = shown.order,
++            (Primitive::Path(this), Primitive::Path(shown)) => {
++                this.order = shown.order;
++                this.id = shown.id;
++            }
++            (Primitive::Underline(this), Primitive::Underline(shown)) => this.order = shown.order,
++            (Primitive::MonochromeSprite(this), Primitive::MonochromeSprite(shown)) => this.order = shown.order,
++            (Primitive::SubpixelSprite(this), Primitive::SubpixelSprite(shown)) => this.order = shown.order,
++            (Primitive::PolychromeSprite(this), Primitive::PolychromeSprite(shown)) => this.order = shown.order,
++            (Primitive::Surface(this), Primitive::Surface(shown)) => this.order = shown.order,
+             _ => {}
+         }
+     }
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -990,8 +990,31 @@
+     /// at `viewport`, so the next frame may splice it (Riseonly 0088, deferred draws 0098).
+     pub(crate) spliceable: bool,
+     pub(crate) viewport: (Size<Pixels>, f32),
++}
++
++/// Riseonly 0099: the base of the paint masks inside a clip boundary, no clip at all.
++fn unbounded_paint_mask() -> ContentMask<Pixels> {
++    ContentMask {
++        bounds: Bounds {
++            origin: point(px(-1.0e6), px(-1.0e6)),
++            size: size(px(2.0e6), px(2.0e6)),
++        },
++    }
+ }
+ 
++/// Riseonly 0099: a hitbox mask recorded under `outer` with every edge `outer` drew opened up and
++/// the rest moved by `offset`. An inner clip on the very edge of `outer` opens too; a hit test may
++/// then reach a little more of the hitbox until the view renders again.
++fn reopened_mask(mask: Bounds<Pixels>, outer: Bounds<Pixels>, offset: Point<Pixels>) -> Bounds<Pixels> {
++    let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.001;
++    let far = 1.0e6;
++    let left = if near(mask.left(), outer.left()) { px(-far) } else { mask.left() + offset.x };
++    let top = if near(mask.top(), outer.top()) { px(-far) } else { mask.top() + offset.y };
++    let right = if near(mask.right(), outer.right()) { px(far) } else { mask.right() + offset.x };
++    let bottom = if near(mask.bottom(), outer.bottom()) { px(far) } else { mask.bottom() + offset.y };
++    Bounds::from_corners(point(left, top), point(right, bottom))
++}
++
+ /// Riseonly 0088: the window state a cached view was drawn under, to draw it again alone in its
+ /// place: the stacks its ancestors pushed, the pass state and the environment.
+ #[derive(Clone)]
+@@ -1001,8 +1024,12 @@
+     rendered_entity_stack: Vec<EntityId>,
+     element_offset_stack: Vec<Point<Pixels>>,
+     content_mask_stack: Vec<ContentMask<Pixels>>,
++    paint_mask_stack: Vec<ContentMask<Pixels>>,
++    scene_clip_stack: Vec<Bounds<ScaledPixels>>,
++    /// Riseonly 0099: taken inside the clip boundary of the view (its paint stacks).
++    pub(crate) own_clip_boundary: bool,
+     surface_corner_clip_stack: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
+-    transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
++    transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>, ContentMask<Pixels>)>,
+     image_cache_stack: Vec<crate::AnyImageCache>,
+     rem_size_override_stack: SmallVec<[Pixels; 8]>,
+     element_opacity: f32,
+@@ -1604,8 +1631,14 @@
+     pub(crate) glyph_swap_key: u32,
+     pub(crate) image_swap_key: u32,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
++    /// Riseonly 0099: the masks of `content_mask_stack` without what lies outside the clip boundary
++    /// of the nearest cached view around them, the clips its primitives keep.
++    pub(crate) paint_mask_stack: Vec<ContentMask<Pixels>>,
++    /// Riseonly 0099: the hole a spliced frame paints now sits inside the clip boundary of its
++    /// view, already open in the stacks it was drawn under.
++    pub(crate) hole_clip_boundary: bool,
+     pub(crate) surface_corner_clip_stack: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
+-    pub(crate) transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
++    pub(crate) transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>, ContentMask<Pixels>)>,
+     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+     pub(crate) image_cache_stack: Vec<AnyImageCache>,
+     pub(crate) rendered_frame: Frame,
+@@ -2401,6 +2434,8 @@
+             rendered_entity_stack: Vec::new(),
+             element_offset_stack: Vec::new(),
+             content_mask_stack: Vec::new(),
++            paint_mask_stack: Vec::new(),
++            hole_clip_boundary: false,
+             surface_corner_clip_stack: Vec::new(),
+             transformation_stack: Vec::new(),
+             element_opacity: 1.0,
+@@ -3389,7 +3424,7 @@
+     #[inline]
+     fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
+         ContentMask {
+-            bounds: self.cover_bounds(self.content_mask().bounds),
++            bounds: self.cover_bounds(self.paint_mask().bounds),
+         }
+     }
+ 
+@@ -4288,7 +4323,9 @@
+             self.reuse_paint(cursor.clone()..hole.paint_range.start.clone());
+             segments.push((cursor..hole.paint_range.start.clone(), new_start));
+             let outer = self.swap_hole_stacks((*hole.paint_stacks).clone(), cx);
++            self.hole_clip_boundary = hole.paint_stacks.own_clip_boundary;
+             hole.element.paint(self, cx);
++            self.hole_clip_boundary = false;
+             hole.stacks = self.swap_hole_stacks(outer, cx);
+             hole.drawn = true;
+             hole_ranges.push(hole.paint_range.clone());
+@@ -4402,6 +4439,9 @@
+             rendered_entity_stack: self.rendered_entity_stack.clone(),
+             element_offset_stack: self.element_offset_stack.clone(),
+             content_mask_stack: self.content_mask_stack.clone(),
++            paint_mask_stack: self.paint_mask_stack.clone(),
++            scene_clip_stack: self.next_frame.scene.clip_stack.clone(),
++            own_clip_boundary: false,
+             surface_corner_clip_stack: self.surface_corner_clip_stack.clone(),
+             transformation_stack: self.transformation_stack.clone(),
+             image_cache_stack: self.image_cache_stack.clone(),
+@@ -4428,6 +4468,9 @@
+             rendered_entity_stack: mem::replace(&mut self.rendered_entity_stack, stacks.rendered_entity_stack),
+             element_offset_stack: mem::replace(&mut self.element_offset_stack, stacks.element_offset_stack),
+             content_mask_stack: mem::replace(&mut self.content_mask_stack, stacks.content_mask_stack),
++            paint_mask_stack: mem::replace(&mut self.paint_mask_stack, stacks.paint_mask_stack),
++            scene_clip_stack: mem::replace(&mut self.next_frame.scene.clip_stack, stacks.scene_clip_stack),
++            own_clip_boundary: stacks.own_clip_boundary,
+             surface_corner_clip_stack: mem::replace(
+                 &mut self.surface_corner_clip_stack,
+                 stacks.surface_corner_clip_stack,
+@@ -4767,13 +4810,24 @@
+         range: Range<PrepaintStateIndex>,
+         offset: Point<Pixels>,
+         mask_offset: Point<Pixels>,
++        reclip: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
+     ) -> Vec<MoveListener> {
+         let hitboxes_start = self.next_frame.hitboxes.len();
+         let move_listeners_start = self.next_frame.move_listeners.len();
+         self.reuse_prepaint(range);
+         for hitbox in &mut self.next_frame.hitboxes[hitboxes_start..] {
+             hitbox.bounds.origin = hitbox.bounds.origin + offset;
+-            hitbox.content_mask.bounds.origin = hitbox.content_mask.bounds.origin + offset;
++            hitbox.content_mask.bounds = match reclip {
++                // Riseonly 0099: a view under its own clip boundary keeps the mask around it
++                // where the frame has it: what the old one cut opens and the new one cuts.
++                Some((old_mask, new_mask)) => {
++                    reopened_mask(hitbox.content_mask.bounds, old_mask, offset).intersect(&new_mask)
++                }
++                None => Bounds {
++                    origin: hitbox.content_mask.bounds.origin + offset,
++                    size: hitbox.content_mask.bounds.size,
++                },
++            };
+         }
+         for listener in &mut self.next_frame.move_listeners[move_listeners_start..] {
+             listener.offset = listener.offset + offset;
+@@ -5107,7 +5161,7 @@
+     pub(crate) fn paint_context(&self) -> PaintContext {
+         PaintContext {
+             transformation: self.transformation(),
+-            transformation_mask: self.transformation_stack.last().map(|(_, mask)| mask.clone()),
++            transformation_mask: self.transformation_stack.last().map(|(_, mask, _)| mask.clone()),
+             opacity: self.element_opacity,
+         }
+     }
+@@ -5373,10 +5427,13 @@
+     ) -> R {
+         self.invalidator.debug_assert_paint_or_prepaint();
+         if let Some(mask) = mask {
++            let paint_mask = mask.intersect(&self.paint_mask());
+             let mask = mask.intersect(&self.content_mask());
+             self.content_mask_stack.push(mask);
++            self.paint_mask_stack.push(paint_mask);
+             let result = f(self);
+             self.content_mask_stack.pop();
++            self.paint_mask_stack.pop();
+             result
+         } else {
+             f(self)
+@@ -5430,8 +5487,9 @@
+     ) -> R {
+         self.invalidator.debug_assert_paint();
+         let mask = self.content_mask();
++        let paint_mask = self.paint_mask();
+         let composed = self.transformation().compose(transformation);
+-        self.transformation_stack.push((composed, mask));
++        self.transformation_stack.push((composed, mask, paint_mask));
+         let result = f(self);
+         self.transformation_stack.pop();
+         result
+@@ -5442,7 +5500,7 @@
+     pub fn transformation(&self) -> TransformationMatrix {
+         self.transformation_stack
+             .last()
+-            .map(|(transformation, _)| *transformation)
++            .map(|(transformation, _, _)| *transformation)
+             .unwrap_or_default()
+     }
+ 
+@@ -5750,14 +5808,48 @@
+     pub(crate) fn element_opacity(&self) -> f32 {
+         self.invalidator.debug_assert_paint_or_prepaint();
+         self.element_opacity
++    }
++
++    /// The mask the primitives painted now keep (Riseonly 0099): [`Self::content_mask`] without
++    /// what lies outside the clip boundary of the cached view painting them, which the scene cuts
++    /// in the frame and a replay cuts again where the view lands.
++    pub(crate) fn paint_mask(&self) -> ContentMask<Pixels> {
++        if let Some((_, _, mask)) = self.transformation_stack.last() {
++            return mask.clone();
++        }
++        match self.paint_mask_stack.last() {
++            Some(mask) => mask.clone(),
++            None => self.content_mask(),
++        }
++    }
++
++    /// Opens the clip boundary of a cached view that replays at another origin (Riseonly 0099): the
++    /// scene cuts what it paints by the mask around it, and its primitives keep only the clips
++    /// inside it. A row the scroll clip cuts, or one built wholly outside it, then replays moved
++    /// and the scene cuts it where it lands, instead of rendering. Not under a transformation,
++    /// whose masks stay those of the window. False when not opened.
++    pub(crate) fn begin_clip_boundary(&mut self) -> bool {
++        if !self.transformation_stack.is_empty() {
++            return false;
++        }
++        let clip = self.cover_bounds(self.paint_mask().bounds);
++        self.next_frame.scene.push_clip(clip);
++        self.paint_mask_stack.push(unbounded_paint_mask());
++        true
+     }
+ 
++    /// Closes the boundary [`Self::begin_clip_boundary`] opened (Riseonly 0099).
++    pub(crate) fn end_clip_boundary(&mut self) {
++        self.paint_mask_stack.pop();
++        self.next_frame.scene.pop_clip();
++    }
++
+     /// Obtain the current content mask. This method should only be called during element drawing.
+     pub fn content_mask(&self) -> ContentMask<Pixels> {
+         self.invalidator.debug_assert_paint_or_prepaint();
+         // Masks pushed under a transformation are in untransformed coordinates while the scene
+         // clips in window coordinates, so the mask active when it was pushed clips all of it.
+-        if let Some((_, mask)) = self.transformation_stack.last() {
++        if let Some((_, mask, _)) = self.transformation_stack.last() {
+             return mask.clone();
+         }
+         self.content_mask_stack
+@@ -6002,7 +6094,7 @@
+     pub fn paint_layer<R>(&mut self, bounds: Bounds<Pixels>, f: impl FnOnce(&mut Self) -> R) -> R {
+         self.invalidator.debug_assert_paint();
+ 
+-        let content_mask = self.content_mask();
++        let content_mask = self.paint_mask();
+         let clipped_bounds = bounds.intersect(&content_mask.bounds);
+         if !clipped_bounds.is_empty() {
+             self.next_frame
+@@ -6244,7 +6336,7 @@
+         self.invalidator.debug_assert_paint();
+ 
+         let scale_factor = self.scale_factor();
+-        let content_mask = self.content_mask();
++        let content_mask = self.paint_mask();
+         let opacity = self.element_opacity();
+         path.content_mask = content_mask;
+         let color: Background = color.into();
+@@ -6345,7 +6437,7 @@
+         let Some(mut path) = path else {
+             return;
+         };
+-        path.content_mask = self.content_mask();
++        path.content_mask = self.paint_mask();
+         path.color = color;
+         self.next_frame
+             .scene
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -385,6 +385,10 @@
+     /// left the view on its old frame (empty when it rebased it), for the `prepaint_gap` reason.
+     rebase_seen: u64,
+     rebase_refused: &'static str,
++    /// Riseonly 0099: the paint range was recorded inside the view's own clip boundary, so its
++    /// primitives keep only the clips inside the view and a replay anywhere is cut by the mask
++    /// it lands under.
++    relative_clips: bool,
+ }
+ 
+ impl ViewElementState {
+@@ -455,7 +459,10 @@
+         // wholly outside its clip may have recorded nothing, and every range check below passes on
+         // nothing: replayed into view it stayed blank (settings switches laid out below the viewport,
+         // X1741). Its own bounds say what the empty ranges cannot; it renders when revealed.
+-        if culled_then_revealed(key.bounds, key.content_mask.bounds, bounds, content_mask.bounds) {
++        // Riseonly 0099: under its own clip boundary the view recorded what the mask cut away too.
++        if !self.relative_clips
++            && culled_then_revealed(key.bounds, key.content_mask.bounds, bounds, content_mask.bounds)
++        {
+             return Err("origin:culled");
+         }
+         // Riseonly 0067: shown nothing before and nothing after (a pager neighbour outside its clip
+@@ -469,7 +476,7 @@
+         // recorded clip with the view (Primitive::translate), and the clip that hid it was the outer
+         // mask: replayed into the mask it would keep that clip and stay blank for good (gift grid
+         // cells built below the viewport came up black, X1277). It renders instead.
+-        if window.ranges_wholly_hidden(&self.prepaint_range, &self.paint_range) {
++        if !self.relative_clips && window.ranges_wholly_hidden(&self.prepaint_range, &self.paint_range) {
+             return Err("origin:wholly_hidden");
+         }
+         // Riseonly 0044: listeners and element states keep the old origin, so a view the mouse is
+@@ -505,7 +512,10 @@
+         // Riseonly 0043: the second offset is how far the mask moved, for the callbacks that read it.
+         if mask_moved_along || mask_reshaped_clear {
+             Ok((offset, offset))
+-        } else if mask_stays_clear {
++        } else if mask_stays_clear || self.relative_clips {
++            // Riseonly 0099: under its own clip boundary the recorded clips are the view's own and
++            // the scene cuts the replay by the mask it lands under, so a row on the scroll edge
++            // replays too; its hitbox masks are cut again (reuse_moved_prepaint).
+             Ok((offset, Point::default()))
+         } else {
+             Err("origin:mask")
+@@ -997,8 +1007,15 @@
+                                 window.next_frame.moved_views.push((entity_id, bounds));
+                             }
+                             let prepaint_start = window.prepaint_index();
+-                            let move_listeners =
+-                                window.reuse_moved_prepaint(state.prepaint_range.clone(), offset, mask_offset);
++                            let reclip = state
++                                .relative_clips
++                                .then(|| (state.cache_key.content_mask.bounds, content_mask.bounds));
++                            let move_listeners = window.reuse_moved_prepaint(
++                                state.prepaint_range.clone(),
++                                offset,
++                                mask_offset,
++                                reclip,
++                            );
+                             cx.extend_nested_accessed(&state.accessed_entities);
+                             window
+                                 .next_frame
+@@ -1168,6 +1185,7 @@
+                                 positions_moved,
+                                 rebase_seen: 0,
+                                 rebase_refused: "",
++                                relative_clips: false,
+                             },
+                         )
+                     },
+@@ -1195,6 +1213,8 @@
+         window: &mut Window,
+         cx: &mut App,
+     ) {
++        // Riseonly 0099: a spliced hole paints inside the clip boundary its stacks already hold.
++        let reopened = mem::take(&mut window.hole_clip_boundary);
+         if let Some(entity_id) = self.entity_id {
+             // Stateful path.
+             window.with_rendered_view(entity_id, |window| {
+@@ -1205,13 +1225,20 @@
+                         |element_state, window| {
+                             let mut element_state = element_state.unwrap();
+ 
++                            // Riseonly 0099: a cell that replays moved paints inside its own clip
++                            // boundary, outside its paint range, so each replay opens it anew.
++                            let boundary = reopened || (self.replays_moved && window.begin_clip_boundary());
++                            let fresh = element.is_some();
+                             let paint_start = window.paint_index();
+                             // Riseonly 0088: the state this paint runs under, for a hole record.
+-                            let hole_paint = if self.hole_prepaint.is_some() {
++                            let mut hole_paint = if self.hole_prepaint.is_some() {
+                                 window.capture_hole_stacks(entity_id, cx)
+                             } else {
+                                 None
+                             };
++                            if let Some(stacks) = hole_paint.as_mut() {
++                                stacks.own_clip_boundary = boundary;
++                            }
+                             let mut in_place = false;
+ 
+                             if let Some(element) = element {
+@@ -1331,6 +1358,10 @@
+ 
+                             let paint_end = window.paint_index();
+                             element_state.paint_range = paint_start..paint_end;
++                            element_state.relative_clips = boundary && (fresh || element_state.relative_clips);
++                            if boundary && !reopened {
++                                window.end_clip_boundary();
++                            }
+ 
+                             let hole_prepaint = self.hole_prepaint.take();
+                             let hole_view = self.hole_view.take();
+--- a/crates/gpui/src/text_system/line.rs
++++ b/crates/gpui/src/text_system/line.rs
+@@ -525,7 +525,8 @@
+                 // untransformed cull dropped glyphs a scaled row still shows; the scene culls
+                 // the transformed sprite bounds instead.
+                 // A sliding title keeps its clipped glyphs too (0079): they slide into the clip later.
+-                let content_mask = window.content_mask();
++                // Riseonly 0099: inside a clip boundary only the clips of the view cull.
++                let content_mask = window.paint_mask();
+                 let transformed = window.transformation() != crate::TransformationMatrix::unit();
+                 let slides = crate::is_glyph_shift_key(window.glyph_swap_key);
+                 if transformed || slides || max_glyph_bounds.intersects(&content_mask.bounds) {

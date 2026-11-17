@@ -1,0 +1,116 @@
+use std::cell::{Cell, RefCell};
+
+use gpui::{App, Context, Entity, IntoElement, Render, Subscription, Window};
+use rise_canon::RiseBugReportSurface;
+use rise_diagnostics::rise_breadcrumbs::{RiseBreadcrumbs, RiseBreadcrumbsChannel};
+use rise_theme::ThemeStore;
+use rise_ui::swiftui::prelude::*;
+
+use crate::app::router::navigation_types::{MainTab, RootRoute};
+use crate::modules::diagnostics::pages::bug_report::bug_report_sheet::BugReportSheet;
+use crate::modules::diagnostics::stores::diagnostics::diagnostics_interactions::bug_report_interactions::BugReportInteractionsStore;
+use crate::modules::diagnostics::stores::diagnostics::diagnostics_services::bug_report_services::BugReportServicesStore;
+use crate::modules::media_picker::api::media_picker_configuration::MediaPickerConfiguration;
+use crate::modules::media_picker::api::media_picker_result::MediaPickerResult;
+use crate::modules::media_picker::ui::media_picker_sheet::MediaPickerSheet;
+
+thread_local! {
+    static CURRENT: Cell<RiseBugReportSurface> = const { Cell::new(RiseBugReportSurface::Other) };
+    static LAST_RECORDED_SCREEN: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// carries the current area to whoever opens a report with no view hierarchy of its own
+/// written once per navigation and read once per opening, deliberately not observable
+pub enum BugReportSurfaceProbe {}
+
+impl BugReportSurfaceProbe {
+    pub fn current() -> RiseBugReportSurface {
+        CURRENT.get()
+    }
+
+    pub fn update(path: &[RootRoute], tab: MainTab) {
+        let surface = path.last().map_or_else(|| tab.bug_report_surface(), RootRoute::bug_report_surface);
+        CURRENT.set(surface);
+
+        let screen = path.last().map_or_else(|| format!("{tab:?}"), Self::route_name);
+        let is_new = LAST_RECORDED_SCREEN.with_borrow_mut(|last| {
+            if *last == screen {
+                return false;
+            }
+            last.clone_from(&screen);
+            true
+        });
+        if is_new {
+            RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Screen, || format!("opened {screen}"));
+        }
+    }
+
+    fn route_name(route: &RootRoute) -> String {
+        route.sai_active_screen().id
+    }
+}
+
+/// mounts the report sheet and its picker one at a time
+/// picker mounts after the sheet is dismissed, sheet returns after the picker
+/// zero size container, doesnt eat clicks over the root
+pub struct BugReportSheetHost {
+    services: Entity<BugReportServicesStore>,
+    interactions: Entity<BugReportInteractionsStore>,
+    _observers: [Subscription; 2],
+}
+
+impl BugReportSheetHost {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let services = BugReportServicesStore::shared(cx);
+        let interactions = BugReportInteractionsStore::shared(cx);
+        let theme_store = ThemeStore::shared(cx);
+        let observers = [cx.observe(&services, |_, _, cx| cx.notify()), cx.observe(&theme_store, |_, _, cx| cx.notify())];
+        Self { services, interactions, _observers: observers }
+    }
+
+    fn picker(&self, cx: &mut Context<Self>) -> MediaPickerSheet {
+        let draft = self.services.read(cx).draft();
+        let existing_screenshots = i64::try_from(draft.screenshots.len()).unwrap_or(i64::MAX);
+        let (read_services, write_interactions) = (self.services.clone(), self.interactions.clone());
+        let is_presented = Binding::new(
+            move |cx: &App| read_services.read(cx).is_picker_presented(),
+            move |presented: bool, _: &mut Window, cx: &mut App| {
+                write_interactions.update(cx, |interactions, cx| interactions.set_picker_presented(presented, cx));
+            },
+        );
+        let (complete_interactions, dismissed_interactions) = (self.interactions.clone(), self.interactions.clone());
+        MediaPickerSheet::new(
+            "bug-report-picker",
+            is_presented,
+            MediaPickerConfiguration::bug_report_appending(existing_screenshots, draft.video.is_some()),
+            ThemeStore::shared(cx),
+            move |result: MediaPickerResult, _: &mut Window, cx: &mut App| {
+                let interactions = complete_interactions.clone();
+                cx.defer(move |cx| {
+                    interactions.update(cx, |interactions, cx| interactions.attach(result, cx));
+                });
+            },
+        )
+        .experimental_bottom_sheet(true)
+        .on_dismissed(move |_: &mut Window, cx: &mut App| {
+            dismissed_interactions.update(cx, |interactions, cx| interactions.picker_did_dismiss(cx));
+        })
+    }
+}
+
+impl Render for BugReportSheetHost {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (mounts_sheet, mounts_picker) = {
+            let services = self.services.read(cx);
+            (services.mounts_sheet(), services.mounts_picker())
+        };
+        let mut container = div().w(px(0.0)).h(px(0.0));
+        if mounts_sheet {
+            container = container.child(BugReportSheet::new(cx));
+        }
+        if mounts_picker {
+            container = container.child(self.picker(cx));
+        }
+        container
+    }
+}

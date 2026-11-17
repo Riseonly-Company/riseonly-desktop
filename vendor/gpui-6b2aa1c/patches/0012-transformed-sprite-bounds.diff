@@ -1,0 +1,72 @@
+--- a/crates/gpui/src/scene.rs	2026-11-05 00:05:13
++++ b/crates/gpui/src/scene.rs	2026-11-05 00:05:13
+@@ -87,7 +87,7 @@
+     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
+         let mut primitive = primitive.into();
+         let clipped_bounds = primitive
+-            .bounds()
++            .painted_bounds()
+             .intersect(&primitive.content_mask().bounds);
+ 
+         if clipped_bounds.is_empty() {
+@@ -242,6 +242,20 @@
+             Primitive::SubpixelSprite(sprite) => &sprite.bounds,
+             Primitive::PolychromeSprite(sprite) => &sprite.bounds,
+             Primitive::Surface(surface) => &surface.bounds,
++        }
++    }
++
++    /// Where the primitive lands on screen: a sprite's `bounds` are the ones before its
++    /// transformation, while the shaders clip it after, so culling and draw order must not use them.
++    fn painted_bounds(&self) -> Bounds<ScaledPixels> {
++        match self {
++            Primitive::MonochromeSprite(sprite) => {
++                transformed_bounds(&sprite.bounds, &sprite.transformation)
++            }
++            Primitive::SubpixelSprite(sprite) => {
++                transformed_bounds(&sprite.bounds, &sprite.transformation)
++            }
++            primitive => *primitive.bounds(),
+         }
+     }
+ 
+@@ -702,7 +716,39 @@
+ impl Default for TransformationMatrix {
+     fn default() -> Self {
+         Self::unit()
++    }
++}
++
++/// The axis-aligned box around `bounds` after `transformation`.
++fn transformed_bounds(
++    bounds: &Bounds<ScaledPixels>,
++    transformation: &TransformationMatrix,
++) -> Bounds<ScaledPixels> {
++    if *transformation == TransformationMatrix::unit() {
++        return *bounds;
+     }
++    let left = bounds.origin.x.0;
++    let top = bounds.origin.y.0;
++    let right = left + bounds.size.width.0;
++    let bottom = top + bounds.size.height.0;
++    let matrix = transformation.rotation_scale;
++    let mut min = [f32::MAX, f32::MAX];
++    let mut max = [f32::MIN, f32::MIN];
++    for (x, y) in [(left, top), (right, top), (right, bottom), (left, bottom)] {
++        for axis in 0..2 {
++            let value =
++                transformation.translation[axis] + matrix[axis][0] * x + matrix[axis][1] * y;
++            min[axis] = min[axis].min(value);
++            max[axis] = max[axis].max(value);
++        }
++    }
++    Bounds {
++        origin: point(ScaledPixels(min[0]), ScaledPixels(min[1])),
++        size: Size {
++            width: ScaledPixels(max[0] - min[0]),
++            height: ScaledPixels(max[1] - min[1]),
++        },
++    }
+ }
+ 
+ #[derive(Copy, Clone, Debug)]

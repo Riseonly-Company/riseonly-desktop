@@ -1,0 +1,78 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -815,6 +815,7 @@
+         return;
+     }
+     std::hint::cold_path();
++    let location = DIRTY_ORIGIN.with(|origin| origin.get()).unwrap_or(location);
+     let mut counts = DIRTY_SOURCES.lock();
+     *counts
+         .get_or_insert_with(HashMap::default)
+@@ -822,6 +823,24 @@
+         .or_insert(0) += 1;
+ }
+ 
++thread_local! {
++    static DIRTY_ORIGIN: std::cell::Cell<Option<&'static std::panic::Location<'static>>> =
++        const { std::cell::Cell::new(None) };
++}
++
++/// Riseonly 0051: runs `f` with every dirty source it notes counted under `origin`. Relays (an
++/// animation frame request delivered on the next frame, a keyed state notifying its host) use it
++/// so the trace names the code that asked, not the relay inside gpui.
++pub(crate) fn with_dirty_origin<R>(origin: &'static std::panic::Location<'static>, f: impl FnOnce() -> R) -> R {
++    if !frame_trace_enabled() {
++        return f();
++    }
++    let previous = DIRTY_ORIGIN.with(|cell| cell.replace(Some(origin)));
++    let result = f();
++    DIRTY_ORIGIN.with(|cell| cell.set(previous));
++    result
++}
++
+ /// Notifies, refreshes and animation frame requests per call site since frame tracing was
+ /// enabled, the most frequent first.
+ pub fn dirty_source_counts() -> Vec<(&'static std::panic::Location<'static>, u64)> {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2549,9 +2549,11 @@
+     /// and skip the frame request when it is set.
+     #[track_caller]
+     pub fn request_animation_frame(&self) {
+-        crate::profiler::note_dirty_source(std::panic::Location::caller());
++        // Riseonly 0051: the delivered notify is counted once, under the requester's call site,
++        // instead of under this file.
++        let origin = std::panic::Location::caller();
+         let entity = self.current_view();
+-        self.on_next_frame(move |_, cx| cx.notify(entity));
++        self.on_next_frame(move |_, cx| crate::profiler::with_dirty_origin(origin, || cx.notify(entity)));
+     }
+ 
+     /// Runs all callbacks scheduled via [`Self::on_next_frame`], returning how many ran.
+@@ -4201,6 +4203,7 @@
+     }
+ 
+     /// Use a piece of state that exists as long this element is being rendered in consecutive frames.
++    #[track_caller]
+     pub fn use_keyed_state<S: 'static>(
+         &mut self,
+         key: impl Into<ElementId>,
+@@ -4208,6 +4211,9 @@
+         init: impl FnOnce(&mut Self, &mut Context<S>) -> S,
+     ) -> Entity<S> {
+         let current_view = self.current_view();
++        // Riseonly 0051: the host notify relayed from the state is counted under the
++        // use_keyed_state call site, so a frame trace names which keyed state dirties its host.
++        let origin = core::panic::Location::caller();
+         self.with_global_id(key.into(), |global_id, window| {
+             window.with_element_state(global_id, |state: Option<Entity<S>>, window| {
+                 if let Some(state) = state {
+@@ -4215,7 +4221,7 @@
+                 } else {
+                     let new_state = cx.new(|cx| init(window, cx));
+                     cx.observe(&new_state, move |_, cx| {
+-                        cx.notify(current_view);
++                        crate::profiler::with_dirty_origin(origin, || cx.notify(current_view));
+                     })
+                     .detach();
+                     (new_state.clone(), new_state)

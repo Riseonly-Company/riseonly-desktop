@@ -1,0 +1,43 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -986,8 +986,9 @@
+     pub(crate) prepaint_end: PrepaintStateIndex,
+     pub(crate) paint_start: PaintIndex,
+     pub(crate) paint_end: PaintIndex,
+-    /// Drawn by the root pass and its deferred draws alone (no tooltip, prompt, drag or inspector)
+-    /// at `viewport`, so the next frame may splice it (Riseonly 0088, deferred draws 0098).
++    /// Drawn by the root pass and its deferred draws alone (no prompt, drag or inspector; a tooltip
++    /// is drawn again by every frame, 0102) at `viewport`, so the next frame may splice it
++    /// (Riseonly 0088, deferred draws 0098).
+     pub(crate) spliceable: bool,
+     pub(crate) viewport: (Size<Pixels>, f32),
+ }
+@@ -3903,10 +3904,11 @@
+         self.next_frame.paint_end = self.paint_index();
+         // Riseonly 0088: a frame drawn by the root pass and its deferred draws (0098) alone may be
+         // spliced by the next one.
+-        self.next_frame.spliceable = prompt_element.is_none()
+-            && active_drag_element.is_none()
+-            && tooltip_element.is_none()
+-            && self.next_frame.tooltip_requests.iter().all(Option::is_none);
++        // why: Riseonly 0102 (X2007), a tooltip no longer refuses it: its requests lie in the
++        // prepaint spans a splice copies, and the splice lays out and paints the tooltip again
++        // after the deferred draws, as this pass does; a hovered button made every frame a root
++        // draw before.
++        self.next_frame.spliceable = prompt_element.is_none() && active_drag_element.is_none();
+         self.next_frame.viewport = (self.viewport_size, self.scale_factor);
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+@@ -4149,9 +4151,9 @@
+         let root_paint = self.rendered_frame.paint_start.clone()..self.rendered_frame.paint_end.clone();
+         self.splice_paint_pass(HolePass::Root, root_paint, &mut splice, cx);
+         self.next_frame.paint_end = self.paint_index();
+-        // invariant: the same test as the root pass, so a frame with a tooltip is never spliced from.
+-        self.next_frame.spliceable =
+-            tooltip_element.is_none() && self.next_frame.tooltip_requests.iter().all(Option::is_none);
++        // invariant: the same test as the root pass (0102): no prompt or drag reaches a splice, and
++        // the tooltip is drawn again below, outside every copied range.
++        self.next_frame.spliceable = true;
+         self.paint_deferred_draws(Some(&mut splice), cx);
+         if let Some(tooltip_element) = tooltip_element.as_mut() {
+             tooltip_element.paint(self, cx);

@@ -1,0 +1,1091 @@
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -775,6 +775,12 @@
+         FxHashMap<EntityId, FxHashMap<WindowId, WindowInvalidator>>,
+     pub(crate) tracked_entities: FxHashMap<WindowId, FxHashSet<EntityId>>,
+     pub(crate) current_window_by_entity: FxHashMap<EntityId, WindowId>,
++    /// Riseonly 0088: one set per cached view being rendered, the reads of the cached views
++    /// rendered or replayed inside it, so its own reads stay apart from theirs.
++    pub(crate) nested_reads: Vec<FxHashSet<EntityId>>,
++    /// Riseonly 0088: what the cached views drawn outside any other read this frame, kept apart
++    /// from what the frame read itself (the accessed entities), which only a full draw renews.
++    pub(crate) top_nested_reads: FxHashSet<EntityId>,
+     #[cfg(any(feature = "inspector", debug_assertions))]
+     pub(crate) inspector_renderer: Option<crate::InspectorRenderer>,
+     #[cfg(any(feature = "inspector", debug_assertions))]
+@@ -859,6 +865,8 @@
+                 tracked_entities: FxHashMap::default(),
+                 window_invalidators_by_entity: FxHashMap::default(),
+                 current_window_by_entity: FxHashMap::default(),
++                nested_reads: Vec::new(),
++                top_nested_reads: FxHashSet::default(),
+                 event_listeners: SubscriberSet::new(),
+                 release_listeners: SubscriberSet::new(),
+                 keystroke_observers: SubscriberSet::new(),
+@@ -1105,23 +1113,47 @@
+         &mut self,
+         callback: impl FnOnce(&mut App) -> R,
+     ) -> (R, FxHashSet<EntityId>) {
++        let (result, _, full) = self.detect_own_accessed_entities(callback);
++        (result, full)
++    }
++
++    /// Every entity the callback reads (full) and the part it reads itself, outside the cached
++    /// views rendered or replayed inside it (own). Riseonly 0088: a store read only by a nested
++    /// view must not make the view around it render.
++    pub(crate) fn detect_own_accessed_entities<R>(
++        &mut self,
++        callback: impl FnOnce(&mut App) -> R,
++    ) -> (R, FxHashSet<EntityId>, FxHashSet<EntityId>) {
+         // Every entity the callback reads, also one an earlier element of the frame read first:
+         // a cached view must hear each store it depends on (Riseonly 0029).
+         let outer = mem::take(self.entities.accessed_entities.get_mut());
+         let outer_event_only = EVENT_ONLY_READS.with(|reads| mem::take(&mut *reads.borrow_mut()));
++        self.nested_reads.push(FxHashSet::default());
+         let result = callback(self);
+-        let mut entities_accessed_in_callback =
+-            mem::replace(self.entities.accessed_entities.get_mut(), outer);
++        let nested = self.nested_reads.pop().unwrap_or_default();
++        let mut own = mem::replace(self.entities.accessed_entities.get_mut(), outer);
++        let mut full = own.clone();
++        full.extend(nested);
+         // Riseonly 0075: the view hears these entities through its own subscription, so neither it
+         // nor the views around it go dirty on their notify.
+         let event_only = EVENT_ONLY_READS.with(|reads| mem::replace(&mut *reads.borrow_mut(), outer_event_only));
+         for entity_id in event_only {
+-            entities_accessed_in_callback.remove(&entity_id);
++            own.remove(&entity_id);
++            full.remove(&entity_id);
+         }
+-        self.entities.extend_accessed(&entities_accessed_in_callback);
+-        (result, entities_accessed_in_callback)
++        self.extend_nested_accessed(&full);
++        (result, own, full)
+     }
+ 
++    /// Riseonly 0088: what a cached view read, added to the view being rendered around it, or to
++    /// the reads of the cached views outside any.
++    pub(crate) fn extend_nested_accessed(&mut self, entities: &FxHashSet<EntityId>) {
++        match self.nested_reads.last_mut() {
++            Some(nested) => nested.extend(entities.iter().copied()),
++            None => self.top_nested_reads.extend(entities.iter().copied()),
++        }
++    }
++
+     pub(crate) fn record_entities_accessed(
+         &mut self,
+         window_handle: AnyWindowHandle,
+--- a/crates/gpui/src/key_dispatch.rs
++++ b/crates/gpui/src/key_dispatch.rs
+@@ -88,6 +88,14 @@
+     pub focus_id: Option<FocusId>,
+     view_id: Option<EntityId>,
+     parent: Option<DispatchNodeId>,
++}
++
++/// Riseonly 0088: the open source path while a frame is copied in spans around fresh holes.
++#[derive(Default)]
++pub(crate) struct SpliceSpans {
++    source_stack: Vec<DispatchNodeId>,
++    copied: usize,
++    pub(crate) contains_focus: bool,
+ }
+ 
+ pub(crate) struct ReusedSubtree {
+@@ -307,6 +315,55 @@
+         }
+     }
+ 
++    /// Riseonly 0088: copies the nodes `old_range` of `source` like [`Self::reuse_subtree`], but
++    /// leaves the path of nodes still open at its end pushed, so the fresh nodes of a cached view
++    /// spliced in after it hang under the parent they had, and the next span continues the same
++    /// path. [`Self::finish_spans`] closes it after the last span.
++    pub fn reuse_span(
++        &mut self,
++        old_range: Range<usize>,
++        source: &mut Self,
++        focus: Option<FocusId>,
++        spans: &mut SpliceSpans,
++    ) {
++        for (source_node_id, source_node) in source
++            .nodes
++            .iter_mut()
++            .enumerate()
++            .skip(old_range.start)
++            .take(old_range.len())
++        {
++            let source_node_id = DispatchNodeId(source_node_id);
++            while let Some(source_ancestor) = spans.source_stack.last() {
++                if source_node.parent == Some(*source_ancestor) {
++                    break;
++                } else {
++                    spans.source_stack.pop();
++                    self.pop_node();
++                }
++            }
++            // why: a node whose parent lies before the copied spans (a hole closed it) cannot be
++            // placed, so the splice must not have been chosen for such a range.
++            debug_assert!(
++                source_node.parent.is_none() || !spans.source_stack.is_empty() || spans.copied == 0,
++                "spliced dispatch node lost its parent"
++            );
++            spans.source_stack.push(source_node_id);
++            spans.copied += 1;
++            if source_node.focus_id.is_some() && source_node.focus_id == focus {
++                spans.contains_focus = true;
++            }
++            self.move_node(source_node);
++        }
++    }
++
++    /// Riseonly 0088: closes the path [`Self::reuse_span`] left open.
++    pub fn finish_spans(&mut self, spans: &mut SpliceSpans) {
++        while spans.source_stack.pop().is_some() {
++            self.pop_node();
++        }
++    }
++
+     pub fn truncate(&mut self, index: usize) {
+         for node in &self.nodes[index..] {
+             if let Some(focus_id) = node.focus_id {
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -3,7 +3,7 @@
+     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
+     Pixels, Point, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
+ };
+-use crate::window::PaintContext;
++use crate::window::{HoleRecord, HoleStacks, PaintContext, SpliceMap};
+ use crate::{Empty, Window};
+ use anyhow::Result;
+ use collections::FxHashSet;
+@@ -39,7 +39,9 @@
+     /// [Context::notify] was called on the backing entity since it was rendered
+     /// (or [Window::refresh] is called, which ignores caching).
+     pub fn cached(self, style: StyleRefinement) -> ViewElement<AnyView> {
+-        ViewElement::new(self).cached(style)
++        let mut element = ViewElement::new(self).cached(style);
++        element.to_any = Some(|view: &AnyView| view.clone());
++        element
+     }
+ 
+     /// Convert this to a weak handle.
+@@ -234,7 +236,9 @@
+     /// uncached case.
+     #[track_caller]
+     pub fn cached(self, style: StyleRefinement) -> ViewElement<Entity<T>> {
+-        ViewElement::new(self).cached(style)
++        let mut element = ViewElement::new(self).cached(style);
++        element.to_any = Some(|entity: &Entity<T>| AnyView::from(entity.clone()));
++        element
+     }
+ }
+ 
+@@ -246,6 +250,11 @@
+     entity_id: Option<EntityId>,
+     cached_style: Option<StyleRefinement>,
+     replays_moved: bool,
++    /// Riseonly 0088: how to name this view to draw it again alone, set by the cached
++    /// constructors, and what its prepaint captured for that.
++    to_any: Option<fn(&V) -> AnyView>,
++    hole_view: Option<AnyView>,
++    hole_prepaint: Option<HoleStacks>,
+     #[cfg(debug_assertions)]
+     source: &'static core::panic::Location<'static>,
+ }
+@@ -259,6 +268,9 @@
+             entity_id,
+             cached_style: None,
+             replays_moved: false,
++            to_any: None,
++            hole_view: None,
++            hole_prepaint: None,
+             view: Some(view),
+             #[cfg(debug_assertions)]
+             source: core::panic::Location::caller(),
+@@ -326,6 +338,8 @@
+     painted_frame: u64,
+     cache_key: ViewElementCacheKey,
+     accessed_entities: Rc<FxHashSet<EntityId>>,
++    /// Riseonly 0088: the part of `accessed_entities` the view read itself.
++    own_entities: Rc<FxHashSet<EntityId>>,
+     /// The last paint, taken out of the frames while a hidden div skips this view (Riseonly 0034).
+     parked: Option<crate::window::ParkedPaint>,
+     /// The render that recorded the prepaint ranges dropped a deferred draw under a hidden div.
+@@ -602,6 +616,33 @@
+     });
+ }
+ 
++/// Riseonly 0088: a spliced frame copied the frame just drawn around its holes, so every cached
++/// view of the copied spans that was drawn in that frame now lies where its span went, as if it
++/// had replayed itself; the holes rendered fresh and keep their own ranges.
++pub(crate) fn rebase_spliced_views(map: &SpliceMap, window: &mut Window) {
++    let frame = window.draw_count;
++    let whole = window.spliced_state_keys();
++    window.update_replayed_states(&whole, view_element_state_type_id(), |state, _| {
++        let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
++            return;
++        };
++        if state.prepainted_frame + 1 == frame
++            && let Some(range) = map.remap_prepaint(&state.prepaint_range)
++        {
++            state.prepaint_range = range;
++            state.prepainted_frame = frame;
++        }
++        if state.prepainted_frame == frame
++            && state.painted_frame + 1 == frame
++            && state.parked.is_none()
++            && let Some(range) = map.remap_paint(&state.paint_range)
++        {
++            state.paint_range = range;
++            state.painted_frame = frame;
++        }
++    });
++}
++
+ /// Riseonly 0063: a cached view that replays its paint in place copies the paint of every cached
+ /// view nested in it, but their states kept the paint range and frame of the render that recorded
+ /// them, so the next frame that renders the outer view (a settings page after a hover frame) found
+@@ -916,11 +957,12 @@
+                             let prepaint_start = window.prepaint_index();
+                             let move_listeners =
+                                 window.reuse_moved_prepaint(state.prepaint_range.clone(), offset, mask_offset);
+-                            cx.entities.extend_accessed(&state.accessed_entities);
++                            cx.extend_nested_accessed(&state.accessed_entities);
+                             window
+                                 .next_frame
+                                 .cached_views
+                                 .push((entity_id, state.accessed_entities.clone()));
++                            window.next_frame.own_reads.insert(entity_id, state.own_entities.clone());
+                             let prepaint_end = window.prepaint_index();
+                             // Riseonly 0073: the cached views inside moved with it.
+                             rebase_moved_nested_views(
+@@ -940,6 +982,18 @@
+                                 listener.call(window, cx);
+                             }
+                             return (None, element_state.unwrap());
++                        }
++
++                        // Riseonly 0088: drawn shown and in place, a later frame may draw this view
++                        // alone here while it copies the rest of the window.
++                        self.hole_view = None;
++                        self.hole_prepaint = None;
++                        if window.hidden_depth == 0
++                            && let Some(to_any) = self.to_any
++                            && let Some(view) = self.view.as_ref()
++                        {
++                            self.hole_view = Some(to_any(view));
++                            self.hole_prepaint = window.capture_hole_stacks(entity_id, cx);
+                         }
+ 
+                         // Riseonly 0037: a hidden view paints nothing, so a moved key (the centre
+@@ -986,12 +1040,15 @@
+                             }
+                             let prepaint_start = window.prepaint_index();
+                             window.reuse_prepaint(element_state.prepaint_range.clone());
+-                            cx.entities
+-                                .extend_accessed(&element_state.accessed_entities);
++                            cx.extend_nested_accessed(&element_state.accessed_entities);
+                             window.next_frame.cached_views.push((
+                                 entity_id,
+                                 element_state.accessed_entities.clone(),
+                             ));
++                            window
++                                .next_frame
++                                .own_reads
++                                .insert(entity_id, element_state.own_entities.clone());
+                             let prepaint_end = window.prepaint_index();
+                             // Riseonly 0045: the cached views inside replayed with it; a stale
+                             // replay leaves them on their old frame so they render when shown.
+@@ -1019,7 +1076,7 @@
+                         if let Some(reason) = miss {
+                             crate::profiler::note_cache_miss(reason);
+                         }
+-                        let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
++                        let (mut element, own_entities, accessed_entities) = cx.detect_own_accessed_entities(|cx| {
+                             let mut element = self
+                                 .view
+                                 .take()
+@@ -1036,15 +1093,18 @@
+                         // a later replay of this view skips it, so that replay lists this view.
+                         let positions_moved = window.next_frame.moved_views.len() != moved_views_before;
+                         let accessed_entities = Rc::new(accessed_entities);
++                        let own_entities = Rc::new(own_entities);
+                         window
+                             .next_frame
+                             .cached_views
+                             .push((entity_id, accessed_entities.clone()));
++                        window.next_frame.own_reads.insert(entity_id, own_entities.clone());
+ 
+                         (
+                             Some(element),
+                             ViewElementState {
+                                 accessed_entities,
++                                own_entities,
+                                 prepaint_range: prepaint_start..prepaint_end,
+                                 paint_range: PaintIndex::default()..PaintIndex::default(),
+                                 prepainted_frame: window.draw_count,
+@@ -1101,8 +1161,16 @@
+                             let mut element_state = element_state.unwrap();
+ 
+                             let paint_start = window.paint_index();
++                            // Riseonly 0088: the state this paint runs under, for a hole record.
++                            let hole_paint = if self.hole_prepaint.is_some() {
++                                window.capture_hole_stacks(entity_id, cx)
++                            } else {
++                                None
++                            };
++                            let mut in_place = false;
+ 
+                             if let Some(element) = element {
++                                in_place = true;
+                                 let refreshing = mem::replace(&mut window.refreshing, true);
+                                 element.paint(window, cx);
+                                 window.refreshing = refreshing;
+@@ -1143,6 +1211,7 @@
+                                     None if element_state.painted_under.places_alike(&now)
+                                         && Window::same_opacity(&element_state.painted_under, &now) =>
+                                     {
++                                        in_place = true;
+                                         window.reuse_paint(range.clone());
+                                         // Riseonly 0063: the cached views inside replayed with it.
+                                         let replayed = paint_start.clone()..window.paint_index();
+@@ -1213,6 +1282,29 @@
+                             let paint_end = window.paint_index();
+                             element_state.paint_range = paint_start..paint_end;
+ 
++                            let hole_prepaint = self.hole_prepaint.take();
++                            let hole_view = self.hole_view.take();
++                            if in_place
++                                && let Some(paint) = hole_paint
++                                && let Some(prepaint) = hole_prepaint
++                                && let Some(view) = hole_view
++                                && let Some(style) = self.cached_style.clone()
++                            {
++                                window.next_frame.holes.insert(
++                                    entity_id,
++                                    HoleRecord {
++                                        view,
++                                        style,
++                                        replays_moved: self.replays_moved,
++                                        bounds: element_state.cache_key.bounds,
++                                        prepaint: Rc::new(prepaint),
++                                        paint: Rc::new(paint),
++                                        prepaint_range: element_state.prepaint_range.clone(),
++                                        paint_range: element_state.paint_range.clone(),
++                                    },
++                                );
++                            }
++
+                             ((), element_state)
+                         },
+                     )
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1,6 +1,7 @@
+ #[cfg(any(feature = "inspector", debug_assertions))]
+ use crate::Inspector;
+ use crate::scene::TransformedReplay;
++use crate::SpliceSpans;
+ use crate::{
+     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
+     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
+@@ -972,8 +973,141 @@
+     /// Cached views drawn with mouse listeners of an earlier origin and their bounds now: the
+     /// mouse entering one makes it render (Riseonly 0044).
+     pub(crate) moved_views: Vec<(EntityId, Bounds<Pixels>)>,
++    /// Cached views this frame drew shown and in place, which the next frame may draw alone while
++    /// it copies the rest of this one (Riseonly 0088).
++    pub(crate) holes: FxHashMap<EntityId, HoleRecord>,
++    /// What each view of `cached_views` read itself, outside the cached views in it (Riseonly 0088).
++    pub(crate) own_reads: FxHashMap<EntityId, Rc<FxHashSet<EntityId>>>,
++    /// Where the root pass of this frame started and ended (Riseonly 0088).
++    pub(crate) prepaint_start: PrepaintStateIndex,
++    pub(crate) prepaint_end: PrepaintStateIndex,
++    pub(crate) paint_start: PaintIndex,
++    pub(crate) paint_end: PaintIndex,
++    /// Drawn by the root pass alone (no deferred draw, tooltip, prompt, drag or inspector) at
++    /// `viewport`, so the next frame may splice it (Riseonly 0088).
++    pub(crate) spliceable: bool,
++    pub(crate) viewport: (Size<Pixels>, f32),
++}
++
++/// Riseonly 0088: the window state a cached view was drawn under, to draw it again alone in its
++/// place: the stacks its ancestors pushed, the pass state and the environment.
++#[derive(Clone)]
++pub(crate) struct HoleStacks {
++    element_id_stack: SmallVec<[ElementId; 32]>,
++    text_style_stack: Vec<TextStyleRefinement>,
++    rendered_entity_stack: Vec<EntityId>,
++    element_offset_stack: Vec<Point<Pixels>>,
++    content_mask_stack: Vec<ContentMask<Pixels>>,
++    surface_corner_clip_stack: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
++    transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
++    image_cache_stack: Vec<crate::AnyImageCache>,
++    rem_size_override_stack: SmallVec<[Pixels; 8]>,
++    element_opacity: f32,
++    glyph_swap_key: u32,
++    image_swap_key: u32,
++    hitbox_layer: usize,
++    env_fingerprint: u64,
++    env_trace: Vec<(&'static str, u64)>,
++    env: Option<Rc<dyn Any>>,
+ }
+ 
++/// Riseonly 0088: a cached view drawn shown and in place, and how to draw it again alone there.
++pub(crate) struct HoleRecord {
++    pub(crate) view: AnyView,
++    pub(crate) style: crate::StyleRefinement,
++    pub(crate) replays_moved: bool,
++    pub(crate) bounds: Bounds<Pixels>,
++    pub(crate) prepaint: Rc<HoleStacks>,
++    pub(crate) paint: Rc<HoleStacks>,
++    pub(crate) prepaint_range: Range<PrepaintStateIndex>,
++    pub(crate) paint_range: Range<PaintIndex>,
++}
++
++/// Riseonly 0088: how a framework that keeps an environment in an App global (rise-ui) hands the
++/// environment a cached view is drawn under to a frame that draws the view alone.
++#[derive(Clone, Copy)]
++pub struct EnvSnapshotHooks {
++    /// The environment now.
++    pub capture: fn(&mut App) -> Rc<dyn Any>,
++    /// Puts `snapshot` in place and returns the environment it replaced.
++    pub swap: fn(&mut App, Rc<dyn Any>) -> Rc<dyn Any>,
++}
++
++thread_local! {
++    static ENV_SNAPSHOT_HOOKS: Cell<Option<EnvSnapshotHooks>> = const { Cell::new(None) };
++}
++
++/// Riseonly 0088: installs [`EnvSnapshotHooks`]. Until then a cached view drawn under an
++/// environment is never drawn alone.
++pub fn set_env_snapshot_hooks(hooks: EnvSnapshotHooks) {
++    ENV_SNAPSHOT_HOOKS.with(|cell| cell.set(Some(hooks)));
++}
++
++fn env_snapshot_hooks() -> Option<EnvSnapshotHooks> {
++    ENV_SNAPSHOT_HOOKS.with(|cell| cell.get())
++}
++
++/// Riseonly 0088: where the copied spans of a spliced frame went. Segment k is the span before
++/// hole k (the last one after the last hole), as (old range, new start).
++pub(crate) struct SpliceMap {
++    prepaint: Vec<(Range<PrepaintStateIndex>, PrepaintStateIndex)>,
++    paint: Vec<(Range<PaintIndex>, PaintIndex)>,
++    hole_prepaints: Vec<Range<PrepaintStateIndex>>,
++    hole_paints: Vec<Range<PaintIndex>>,
++}
++
++impl SpliceMap {
++    /// Where a prepaint range of the frame just drawn lies in the spliced one: None when it lies
++    /// inside a hole (drawn fresh) or only partly in one.
++    pub(crate) fn remap_prepaint(&self, range: &Range<PrepaintStateIndex>) -> Option<Range<PrepaintStateIndex>> {
++        let mut start_segment = 0;
++        let mut end_segment = 0;
++        for hole in &self.hole_prepaints {
++            if hole.start.le(&range.start) && range.end.le(&hole.end) {
++                return None;
++            }
++            if hole.end.le(&range.start) {
++                start_segment += 1;
++            } else if hole.start.le(&range.start) {
++                return None;
++            }
++            if !range.end.le(&hole.start) {
++                end_segment += 1;
++            }
++        }
++        let point = |index: &PrepaintStateIndex, segment: usize| {
++            let (old, new_start) = self.prepaint.get(segment)?;
++            PrepaintStateIndex::rebase_within(&(index.clone()..index.clone()), old, new_start)
++                .map(|range| range.start)
++        };
++        Some(point(&range.start, start_segment)?..point(&range.end, end_segment)?)
++    }
++
++    /// [`Self::remap_prepaint`] for a paint range.
++    pub(crate) fn remap_paint(&self, range: &Range<PaintIndex>) -> Option<Range<PaintIndex>> {
++        let mut start_segment = 0;
++        let mut end_segment = 0;
++        for hole in &self.hole_paints {
++            if hole.start.le(&range.start) && range.end.le(&hole.end) {
++                return None;
++            }
++            if hole.end.le(&range.start) {
++                start_segment += 1;
++            } else if hole.start.le(&range.start) {
++                return None;
++            }
++            if !range.end.le(&hole.start) {
++                end_segment += 1;
++            }
++        }
++        let point = |index: &PaintIndex, segment: usize| {
++            let (old, new_start) = self.paint.get(segment)?;
++            PaintIndex::rebase_within(&(index.clone()..index.clone()), old, new_start).map(|range| range.start)
++        };
++        Some(point(&range.start, start_segment)?..point(&range.end, end_segment)?)
++    }
++}
++
+ /// What a paint ran under that a replay of it must match or carry over (Riseonly 0053): the
+ /// transformation and the mask [`Window::with_transformation`] clips with, and the element opacity
+ /// baked into the colours.
+@@ -1046,6 +1180,19 @@
+ }
+ 
+ impl PrepaintStateIndex {
++    /// Riseonly 0088: every index of `self` is at most the same index of `other`.
++    pub(crate) fn le(&self, other: &Self) -> bool {
++        self.hitboxes_index <= other.hitboxes_index
++            && self.tooltips_index <= other.tooltips_index
++            && self.deferred_draws_index <= other.deferred_draws_index
++            && self.dispatch_tree_index <= other.dispatch_tree_index
++            && self.accessed_element_states_index <= other.accessed_element_states_index
++            && self.move_listeners_index <= other.move_listeners_index
++            && self
++                .line_layout_index
++                .within(&(LineLayoutIndex::default()..other.line_layout_index.clone()))
++    }
++
+     /// Where the prepaint range `inner`, recorded inside `old`, lies after `old` was replayed
+     /// starting at `new_start` (Riseonly 0045), or None when `inner` is not inside `old`. A replay
+     /// copies hitboxes, tooltips, deferred draws, dispatch nodes, element state keys, line layouts
+@@ -1119,6 +1266,19 @@
+ }
+ 
+ impl PaintIndex {
++    /// Riseonly 0088: every index of `self` is at most the same index of `other`.
++    pub(crate) fn le(&self, other: &Self) -> bool {
++        self.scene_index <= other.scene_index
++            && self.mouse_listeners_index <= other.mouse_listeners_index
++            && self.input_handlers_index <= other.input_handlers_index
++            && self.cursor_styles_index <= other.cursor_styles_index
++            && self.accessed_element_states_index <= other.accessed_element_states_index
++            && self.tab_handle_index <= other.tab_handle_index
++            && self
++                .line_layout_index
++                .within(&(LineLayoutIndex::default()..other.line_layout_index.clone()))
++    }
++
+     /// Where the paint range `inner`, recorded inside `old`, lies after `old` was replayed unmoved
+     /// starting at `new_start` (Riseonly 0063), or None when `inner` is not inside `old`. A same
+     /// place replay copies scene operations, mouse listeners, input handlers, cursor styles,
+@@ -1196,6 +1356,14 @@
+             cached_views: Vec::new(),
+             move_listeners: Vec::new(),
+             moved_views: Vec::new(),
++            holes: FxHashMap::default(),
++            own_reads: FxHashMap::default(),
++            prepaint_start: PrepaintStateIndex::default(),
++            prepaint_end: PrepaintStateIndex::default(),
++            paint_start: PaintIndex::default(),
++            paint_end: PaintIndex::default(),
++            spliceable: false,
++            viewport: (Size::default(), 0.0),
+         }
+     }
+ 
+@@ -1215,6 +1383,9 @@
+         self.cached_views.clear();
+         self.move_listeners.clear();
+         self.moved_views.clear();
++        self.holes.clear();
++        self.own_reads.clear();
++        self.spliceable = false;
+         self.focus = None;
+ 
+         #[cfg(any(test, feature = "test-support"))]
+@@ -1354,6 +1525,16 @@
+     pub(crate) tooltip_bounds: Option<TooltipBounds>,
+     next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
+     pub(crate) dirty_views: FxHashSet<EntityId>,
++    /// Riseonly 0088: the views notified or reading a notified entity, without the ancestors
++    /// `dirty_views` adds; the entities the last frame drawn by the root pass read.
++    direct_dirty: FxHashSet<EntityId>,
++    last_accessed: FxHashSet<EntityId>,
++    /// Riseonly 0088: what the window read outside every cached view in the last full draw (the
++    /// root and other plain views, which a spliced frame does not render), and whether one of
++    /// these entities was notified since the last frame.
++    root_own: FxHashSet<EntityId>,
++    root_dirty: bool,
++    spliced: bool,
+     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
+     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
+     default_prevented: bool,
+@@ -2143,6 +2324,11 @@
+             next_tooltip_id: TooltipId::default(),
+             tooltip_bounds: None,
+             dirty_views: FxHashSet::default(),
++            direct_dirty: FxHashSet::default(),
++            last_accessed: FxHashSet::default(),
++            root_own: FxHashSet::default(),
++            root_dirty: false,
++            spliced: false,
+             focus_listeners: SubscriberSet::new(),
+             focus_lost_listeners: SubscriberSet::new(),
+             default_prevented: true,
+@@ -3257,6 +3443,7 @@
+ 
+         self.invalidate_entities();
+         cx.entities.clear_accessed();
++        cx.top_nested_reads.clear();
+         debug_assert!(self.rendered_entity_stack.is_empty());
+         self.invalidator.set_dirty(false);
+         self.requested_autoscroll = None;
+@@ -3282,6 +3469,8 @@
+             self.draw_roots(cx);
+         }
+         self.dirty_views.clear();
++        self.direct_dirty.clear();
++        self.root_dirty = false;
+         self.next_frame.window_active = self.active.get();
+ 
+         // Register requested input handler with the platform window.
+@@ -3382,7 +3571,19 @@
+ 
+     fn record_entities_accessed(&mut self, cx: &mut App) {
+         let mut entities_ref = cx.entities.accessed_entities.get_mut();
+-        let mut entities = mem::take(entities_ref.deref_mut());
++        let direct = mem::take(entities_ref.deref_mut());
++        // Riseonly 0088: the frame reads what it read itself and what its cached views read; a
++        // spliced frame read only its holes, the copied rest still depends on what the frame it
++        // was copied from read, the root included.
++        let mut entities = direct.clone();
++        entities.extend(cx.top_nested_reads.drain());
++        if mem::take(&mut self.spliced) {
++            entities.extend(self.last_accessed.iter().copied());
++            self.root_own.extend(direct);
++        } else {
++            self.root_own = direct;
++        }
++        self.last_accessed.clone_from(&entities);
+         let handle = self.handle;
+         cx.record_entities_accessed(
+             handle,
+@@ -3398,18 +3599,51 @@
+         let mut views = self.invalidator.take_views();
+         let mut readers = Vec::new();
+         for entity in views.drain() {
++            // Riseonly 0088: the root reads it, so only a full draw shows it.
++            if self.root_own.contains(&entity) {
++                self.root_dirty = true;
++            }
+             self.mark_view_dirty(entity);
++            // Riseonly 0088: a notified store is no view; only views drawn last frame count.
++            if self.rendered_frame.dispatch_tree.view_path_reversed(entity).next().is_some() {
++                self.direct_dirty.insert(entity);
++            }
+             // A cached view replays until its own id is dirty, so an entity it only read (a
+             // store, a keyed state) would never reach it: its readers go dirty with it.
++            let start = readers.len();
+             readers.extend(
+                 self.rendered_frame
+                     .cached_views
+                     .iter()
+                     .filter(|(view_id, accessed)| *view_id != entity && accessed.contains(&entity))
+-                    .map(|(view_id, _)| *view_id),
++                    .map(|(view_id, _)| (*view_id, entity)),
+             );
++            // Riseonly 0088: a reader that holds the entity only through a cached view inside it
++            // that reads it too renders anyway (dirty_views), but a spliced frame draws only that
++            // inner one, so it is no hole of its own.
++            for index in start..readers.len() {
++                let (view_id, _) = readers[index];
++                let reads_itself = self
++                    .rendered_frame
++                    .own_reads
++                    .get(&view_id)
++                    .is_none_or(|own| own.contains(&entity));
++                let inner_reader = !reads_itself
++                    && readers[start..].iter().any(|(inner, _)| {
++                        *inner != view_id
++                            && self
++                                .rendered_frame
++                                .dispatch_tree
++                                .view_path_reversed(*inner)
++                                .skip(1)
++                                .any(|ancestor| ancestor == view_id)
++                    });
++                if !inner_reader {
++                    self.direct_dirty.insert(view_id);
++                }
++            }
+         }
+-        for view_id in readers {
++        for (view_id, _) in readers {
+             self.mark_view_dirty(view_id);
+         }
+         self.invalidator.replace_views(views);
+@@ -3469,6 +3703,11 @@
+             }
+         };
+ 
++        // Riseonly 0088: only cached views changed: copy the frame around them.
++        if self.try_splice(cx) {
++            return;
++        }
++
+         // Layout all root elements. Like the root element on the web, which
+         // stretches to fill the viewport unless explicitly sized, window roots
+         // fill the window when their size is `auto`.
+@@ -3480,7 +3719,9 @@
+             .unwrap()
+             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
+         self.hitbox_layer = 0;
++        self.next_frame.prepaint_start = self.prepaint_index();
+         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
++        self.next_frame.prepaint_end = self.prepaint_index();
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
+@@ -3516,7 +3757,16 @@
+         // Now actually paint the elements.
+         self.invalidator.set_phase(DrawPhase::Paint);
+         profiler::note_paint_start();
++        self.next_frame.paint_start = self.paint_index();
+         root_element.paint(self, cx);
++        self.next_frame.paint_end = self.paint_index();
++        // Riseonly 0088: a frame drawn by the root pass alone may be spliced by the next one.
++        self.next_frame.spliceable = prompt_element.is_none()
++            && active_drag_element.is_none()
++            && tooltip_element.is_none()
++            && self.next_frame.deferred_draws.is_empty()
++            && self.next_frame.tooltip_requests.iter().all(Option::is_none);
++        self.next_frame.viewport = (self.viewport_size, self.scale_factor);
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         self.paint_inspector(inspector_element, cx);
+@@ -3563,6 +3813,331 @@
+         }
+     }
+ 
++    /// Riseonly 0088: draws a frame in which only cached views changed, each one shown at the place
++    /// and size it had, by copying the frame just drawn around them and drawing each of them alone
++    /// in its place: no root render and no window layout (X1835: a notify inside the chat rendered
++    /// every view up to the root and laid out the window, 9-12 ms). False, with the frame being
++    /// drawn untouched, when the frame cannot be spliced.
++    fn try_splice(&mut self, cx: &mut App) -> bool {
++        if self.refreshing
++            || self.root_dirty
++            || self.direct_dirty.is_empty()
++            || !self.rendered_frame.spliceable
++            || self.rendered_frame.viewport != (self.viewport_size, self.scale_factor)
++            || self.a11y.is_active()
++            || self.prompt.is_some()
++            || cx.active_drag.is_some()
++        {
++            return false;
++        }
++        #[cfg(any(feature = "inspector", debug_assertions))]
++        if self.inspector.is_some() {
++            return false;
++        }
++
++        // The outermost notified views; one inside another is drawn with it.
++        let mut holes: Vec<EntityId> = Vec::new();
++        for view_id in self.direct_dirty.iter().copied() {
++            if !self.rendered_frame.holes.contains_key(&view_id) {
++                return false;
++            }
++            let nested = self
++                .rendered_frame
++                .dispatch_tree
++                .view_path_reversed(view_id)
++                .skip(1)
++                .any(|ancestor| self.direct_dirty.contains(&ancestor));
++            if !nested {
++                holes.push(view_id);
++            }
++        }
++        holes.sort_by_key(|view_id| self.rendered_frame.holes[view_id].prepaint_range.start.dispatch_tree_index);
++
++        // invariant: the holes lie inside the root pass, in frame order, apart in every index.
++        let mut prepaint_cursor = self.rendered_frame.prepaint_start.clone();
++        let mut paint_cursor = self.rendered_frame.paint_start.clone();
++        for view_id in &holes {
++            let record = &self.rendered_frame.holes[view_id];
++            if !prepaint_cursor.le(&record.prepaint_range.start)
++                || !record.prepaint_range.start.le(&record.prepaint_range.end)
++                || !paint_cursor.le(&record.paint_range.start)
++                || !record.paint_range.start.le(&record.paint_range.end)
++            {
++                return false;
++            }
++            prepaint_cursor = record.prepaint_range.end.clone();
++            paint_cursor = record.paint_range.end.clone();
++        }
++        if !prepaint_cursor.le(&self.rendered_frame.prepaint_end) || !paint_cursor.le(&self.rendered_frame.paint_end) {
++            return false;
++        }
++
++        // Each hole is laid out first, under the state it was drawn in: one whose style no longer
++        // gives its old size refuses the splice before anything is copied.
++        let mut drawn: Vec<(AnyElement, HoleStacks, Bounds<Pixels>)> = Vec::with_capacity(holes.len());
++        for view_id in &holes {
++            let record = &self.rendered_frame.holes[view_id];
++            let view = record.view.clone();
++            let style = record.style.clone();
++            let replays_moved = record.replays_moved;
++            let bounds = record.bounds;
++            let stacks = (*record.prepaint).clone();
++            let outer = self.swap_hole_stacks(stacks, cx);
++            let mut element = view.cached(style);
++            if replays_moved {
++                element = element.replay_when_moved();
++            }
++            let mut element = element.into_any_element();
++            let size = element.layout_as_root(bounds.size.into(), self, cx);
++            let inner = self.swap_hole_stacks(outer, cx);
++            // why: a cached view lays out as a styled leaf without rendering, so a refusal here
++            // left nothing in the frame being drawn (no cached views, reads or states twice).
++            if size != bounds.size {
++                return false;
++            }
++            drawn.push((element, inner, bounds));
++        }
++
++        self.spliced = true;
++        let mut map = SpliceMap {
++            prepaint: Vec::with_capacity(holes.len() + 1),
++            paint: Vec::with_capacity(holes.len() + 1),
++            hole_prepaints: Vec::with_capacity(holes.len()),
++            hole_paints: Vec::with_capacity(holes.len()),
++        };
++        for view_id in &holes {
++            let record = &self.rendered_frame.holes[view_id];
++            map.hole_prepaints.push(record.prepaint_range.clone());
++            map.hole_paints.push(record.paint_range.clone());
++        }
++
++        // Prepaint: the spans between the holes copied, the holes drawn fresh.
++        self.hitbox_layer = 0;
++        self.next_frame.prepaint_start = self.prepaint_index();
++        let mut spans = SpliceSpans::default();
++        let mut cursor = self.rendered_frame.prepaint_start.clone();
++        for (index, (element, stacks, bounds)) in drawn.iter_mut().enumerate() {
++            let hole = map.hole_prepaints[index].clone();
++            let new_start = self.prepaint_index();
++            self.reuse_prepaint_span(cursor.clone()..hole.start.clone(), &mut spans);
++            map.prepaint.push((cursor..hole.start.clone(), new_start));
++            let outer = self.swap_hole_stacks(stacks.clone(), cx);
++            element.prepaint_at(bounds.origin, self, cx);
++            *stacks = self.swap_hole_stacks(outer, cx);
++            cursor = hole.end;
++        }
++        let new_start = self.prepaint_index();
++        let end = self.rendered_frame.prepaint_end.clone();
++        self.reuse_prepaint_span(cursor.clone()..end.clone(), &mut spans);
++        map.prepaint.push((cursor..end, new_start));
++        self.next_frame.dispatch_tree.finish_spans(&mut spans);
++        if spans.contains_focus {
++            self.next_frame.focus = self.focus;
++        }
++        self.next_frame.prepaint_end = self.prepaint_index();
++        // The frame copied from had no deferred draws nor tooltips; a fresh hole may add them,
++        // drawn over the frame as the root pass does.
++        self.prepaint_deferred_draws(cx);
++        self.hitbox_layer = usize::MAX;
++        let mut tooltip_element = self.prepaint_tooltip(cx);
++        self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
++
++        // Paint, the same way.
++        self.invalidator.set_phase(DrawPhase::Paint);
++        profiler::note_paint_start();
++        self.next_frame.paint_start = self.paint_index();
++        let mut cursor = self.rendered_frame.paint_start.clone();
++        for (index, (element, stacks, _)) in drawn.iter_mut().enumerate() {
++            let hole = map.hole_paints[index].clone();
++            let new_start = self.paint_index();
++            self.reuse_paint(cursor.clone()..hole.start.clone());
++            map.paint.push((cursor..hole.start.clone(), new_start));
++            let paint_stacks = (*self.rendered_frame.holes[&holes[index]].paint).clone();
++            let outer = self.swap_hole_stacks(paint_stacks, cx);
++            element.paint(self, cx);
++            *stacks = self.swap_hole_stacks(outer, cx);
++            cursor = hole.end;
++        }
++        let new_start = self.paint_index();
++        let end = self.rendered_frame.paint_end.clone();
++        self.reuse_paint(cursor.clone()..end.clone());
++        map.paint.push((cursor..end, new_start));
++        self.next_frame.paint_end = self.paint_index();
++        // invariant: the same test as the root pass, so a frame with deferred draws or a tooltip
++        // is never spliced from.
++        self.next_frame.spliceable = tooltip_element.is_none()
++            && self.next_frame.deferred_draws.is_empty()
++            && self.next_frame.tooltip_requests.iter().all(Option::is_none);
++        self.paint_deferred_draws(cx);
++        if let Some(tooltip_element) = tooltip_element.as_mut() {
++            tooltip_element.paint(self, cx);
++        }
++        profiler::note_paint_end();
++
++        // What the copied spans hold outside the indexed lists.
++        let under_hole = |window: &Self, view_id: EntityId| {
++            window
++                .rendered_frame
++                .dispatch_tree
++                .view_path_reversed(view_id)
++                .any(|ancestor| holes.contains(&ancestor))
++        };
++        let control_hitboxes = self.rendered_frame.window_control_hitboxes.clone();
++        self.next_frame.window_control_hitboxes.extend(control_hitboxes);
++        let cached_views = self
++            .rendered_frame
++            .cached_views
++            .iter()
++            .filter(|(view_id, _)| !under_hole(self, *view_id))
++            .cloned()
++            .collect::<Vec<_>>();
++        self.next_frame.cached_views.extend(cached_views);
++        let own_reads = self
++            .rendered_frame
++            .own_reads
++            .iter()
++            .filter(|(view_id, _)| !self.next_frame.own_reads.contains_key(*view_id) && !under_hole(self, **view_id))
++            .map(|(view_id, own)| (*view_id, own.clone()))
++            .collect::<Vec<_>>();
++        self.next_frame.own_reads.extend(own_reads);
++        let moved_views = self
++            .rendered_frame
++            .moved_views
++            .iter()
++            .filter(|(view_id, _)| !under_hole(self, *view_id))
++            .copied()
++            .collect::<Vec<_>>();
++        self.next_frame.moved_views.extend(moved_views);
++        let old_holes = mem::take(&mut self.rendered_frame.holes);
++        for (view_id, mut record) in old_holes {
++            if self.next_frame.holes.contains_key(&view_id) || under_hole(self, view_id) {
++                continue;
++            }
++            if let (Some(prepaint_range), Some(paint_range)) =
++                (map.remap_prepaint(&record.prepaint_range), map.remap_paint(&record.paint_range))
++            {
++                record.prepaint_range = prepaint_range;
++                record.paint_range = paint_range;
++                self.next_frame.holes.insert(view_id, record);
++            }
++        }
++        crate::view::rebase_spliced_views(&map, self);
++        self.next_frame.viewport = (self.viewport_size, self.scale_factor);
++        true
++    }
++
++    /// Riseonly 0088: a range whose element state keys are every key the spliced frame recorded,
++    /// in its prepaint and its paint.
++    pub(crate) fn spliced_state_keys(&self) -> Range<PrepaintStateIndex> {
++        let start = self.next_frame.prepaint_start.clone();
++        let mut end = self.next_frame.prepaint_end.clone();
++        end.accessed_element_states_index = self.next_frame.accessed_element_states.len();
++        start..end
++    }
++
++    /// Riseonly 0088: [`Self::reuse_prepaint`] for a span of a spliced frame: the root pass only
++    /// (no deferred draw), hitboxes kept as recorded, the dispatch path left open for the hole
++    /// drawn after it.
++    fn reuse_prepaint_span(&mut self, range: Range<PrepaintStateIndex>, spans: &mut SpliceSpans) {
++        self.next_frame.move_listeners.extend(
++            self.rendered_frame.move_listeners
++                [range.start.move_listeners_index..range.end.move_listeners_index]
++                .iter()
++                .cloned(),
++        );
++        self.next_frame.hitboxes.extend(
++            self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
++                .iter()
++                .cloned(),
++        );
++        self.next_frame.tooltip_requests.extend(
++            self.rendered_frame.tooltip_requests
++                [range.start.tooltips_index..range.end.tooltips_index]
++                .iter_mut()
++                .map(|request| request.take()),
++        );
++        self.next_frame.accessed_element_states.extend(
++            self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
++                ..range.end.accessed_element_states_index]
++                .iter()
++                .map(|(id, type_id)| (id.clone(), *type_id)),
++        );
++        self.text_system
++            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
++        self.next_frame.dispatch_tree.reuse_span(
++            range.start.dispatch_tree_index..range.end.dispatch_tree_index,
++            &mut self.rendered_frame.dispatch_tree,
++            self.focus,
++            spans,
++        );
++    }
++
++    /// Riseonly 0088: the state around the cached view `entity_id` being drawn, without its own
++    /// element id. None when the id stack does not end with it or the environment cannot be
++    /// captured.
++    pub(crate) fn capture_hole_stacks(&self, entity_id: EntityId, cx: &mut App) -> Option<HoleStacks> {
++        if self.element_id_stack.last() != Some(&ElementId::View(entity_id)) {
++            return None;
++        }
++        let mut element_id_stack = self.element_id_stack.clone();
++        element_id_stack.pop();
++        let env = match env_snapshot_hooks() {
++            Some(hooks) => Some((hooks.capture)(cx)),
++            None if self.env_fingerprint == 0 => None,
++            None => return None,
++        };
++        Some(HoleStacks {
++            element_id_stack,
++            text_style_stack: self.text_style_stack.clone(),
++            rendered_entity_stack: self.rendered_entity_stack.clone(),
++            element_offset_stack: self.element_offset_stack.clone(),
++            content_mask_stack: self.content_mask_stack.clone(),
++            surface_corner_clip_stack: self.surface_corner_clip_stack.clone(),
++            transformation_stack: self.transformation_stack.clone(),
++            image_cache_stack: self.image_cache_stack.clone(),
++            rem_size_override_stack: self.rem_size_override_stack.clone(),
++            element_opacity: self.element_opacity,
++            glyph_swap_key: self.glyph_swap_key,
++            image_swap_key: self.image_swap_key,
++            hitbox_layer: self.hitbox_layer,
++            env_fingerprint: self.env_fingerprint,
++            env_trace: self.env_trace.clone(),
++            env,
++        })
++    }
++
++    /// Riseonly 0088: puts `stacks` in place and returns the state they replaced.
++    fn swap_hole_stacks(&mut self, stacks: HoleStacks, cx: &mut App) -> HoleStacks {
++        let env = match (env_snapshot_hooks(), stacks.env) {
++            (Some(hooks), Some(env)) => Some((hooks.swap)(cx, env)),
++            _ => None,
++        };
++        HoleStacks {
++            element_id_stack: mem::replace(&mut self.element_id_stack, stacks.element_id_stack),
++            text_style_stack: mem::replace(&mut self.text_style_stack, stacks.text_style_stack),
++            rendered_entity_stack: mem::replace(&mut self.rendered_entity_stack, stacks.rendered_entity_stack),
++            element_offset_stack: mem::replace(&mut self.element_offset_stack, stacks.element_offset_stack),
++            content_mask_stack: mem::replace(&mut self.content_mask_stack, stacks.content_mask_stack),
++            surface_corner_clip_stack: mem::replace(
++                &mut self.surface_corner_clip_stack,
++                stacks.surface_corner_clip_stack,
++            ),
++            transformation_stack: mem::replace(&mut self.transformation_stack, stacks.transformation_stack),
++            image_cache_stack: mem::replace(&mut self.image_cache_stack, stacks.image_cache_stack),
++            rem_size_override_stack: mem::replace(
++                &mut self.rem_size_override_stack,
++                stacks.rem_size_override_stack,
++            ),
++            element_opacity: mem::replace(&mut self.element_opacity, stacks.element_opacity),
++            glyph_swap_key: mem::replace(&mut self.glyph_swap_key, stacks.glyph_swap_key),
++            image_swap_key: mem::replace(&mut self.image_swap_key, stacks.image_swap_key),
++            hitbox_layer: mem::replace(&mut self.hitbox_layer, stacks.hitbox_layer),
++            env_fingerprint: mem::replace(&mut self.env_fingerprint, stacks.env_fingerprint),
++            env_trace: mem::replace(&mut self.env_trace, stacks.env_trace),
++            env,
++        }
++    }
++
+     fn prepaint_tooltip(&mut self, cx: &mut App) -> Option<AnyElement> {
+         // Use indexing instead of iteration to avoid borrowing self for the duration of the loop.
+         for tooltip_request_index in (0..self.next_frame.tooltip_requests.len()).rev() {

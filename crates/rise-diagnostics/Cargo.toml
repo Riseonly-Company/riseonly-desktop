@@ -1,0 +1,17 @@
+[package]
+name = "rise-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Kit crate mounted at core/diagnostics (scripts/crate-map.json): breadcrumbs
+# sit below rise-ui, rise-media and rise-widgets. The rest of core/diagnostics
+# (reports, RPC, uploader, envelope) stays in the app crate.
+[dependencies]
+rise-core.workspace = true
+rise-limits.workspace = true

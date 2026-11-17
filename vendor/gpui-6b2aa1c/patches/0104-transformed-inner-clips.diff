@@ -1,0 +1,121 @@
+--- a/crates/gpui/src/window.rs	2026-11-15 22:51:05
++++ b/crates/gpui/src/window.rs	2026-11-15 22:52:00
+@@ -5447,16 +5447,54 @@
+         self.invalidator.debug_assert_paint_or_prepaint();
+         if let Some(mask) = mask {
+             let paint_mask = mask.intersect(&self.paint_mask());
++            // Riseonly 0104: under a transformation the content mask stays the one around it, so a
++            // scroll clip or a sheet edge inside a scaling modal cut nothing; the scene cuts by it.
++            let scene_clip = self.transformed_mask_clip(&mask);
+             let mask = mask.intersect(&self.content_mask());
+             self.content_mask_stack.push(mask);
+             self.paint_mask_stack.push(paint_mask);
++            if let Some(clip) = scene_clip {
++                self.next_frame.scene.push_clip(clip);
++            }
+             let result = f(self);
++            if scene_clip.is_some() {
++                self.next_frame.scene.pop_clip();
++            }
+             self.content_mask_stack.pop();
+             self.paint_mask_stack.pop();
+             result
+         } else {
+             f(self)
++        }
++    }
++
++    /// Whether the paint running now is under [`Self::with_transformation`] (Riseonly 0104).
++    pub(crate) fn under_transformation(&self) -> bool {
++        !self.transformation_stack.is_empty()
++    }
++
++    /// The mask pushed now as the scene clips it on screen under the active transformation
++    /// (Riseonly 0104), snapped out to device pixels. None outside paint, outside any
++    /// transformation, or under one that turns or mirrors, where a box does not map to a box.
++    fn transformed_mask_clip(&self, mask: &ContentMask<Pixels>) -> Option<Bounds<ScaledPixels>> {
++        let (matrix, _, _) = self.transformation_stack.last()?;
++        if !matches!(self.invalidator.inner.borrow().draw_phase, DrawPhase::Paint) {
++            return None;
+         }
++        let [[scale_x, shear_x], [shear_y, scale_y]] = matrix.rotation_scale;
++        if shear_x != 0.0 || shear_y != 0.0 || scale_x <= 0.0 || scale_y <= 0.0 {
++            return None;
++        }
++        let [move_x, move_y] = matrix.translation;
++        let scale = self.scale_factor();
++        let left = (mask.bounds.left().0 * scale * scale_x + move_x).floor();
++        let top = (mask.bounds.top().0 * scale * scale_y + move_y).floor();
++        let right = (mask.bounds.right().0 * scale * scale_x + move_x).ceil().max(left);
++        let bottom = (mask.bounds.bottom().0 * scale * scale_y + move_y).ceil().max(top);
++        Some(Bounds::from_corners(
++            point(ScaledPixels(left), ScaledPixels(top)),
++            point(ScaledPixels(right), ScaledPixels(bottom)),
++        ))
+     }
+ 
+     /// Updates the global element offset relative to the current offset. This is used to implement
+@@ -5496,7 +5534,9 @@
+     /// untransformed. Quads and paths become transformed paths; glyphs, svgs, images and emoji
+     /// carry the matrix on their sprite; a surface takes its mapped box when the matrix only
+     /// scales and moves; shadows and underlines stay untransformed. The
+-    /// content mask active here clips everything `f` paints; masks pushed inside `f` are ignored.
++    /// content mask active here clips everything `f` paints; a mask pushed inside `f` clips
++    /// through the matrix as a scene clip when it only scales and moves (Riseonly 0104), and is
++    /// ignored under a turn or a mirror.
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+     pub fn with_transformation<R>(
+--- a/crates/gpui/src/scene.rs	2026-11-15 22:51:05
++++ b/crates/gpui/src/scene.rs	2026-11-15 22:51:05
+@@ -454,8 +454,9 @@
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
+-                // why: every primitive takes the clip of the new transformation instead.
+-                PaintOperation::PushClip(_) => self.push_clip(replay.snapped_mask.bounds),
++                // Riseonly 0104: a clip painted under the old matrix (a scroll clip inside a
++                // scaling modal) follows the content through the delta, inside the new mask.
++                PaintOperation::PushClip(clip) => self.push_clip(replay.follow_clip(clip)),
+                 PaintOperation::PopClip => self.pop_clip(),
+             }
+         }
+@@ -1506,6 +1507,24 @@
+     pub(crate) snapped_mask: ContentMask<ScaledPixels>,
+ }
+ 
++impl TransformedReplay {
++    /// `clip`, painted under the old transformation, where the delta takes what it cut, snapped
++    /// out to device pixels and kept inside the clip of the new transformation (Riseonly 0104).
++    pub(crate) fn follow_clip(&self, clip: &Bounds<ScaledPixels>) -> Bounds<ScaledPixels> {
++        let [[scale_x, _], [_, scale_y]] = self.delta.rotation_scale;
++        let [move_x, move_y] = self.delta.translation;
++        let left = (clip.left().0 * scale_x + move_x).floor();
++        let top = (clip.top().0 * scale_y + move_y).floor();
++        let right = (clip.right().0 * scale_x + move_x).ceil().max(left);
++        let bottom = (clip.bottom().0 * scale_y + move_y).ceil().max(top);
++        Bounds::from_corners(
++            point(ScaledPixels(left), ScaledPixels(top)),
++            point(ScaledPixels(right), ScaledPixels(bottom)),
++        )
++        .intersect(&self.snapped_mask.bounds)
++    }
++}
++
+ /// A data type representing a 2 dimensional transformation that can be applied to an element.
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ #[repr(C)]
+--- a/crates/gpui/src/view.rs	2026-11-15 22:51:05
++++ b/crates/gpui/src/view.rs	2026-11-15 22:52:00
+@@ -1377,7 +1377,11 @@
+ 
+                             let hole_prepaint = self.hole_prepaint.take();
+                             let hole_view = self.hole_view.take();
++                            // Riseonly 0104: a view painted under a transformation (a modal
++                            // scaling in) keeps no hole: drawn alone later it would paint under that
++                            // stale matrix and its masks, the rows spilling out of the sheet at rest.
+                             if in_place
++                                && window.transformation() == crate::TransformationMatrix::default()
+                                 && let Some(paint) = hole_paint
+                                 && let Some(prepaint) = hole_prepaint
+                                 && let Some(view) = hole_view

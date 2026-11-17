@@ -1,0 +1,146 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -1,7 +1,7 @@
+ use itertools::Itertools;
+ use scheduler::{Instant, SpawnTime};
+ use std::{
+-    cell::LazyCell,
++    cell::{Cell, LazyCell},
+     collections::{HashMap, VecDeque},
+     hash::{DefaultHasher, Hash, Hasher},
+     sync::{
+@@ -718,6 +718,12 @@
+     pub draw_start: Instant,
+     /// When `Window::draw` finished.
+     pub draw_end: Instant,
++    /// When the paint phase started; `None` when the draw painted nothing.
++    pub paint_start: Option<Instant>,
++    /// When the paint phase finished.
++    pub paint_end: Option<Instant>,
++    /// Views whose `render` ran in this frame; a cached view that was reused does not count.
++    pub rendered_views: u32,
+ }
+ 
+ impl FrameTiming {
+@@ -726,6 +732,17 @@
+         self.draw_end.duration_since(self.draw_start)
+     }
+ 
++    /// Render, request_layout and prepaint: from the start of the draw to the start of paint.
++    pub fn layout_duration(&self) -> Option<Duration> {
++        self.paint_start
++            .map(|paint_start| paint_start.duration_since(self.draw_start))
++    }
++
++    /// Time spent painting the frame.
++    pub fn paint_duration(&self) -> Option<Duration> {
++        Some(self.paint_end?.duration_since(self.paint_start?))
++    }
++
+     /// Time from the frame's first invalidation to the end of its draw, if the
+     /// first invalidation was observed.
+     pub fn dirty_to_draw_duration(&self) -> Option<Duration> {
+@@ -748,6 +765,49 @@
+ });
+ 
+ static FRAME_TRACE_ENABLED: AtomicBool = AtomicBool::new(false);
++
++/// Phase marks of the frame being drawn on this thread.
++#[derive(Debug, Default, Copy, Clone)]
++pub(crate) struct FramePhases {
++    pub(crate) paint_start: Option<Instant>,
++    pub(crate) paint_end: Option<Instant>,
++    pub(crate) rendered_views: u32,
++}
++
++thread_local! {
++    static FRAME_PHASES: Cell<FramePhases> = Cell::new(FramePhases::default());
++}
++
++fn update_frame_phases(update: impl FnOnce(&mut FramePhases)) {
++    if !frame_trace_enabled() {
++        return;
++    }
++    FRAME_PHASES.with(|phases| {
++        let mut current = phases.get();
++        update(&mut current);
++        phases.set(current);
++    });
++}
++
++/// Counts a view render of the frame being drawn. No-op unless frame tracing is enabled.
++pub(crate) fn note_view_rendered() {
++    update_frame_phases(|phases| phases.rendered_views = phases.rendered_views.saturating_add(1));
++}
++
++/// Marks the start of the paint phase. No-op unless frame tracing is enabled.
++pub(crate) fn note_paint_start() {
++    update_frame_phases(|phases| phases.paint_start = Some(Instant::now()));
++}
++
++/// Marks the end of the paint phase. No-op unless frame tracing is enabled.
++pub(crate) fn note_paint_end() {
++    update_frame_phases(|phases| phases.paint_end = Some(Instant::now()));
++}
++
++/// Returns the phase marks of the frame drawn on this thread and clears them for the next one.
++pub(crate) fn take_frame_phases() -> FramePhases {
++    FRAME_PHASES.with(|phases| phases.replace(FramePhases::default()))
++}
+ 
+ /// Enables or disables frame timing collection at runtime.
+ ///
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -164,6 +164,7 @@
+             .a11y
+             .view_type_names
+             .insert(view.entity_id(), std::any::type_name::<V>());
++        crate::profiler::note_view_rendered();
+         view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+     }
+ }
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2865,6 +2865,8 @@
+         // leak into a later frame across enable/disable of frame tracing.
+         let frame_dirty = self.invalidator.take_frame_dirty();
+         let draw_started_at = profiler::frame_trace_enabled().then(Instant::now);
++        // Drop marks a frame drawn while tracing was being switched on may have left.
++        profiler::take_frame_phases();
+ 
+         // Set up the per-App arena for element allocation during this draw.
+         // This ensures that multiple test Apps have isolated arenas.
+@@ -2973,12 +2975,16 @@
+         self.needs_present.set(true);
+ 
+         if let Some(draw_start) = draw_started_at {
++            let phases = profiler::take_frame_phases();
+             profiler::record_frame_timing(profiler::FrameTiming {
+                 window_id: self.handle.window_id(),
+                 dirty_at: frame_dirty.dirty_at,
+                 invalidations: frame_dirty.invalidations,
+                 draw_start,
+                 draw_end: Instant::now(),
++                paint_start: phases.paint_start,
++                paint_end: phases.paint_end,
++                rendered_views: phases.rendered_views,
+             });
+         }
+ 
+@@ -3107,6 +3113,7 @@
+ 
+         // Now actually paint the elements.
+         self.invalidator.set_phase(DrawPhase::Paint);
++        profiler::note_paint_start();
+         root_element.paint(self, cx);
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+@@ -3121,6 +3128,7 @@
+         } else if let Some(mut tooltip_element) = tooltip_element {
+             tooltip_element.paint(self, cx);
+         }
++        profiler::note_paint_end();
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         self.paint_inspector_hitbox(cx);

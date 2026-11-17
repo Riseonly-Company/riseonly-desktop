@@ -1,0 +1,19 @@
+[package]
+name = "rise-navigation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+gpui.workspace = true
+rise-core.workspace = true
+# For ShellMetrics: the column widths are design tokens, so density reaches them.
+rise-theme.workspace = true

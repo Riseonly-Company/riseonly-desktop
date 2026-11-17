@@ -1,0 +1,178 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -841,7 +841,20 @@
+         .entry(type_name)
+         .or_insert(0) += 1;
+ }
++
++static DETAILED_REASONS: spin::Mutex<Option<HashMap<(&'static str, &'static str), &'static str>>> =
++    spin::Mutex::new(None);
+ 
++/// Riseonly 0086: `reason:detail` as one static reason for the miss counts. The pairs are few (a
++/// reason, a text style field or an environment key name), so each is leaked once.
++pub(crate) fn detailed_reason(reason: &'static str, detail: &'static str) -> &'static str {
++    let mut reasons = DETAILED_REASONS.lock();
++    *reasons
++        .get_or_insert_with(HashMap::default)
++        .entry((reason, detail))
++        .or_insert_with(|| &*Box::leak(format!("{reason}:{detail}").into_boxed_str()))
++}
++
+ static CACHE_MISSES: spin::Mutex<Option<HashMap<(&'static str, &'static str), u64>>> = spin::Mutex::new(None);
+ 
+ thread_local! {
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -387,8 +387,21 @@
+         if key.bounds.size != bounds.size || key.bounds.origin == bounds.origin {
+             return Err("origin:bounds");
+         }
+-        if key.text_style != *text_style || key.env_fingerprint != env_fingerprint {
+-            return Err("origin:env");
++        // Riseonly 0086: the text style and the environment are told apart, with the field or key
++        // that changed, while the frame trace runs.
++        if key.text_style != *text_style {
++            return Err(if crate::profiler::frame_trace_enabled() {
++                crate::profiler::detailed_reason("origin:text_style", text_style_change(&key.text_style, text_style))
++            } else {
++                "origin:text_style"
++            });
++        }
++        if key.env_fingerprint != env_fingerprint {
++            return Err(if crate::profiler::frame_trace_enabled() {
++                crate::profiler::detailed_reason("origin:env", env_change(key.env_trace.as_deref(), &window.env_trace))
++            } else {
++                "origin:env"
++            });
+         }
+         if !window.ranges_replay_moved(&self.prepaint_range, &self.paint_range) {
+             return Err("origin:pinned");
+@@ -527,9 +540,9 @@
+         } else if key.content_mask != *content_mask && !self.mask_change_clear(content_mask, window) {
+             "mask"
+         } else if key.text_style != *text_style {
+-            "text_style"
++            crate::profiler::detailed_reason("text_style", text_style_change(&key.text_style, text_style))
+         } else if key.env_fingerprint != env_fingerprint {
+-            "env"
++            crate::profiler::detailed_reason("env", env_change(key.env_trace.as_deref(), &window.env_trace))
+         } else if self.prepainted_frame + 1 != window.draw_count {
+             "prepaint_gap"
+         } else if self.dropped_deferred {
+@@ -718,8 +731,66 @@
+     content_mask: ContentMask<Pixels>,
+     text_style: TextStyle,
+     env_fingerprint: u64,
++    /// Riseonly 0086: the environment keys the view rendered under, kept only while the frame
++    /// trace runs, so a miss on env names the key that changed.
++    env_trace: Option<Rc<[(&'static str, u64)]>>,
+ }
+ 
++/// Riseonly 0086: the first text style field that differs, for the frame trace.
++fn text_style_change(old: &TextStyle, new: &TextStyle) -> &'static str {
++    if old.color != new.color {
++        "color"
++    } else if old.font_family != new.font_family {
++        "font_family"
++    } else if old.font_features != new.font_features {
++        "font_features"
++    } else if old.font_fallbacks != new.font_fallbacks {
++        "font_fallbacks"
++    } else if old.font_size != new.font_size {
++        "font_size"
++    } else if old.line_height != new.line_height {
++        "line_height"
++    } else if old.font_weight != new.font_weight {
++        "font_weight"
++    } else if old.font_style != new.font_style {
++        "font_style"
++    } else if old.background_color != new.background_color {
++        "background_color"
++    } else if old.underline != new.underline {
++        "underline"
++    } else if old.strikethrough != new.strikethrough {
++        "strikethrough"
++    } else if old.white_space != new.white_space {
++        "white_space"
++    } else if old.text_overflow != new.text_overflow {
++        "text_overflow"
++    } else if old.text_align != new.text_align {
++        "text_align"
++    } else if old.line_clamp != new.line_clamp {
++        "line_clamp"
++    } else {
++        "other"
++    }
++}
++
++/// Riseonly 0086: the environment key whose value differs, or that is present on one side only,
++/// first from the outside; "untraced" when the view rendered before the frame trace started.
++fn env_change(old: Option<&[(&'static str, u64)]>, new: &[(&'static str, u64)]) -> &'static str {
++    let Some(old) = old else {
++        return "untraced";
++    };
++    for index in 0..old.len().max(new.len()) {
++        match (old.get(index), new.get(index)) {
++            (Some(before), Some(now)) if before == now => continue,
++            (Some(before), Some(now)) if before.0 == now.0 => return before.0,
++            (_, Some(now)) => return now.0,
++            (Some(before), None) => return before.0,
++            (None, None) => break,
++        }
++    }
++    "unnamed"
++}
++
+ impl<V: View> Element for ViewElement<V> {
+     type RequestLayoutState = Option<AnyElement>;
+     type PrepaintState = Option<AnyElement>;
+@@ -983,6 +1054,8 @@
+                                     content_mask,
+                                     text_style,
+                                     env_fingerprint,
++                                    env_trace: crate::profiler::frame_trace_enabled()
++                                        .then(|| Rc::from(window.env_trace.as_slice())),
+                                 },
+                                 parked: None,
+                                 dropped_deferred: window.hidden_dropped_deferred != dropped_before,
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1385,6 +1385,9 @@
+     /// Riseonly 0036: fingerprint of the environment values the elements being prepainted sit in.
+     /// A cached view keeps it in its cache key, so a changed value above it renders it fresh.
+     pub(crate) env_fingerprint: u64,
++    /// Riseonly 0086: the environment keys around the element being prepainted, outermost first,
++    /// each with the fingerprint of its own value, for the frame trace of a miss on env.
++    pub(crate) env_trace: Vec<(&'static str, u64)>,
+     /// Number of `Visibility::Hidden` divs around the element being prepainted (Riseonly 0034).
+     pub(crate) hidden_depth: usize,
+     /// Deferred draws dropped so far because a hidden div held them (Riseonly 0034).
+@@ -2154,6 +2157,7 @@
+             refreshing: false,
+             draw_count: 0,
+             env_fingerprint: 0,
++            env_trace: Vec::new(),
+             hidden_depth: 0,
+             hidden_dropped_deferred: 0,
+             image_drops: 0,
+@@ -2412,8 +2416,20 @@
+     /// returns the previous one, which the caller restores after them.
+     pub fn set_env_fingerprint(&mut self, fingerprint: u64) -> u64 {
+         std::mem::replace(&mut self.env_fingerprint, fingerprint)
++    }
++
++    /// Riseonly 0086: names the environment key the children prepainted next sit in, with the
++    /// fingerprint of its own value, so a cached view that misses on env names the key that
++    /// changed in the frame trace. Pair every push with [`Self::pop_env_trace`] after the children.
++    pub fn push_env_trace(&mut self, key: &'static str, fingerprint: u64) {
++        self.env_trace.push((key, fingerprint));
+     }
+ 
++    /// Riseonly 0086: leaves the scope [`Self::push_env_trace`] entered.
++    pub fn pop_env_trace(&mut self) {
++        self.env_trace.pop();
++    }
++
+     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
+     pub fn text_style(&self) -> TextStyle {
+         let mut style = TextStyle::default();

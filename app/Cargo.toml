@@ -1,0 +1,126 @@
+[package]
+name = "riseonly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "riseonly"
+path = "src/lib.rs"
+
+[[bin]]
+name = "riseonly"
+path = "src/main.rs"
+
+[features]
+# On by default: the onboarding and the sign-in wizard are Lottie, and a build
+# without them shows empty boxes where the product's whole first impression is.
+# `cargo make vendor-rlottie` fetches the source it compiles.
+default = ["rlottie"]
+rlottie = ["rise-media/rlottie", "rise-ui/rlottie"]
+# Automated test runs only: muted sound and on-request window snapshots
+# (gpui's render_to_image lives behind test-support). Inert in release builds.
+# RISE_DEV_STEALTH=1 also hides every window and keeps secrets in files (X186).
+dev-drive = ["gpui_platform/test-support", "rise-platform/dev-drive"]
+# iOS `SAI_DEBUG_TOOLS`: the Sai debugger (HTTP and socket traces) in an optimised build.
+sai_debug_tools = []
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures.workspace = true
+tokio-tungstenite.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+base64.workspace = true
+sha2.workspace = true
+aes-gcm.workspace = true
+# Call end-to-end key agreement, the twin of CryptoKit Curve25519 (RiseRTCCallCrypto).
+x25519-dalek = { version = "=2.0.1", features = ["static_secrets"] }
+parking_lot.workspace = true
+tracing-subscriber.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+rise-core.workspace = true
+rise-i18n.workspace = true
+rise-engine.workspace = true
+rise-perm.workspace = true
+rise-moderation.workspace = true
+rise-rtc.workspace = true
+rise-music.workspace = true
+rise-limits.workspace = true
+rise-bot-api.workspace = true
+rise-events.workspace = true
+rise-catalog.workspace = true
+rise-chat.workspace = true
+rise-endpoints.workspace = true
+rise-regions.workspace = true
+rise-platform.workspace = true
+rise-theme.workspace = true
+rise-ui.workspace = true
+rise-validate.workspace = true
+rise-widgets.workspace = true
+rise-media = { workspace = true, features = ["rlottie"] }
+# Outgoing photo codec (RiseOutgoingImageEncoder): JPEG out, the formats a picker hands in. Same 0.25 the
+# kit and rise-media pin, already in the lock.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
+# Lottie frame codec (RiseLottieFrameCodec, the LZFSE of iOS): the same 0.11 rise-media pins, already in the lock.
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+# Resume PDF glyph ids read from the embedded Inter file (ResumePdfTypesetter), not from whatever
+# face the shaper resolved: the 0.25.1 fontdb and usvg already pull, already in the lock.
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
+# QR scanner decode (RiseQRScanResolver), the workspace pin.
+rqrr.workspace = true
+rise-navigation.workspace = true
+rise-energy = { path = "../crates/rise-energy" }
+rise-diagnostics = { path = "../crates/rise-diagnostics" }
+rise-deeplink.workspace = true
+# Push payload to route via the canon table (PushNotificationRouteParser, A5-core-pushnotifications-003).
+rise-notify.workspace = true
+rise-canon.workspace = true
+rise-notification-texts.workspace = true
+rise-errors.workspace = true
+rise-privacy.workspace = true
+rise-format.workspace = true
+rise-gifts.workspace = true
+rise-otp.workspace = true
+rise-i18n-catalog.workspace = true
+rust_decimal.workspace = true
+smallvec.workspace = true
+directories.workspace = true
+
+# why: X2337, WebM video stickers decode through libavcodec; the LGPL prefix
+# (scripts/build-ffmpeg-lgpl.sh, vendor/ffmpeg/macos-arm64) exists for macOS only,
+# and bundle-macos.sh copies its dylibs into the app.
+[target.'cfg(target_os = "macos")'.dependencies]
+rise-media = { workspace = true, features = ["rlottie", "ffmpeg"] }
+
+[build-dependencies]
+# Windows icon and VERSIONINFO of riseonly.exe (build.rs, windows target only): the same 3.x
+# gpui compiles its manifest with, already in the lock.
+embed-resource = "3.0"
+# The canon environment rows build.rs resolves RISE_ENV against and the Foundation trim it
+# normalizes the value with, as AppEnvironment does.
+rise-core.workspace = true
+rise-deeplink.workspace = true
+
+[dev-dependencies]
+# The shell is a gpui Entity that owns a window's navigation, overlays and lease
+# stack. Its rules — Esc order, what a resize does to the visible set, what a
+# shortcut addresses — are only reachable through a real App. Same gpui, same
+# rev, one feature: no second crate enters the graph.
+gpui = { workspace = true, features = ["test-support"] }
+# Paused time. The tag debounce is a real 500 ms in the product, and a test that
+# waited it out in wall-clock would be both slow and flaky.
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,105 @@
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -724,6 +724,14 @@
+     pub paint_end: Option<Instant>,
+     /// Views whose `render` ran in this frame; a cached view that was reused does not count.
+     pub rendered_views: u32,
++    /// Riseonly 0081: lines shaped by the platform text system in this frame (line cache misses).
++    pub shaped_lines: u32,
++    /// Riseonly 0081: time spent shaping those lines.
++    pub shape_time: Duration,
++    /// Riseonly 0081: fonts resolved by the platform for the first time in this frame.
++    pub resolved_fonts: u32,
++    /// Riseonly 0081: time spent resolving those fonts.
++    pub font_resolve_time: Duration,
+ }
+ 
+ impl FrameTiming {
+@@ -772,8 +780,30 @@
+     pub(crate) paint_start: Option<Instant>,
+     pub(crate) paint_end: Option<Instant>,
+     pub(crate) rendered_views: u32,
++    pub(crate) shaped_lines: u32,
++    pub(crate) shape_time: Duration,
++    pub(crate) resolved_fonts: u32,
++    pub(crate) font_resolve_time: Duration,
++}
++
++/// Riseonly 0081: counts a line the platform text system shaped on this thread's frame.
++/// No-op unless frame tracing is enabled.
++pub(crate) fn note_text_shaped(elapsed: Duration) {
++    update_frame_phases(|phases| {
++        phases.shaped_lines = phases.shaped_lines.saturating_add(1);
++        phases.shape_time += elapsed;
++    });
+ }
+ 
++/// Riseonly 0081: counts a font the platform resolved for the first time on this thread's frame.
++/// No-op unless frame tracing is enabled.
++pub(crate) fn note_font_resolved(elapsed: Duration) {
++    update_frame_phases(|phases| {
++        phases.resolved_fonts = phases.resolved_fonts.saturating_add(1);
++        phases.font_resolve_time += elapsed;
++    });
++}
++
+ thread_local! {
+     static FRAME_PHASES: Cell<FramePhases> = Cell::new(FramePhases::default());
+ }
+--- a/crates/gpui/src/text_system.rs
++++ b/crates/gpui/src/text_system.rs
+@@ -120,7 +120,11 @@
+         if let Some(font_id) = font_id {
+             font_id
+         } else {
++            let started = crate::profiler::frame_trace_enabled().then(std::time::Instant::now);
+             let font_id = self.platform_text_system.font_id(font);
++            if let Some(started) = started {
++                crate::profiler::note_font_resolved(started.elapsed());
++            }
+             self.font_ids_by_font
+                 .write()
+                 .insert(font.clone(), clone_font_id_result(&font_id));
+--- a/crates/gpui/src/text_system/line_layout.rs
++++ b/crates/gpui/src/text_system/line_layout.rs
+@@ -722,9 +722,13 @@
+             layout
+         } else {
+             let text = SharedString::from(text);
++            let started = crate::profiler::frame_trace_enabled().then(std::time::Instant::now);
+             let mut layout = self
+                 .platform_text_system
+                 .layout_line(&text, font_size, runs);
++            if let Some(started) = started {
++                crate::profiler::note_text_shaped(started.elapsed());
++            }
+ 
+             if let Some(force_width) = force_width {
+                 apply_force_width_to_layout(&mut layout, force_width);
+@@ -871,9 +875,13 @@
+         }
+ 
+         let text = materialize_text();
++        let started = crate::profiler::frame_trace_enabled().then(std::time::Instant::now);
+         let mut layout = self
+             .platform_text_system
+             .layout_line(&text, font_size, runs);
++        if let Some(started) = started {
++            crate::profiler::note_text_shaped(started.elapsed());
++        }
+ 
+         if let Some(force_width) = force_width {
+             apply_force_width_to_layout(&mut layout, force_width);
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3336,6 +3336,10 @@
+                 paint_start: phases.paint_start,
+                 paint_end: phases.paint_end,
+                 rendered_views: phases.rendered_views,
++                shaped_lines: phases.shaped_lines,
++                shape_time: phases.shape_time,
++                resolved_fonts: phases.resolved_fonts,
++                font_resolve_time: phases.font_resolve_time,
+             });
+         }
+ 

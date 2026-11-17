@@ -1,0 +1,137 @@
+Riseonly patch on zed 6b2aa1c (Apache-2.0 crate gpui_macos), applied by scripts/vendor-gpui.py.
+BGRA surface with alpha on macOS (P148): the Metal renderer drew a PaintSurface only from a full-range
+biplanar YCbCr (420f) CVPixelBuffer and asserted on any other format. A kCVPixelFormatType_32BGRA
+buffer (premultiplied alpha, IOSurface backed) is now bound as one BGRA8Unorm texture from the
+CVMetalTextureCache and drawn by bgra_surface_fragment with the path sprite blending (One,
+OneMinusSourceAlpha), so a WebM sticker blends over the bubble and the chat background. The 420f
+path is unchanged; any third format still asserts.
+
+diff -ruN a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+--- a/crates/gpui_macos/src/metal_renderer.rs	2026-11-04 16:00:06
++++ b/crates/gpui_macos/src/metal_renderer.rs	2026-11-04 16:00:23
+@@ -16,7 +16,7 @@
+ use core_foundation::base::TCFType;
+ use core_video::{
+     metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
+-    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
++    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
+ };
+ use foreign_types::{ForeignType, ForeignTypeRef};
+ use metal::{
+@@ -126,6 +126,7 @@
+     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
+     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
+     surfaces_pipeline_state: metal::RenderPipelineState,
++    bgra_surfaces_pipeline_state: metal::RenderPipelineState,
+     unit_vertices: metal::Buffer,
+     #[allow(clippy::arc_with_non_send_sync)]
+     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
+@@ -323,6 +324,15 @@
+             "surface_fragment",
+             MTLPixelFormat::BGRA8Unorm,
+         );
++        // A 32BGRA surface carries premultiplied alpha, blended like a path sprite.
++        let bgra_surfaces_pipeline_state = build_path_sprite_pipeline_state(
++            &device,
++            &library,
++            "bgra_surfaces",
++            "surface_vertex",
++            "bgra_surface_fragment",
++            MTLPixelFormat::BGRA8Unorm,
++        );
+ 
+         let command_queue = device.new_command_queue();
+         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
+@@ -345,6 +355,7 @@
+             monochrome_sprites_pipeline_state,
+             polychrome_sprites_pipeline_state,
+             surfaces_pipeline_state,
++            bgra_surfaces_pipeline_state,
+             unit_vertices,
+             instance_buffer_pool,
+             sprite_atlas,
+@@ -1127,7 +1138,6 @@
+             return;
+         }
+ 
+-        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
+         command_encoder.set_vertex_buffer(
+             SurfaceInputIndex::Vertices as u64,
+             Some(&self.unit_vertices),
+@@ -1150,11 +1160,43 @@
+                 DevicePixels::from(surface.image_buffer.get_height() as i32),
+             );
+ 
+-            assert_eq!(
+-                surface.image_buffer.get_pixel_format(),
+-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
++            command_encoder.set_vertex_bytes(
++                SurfaceInputIndex::TextureSize as u64,
++                mem::size_of_val(&texture_size) as u64,
++                &texture_size as *const Size<DevicePixels> as *const _,
+             );
+ 
++            let pixel_format = surface.image_buffer.get_pixel_format();
++            if pixel_format == kCVPixelFormatType_32BGRA {
++                let bgra_texture = self
++                    .core_video_texture_cache
++                    .create_texture_from_image(
++                        surface.image_buffer.as_concrete_TypeRef(),
++                        None,
++                        MTLPixelFormat::BGRA8Unorm,
++                        surface.image_buffer.get_width(),
++                        surface.image_buffer.get_height(),
++                        0,
++                    )
++                    .unwrap();
++                command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
++                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
++                    let texture = CVMetalTextureGetTexture(bgra_texture.as_concrete_TypeRef());
++                    Some(metal::TextureRef::from_ptr(texture as *mut _))
++                });
++                command_encoder.draw_primitives_instanced_base_instance(
++                    metal::MTLPrimitiveType::Triangle,
++                    0,
++                    6,
++                    1,
++                    (first_surface + index) as u64,
++                );
++                continue;
++            }
++
++            assert_eq!(pixel_format, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
++            command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
++
+             let y_texture = self
+                 .core_video_texture_cache
+                 .create_texture_from_image(
+@@ -1178,11 +1220,6 @@
+                 )
+                 .unwrap();
+ 
+-            command_encoder.set_vertex_bytes(
+-                SurfaceInputIndex::TextureSize as u64,
+-                mem::size_of_val(&texture_size) as u64,
+-                &texture_size as *const Size<DevicePixels> as *const _,
+-            );
+             // let y_texture = y_texture.get_texture().unwrap().
+             command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
+                 let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
+diff -ruN a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
+--- a/crates/gpui_macos/src/shaders.metal	2026-11-04 16:00:06
++++ b/crates/gpui_macos/src/shaders.metal	2026-11-04 16:00:23
+@@ -899,6 +899,14 @@
+   return ycbcrToRGBTransform * ycbcr;
+ }
+ 
++// A 32BGRA surface with premultiplied alpha (bound in the luma slot), drawn as it is.
++fragment float4 bgra_surface_fragment(SurfaceFragmentInput input [[stage_in]],
++                                      texture2d<float> bgra_texture
++                                      [[texture(SurfaceInputIndex_YTexture)]]) {
++  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
++  return bgra_texture.sample(texture_sampler, input.texture_position);
++}
++
+ float4 hsla_to_rgba(Hsla hsla) {
+   float h = hsla.h * 6.0; // Now, it's an angle but scaled in [0, 6) range
+   float s = hsla.s;

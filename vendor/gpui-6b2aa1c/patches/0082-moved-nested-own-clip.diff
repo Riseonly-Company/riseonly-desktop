@@ -1,0 +1,44 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -668,6 +668,8 @@
+             }
+         } else if state.cache_key.content_mask == *old_mask {
+             new_mask.clone()
++        } else if let Some(bounds) = clip_moved_inside(&state.cache_key.content_mask, old_mask, new_mask, offset) {
++            ContentMask { bounds }
+         } else {
+             return;
+         };
+@@ -683,6 +685,32 @@
+         state.cache_key.bounds.origin = state.cache_key.bounds.origin + offset;
+         state.cache_key.content_mask = content_mask;
+     });
++}
++
++/// Riseonly 0082: the mask of a view nested under a clip of its own (a rounded cell with
++/// overflow hidden) inside an outer mask that stayed (the scroll viewport), after the outer view
++/// replayed moved by `offset`. A nested mask that touched no edge of the old outer mask was its own
++/// clips alone, which moved along with the view, so the new one is that clip moved, cut by the new
++/// outer mask: what a render would compute. A nested mask on an outer edge may have been cut by the
++/// outer mask, so it gives None and the nested view renders as before (X1343: preview, backdrop and
++/// gift surfaces of every wardrobe cell rendered on the next notify, miss prepaint_gap).
++fn clip_moved_inside(
++    nested: &ContentMask<Pixels>,
++    old_mask: &ContentMask<Pixels>,
++    new_mask: &ContentMask<Pixels>,
++    offset: Point<Pixels>,
++) -> Option<Bounds<Pixels>> {
++    let inner = nested.bounds;
++    let outer = old_mask.bounds;
++    let inside = inner.origin.x > outer.origin.x
++        && inner.origin.y > outer.origin.y
++        && inner.right() < outer.right()
++        && inner.bottom() < outer.bottom();
++    if !inside {
++        return None;
++    }
++    let moved = Bounds { origin: inner.origin + offset, size: inner.size };
++    Some(moved.intersect(&new_mask.bounds))
+ }
+ 
+ struct ViewElementCacheKey {

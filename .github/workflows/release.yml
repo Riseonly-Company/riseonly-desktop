@@ -1,0 +1,230 @@
+name: release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [staging, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      linux: ${{ steps.plan.outputs.linux }}
+      windows: ${{ steps.plan.outputs.windows }}
+      macos: ${{ steps.plan.outputs.macos }}
+      environment: ${{ steps.plan.outputs.environment }}
+      profile: ${{ steps.plan.outputs.profile }}
+      version: ${{ steps.plan.outputs.version }}
+      build_number: ${{ steps.plan.outputs.build_number }}
+      slug: ${{ steps.plan.outputs.slug }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      tools_repo: ${{ steps.plan.outputs.tools_repo }}
+      tools_ref: ${{ steps.plan.outputs.tools_ref }}
+      rust: ${{ steps.plan.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github
+            scripts/ci
+            Cargo.toml
+          sparse-checkout-cone-mode: false
+      - id: plan
+        name: Plan
+        run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The version is new
+        if: steps.plan.outputs.run == 'true' && steps.plan.outputs.environment == 'production'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG is already released, bump [workspace.package] version in Cargo.toml"
+            exit 1
+          fi
+
+  linux:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true'
+    runs-on: [self-hosted, linux, x64, riseonly-desktop-linux]
+    timeout-minutes: 150
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: build ${{ needs.plan.outputs.environment }} release
+        run: |
+          rm -rf riseonly-desktop/dist
+          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-linux
+          path: riseonly-desktop/dist/linux/
+          retention-days: 30
+          if-no-files-found: error
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
+    runs-on: [self-hosted, linux, x64, riseonly-desktop-windows]
+    timeout-minutes: 150
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: build ${{ needs.plan.outputs.environment }} release
+        run: |
+          rm -rf riseonly-desktop/dist
+          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows
+          path: riseonly-desktop/dist/windows/
+          retention-days: 30
+          if-no-files-found: error
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.macos == 'true'
+    runs-on: ${{ fromJSON(vars.DESKTOP_MACOS_RUNNER || '"macos-15"') }}
+    timeout-minutes: 180
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: ${{ needs.plan.outputs.rust }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: riseonly-desktop -> target
+          key: ${{ needs.plan.outputs.profile }}
+          cache-on-failure: true
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: riseonly-desktop/vendor/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('riseonly-desktop/scripts/build-ffmpeg-lgpl.sh') }}
+      - run: brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
+      - name: build, sign and notarize ${{ needs.plan.outputs.environment }} release
+        working-directory: riseonly-desktop
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          rm -rf dist
+          bash scripts/ci/build-macos.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-macos
+          path: riseonly-desktop/dist/macos/
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, linux, windows, macos]
+    if: >-
+      always() && needs.plan.outputs.run == 'true'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Collect the builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'desktop-*' --dir dist
+      - name: Publish ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist

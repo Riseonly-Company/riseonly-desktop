@@ -1,0 +1,84 @@
+--- a/crates/gpui/src/elements/list.rs
++++ b/crates/gpui/src/elements/list.rs
+@@ -73,6 +73,7 @@
+     measuring_behavior: ListMeasuringBehavior,
+     pending_scroll: Option<PendingScroll>,
+     follow_state: FollowState,
++    paints_under_top_padding: bool,
+ }
+ 
+ /// Deferred scroll adjustment applied after the scroll-top item has been remeasured.
+@@ -325,11 +326,18 @@
+             measuring_behavior: ListMeasuringBehavior::default(),
+             pending_scroll: None,
+             follow_state: FollowState::default(),
++            paints_under_top_padding: false,
+         })));
+         this.splice(0..0, item_count);
+         this
+     }
+ 
++    /// Riseonly 0116: paint the items above the scroll top inside the top padding, so the content
++    /// scrolls on under a translucent header laid over the padding instead of ending at it.
++    pub fn paint_under_top_padding(&self, paints: bool) {
++        self.0.borrow_mut().paints_under_top_padding = paints;
++    }
++
+     /// Set the list to measure all items in the list in the first layout phase.
+     ///
+     /// This is useful for ensuring that the scrollbar size is correct instead of based on only rendered elements.
+@@ -1173,10 +1181,40 @@
+                     self.logical_scroll_top = None;
+                 }
+             };
++        }
++
++        // Riseonly 0116: fill the part of the top padding the scroll top item leaves uncovered
++        // with the items above it, rendered like visible ones.
++        let mut under_padding = px(0.);
++        if self.paints_under_top_padding {
++            let uncovered = padding.top - scroll_top.offset_in_item;
++            while under_padding < uncovered {
++                cursor.prev();
++                if let Some(item) = cursor.item() {
++                    let item_index = cursor.start().0;
++                    let mut element = render_item(item_index, window, cx);
++                    let element_size = element.layout_as_root(available_item_space, window, cx);
++                    under_padding += element_size.height;
++                    measured_items.push_front(ListItem::Measured {
++                        size: element_size,
++                        focus_handle: item.focus_handle(),
++                    });
++                    if item.contains_focused(window, cx) {
++                        rendered_focused_item = true;
++                    }
++                    item_layouts.push_front(ItemLayout {
++                        index: item_index,
++                        element,
++                        size: element_size,
++                    });
++                } else {
++                    break;
++                }
++            }
+         }
+ 
+         // Measure items in the leading overdraw
+-        let mut leading_overdraw = scroll_top.offset_in_item;
++        let mut leading_overdraw = scroll_top.offset_in_item + under_padding;
+         while leading_overdraw < self.overdraw {
+             cursor.prev();
+             if let Some(item) = cursor.item() {
+@@ -1281,6 +1319,12 @@
+             if bounds.size.height > padding.top + padding.bottom {
+                 let mut item_origin = bounds.origin + Point::new(px(0.), padding.top);
+                 item_origin.y -= layout_response.scroll_top.offset_in_item;
++                let scroll_top_ix = layout_response.scroll_top.item_ix;
++                item_origin.y -= layout_response
++                    .item_layouts
++                    .iter()
++                    .take_while(|item| item.index < scroll_top_ix)
++                    .fold(px(0.), |height, item| height + item.size.height);
+                 for item in &mut layout_response.item_layouts {
+                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                         item.element.prepaint_at(item_origin, window, cx);

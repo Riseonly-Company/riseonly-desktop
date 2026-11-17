@@ -1,0 +1,503 @@
+Riseonly patch on zed 6b2aa1c (Apache-2.0 crates gpui, gpui_wgpu, gpui_windows), applied by scripts/vendor-gpui.py after 0003.
+OwnedSurfaceFrame gains a pixel format: OwnedSurfaceFrame::bgra carries one BGRA plane with premultiplied alpha
+(WebM stickers with their alpha stream joined in). The DirectX 11 renderer keeps a B8G8R8A8 texture per BGRA stream,
+uploaded with UpdateSubresource on a new generation, and draws it with a bgra_surface shader and the premultiplied
+blend (ONE, INV_SRC_ALPHA). The wgpu renderer skips BGRA frames until P147 draws them (P146 win).
+
+diff -ruN a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+--- a/crates/gpui/src/scene.rs	2026-11-04 16:01:35
++++ b/crates/gpui/src/scene.rs	2026-11-04 16:01:35
+@@ -786,15 +786,28 @@
+     [-0.7010, 0.5291, -0.8860, 1.0],
+ ];
+ 
+-/// One decoded NV12 video frame in CPU memory, drawn by renderers that own their surface
+-/// textures (the wgpu renderer). The renderer keeps one texture pair per `id` and uploads only
+-/// when `generation` changes, so a paused stream costs no upload.
++/// How the pixels of an [`OwnedSurfaceFrame`] are laid out.
+ #[cfg(not(target_os = "macos"))]
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum OwnedSurfacePixelFormat {
++    /// A luma plane and an interleaved CbCr plane at half resolution, converted to RGB with the
++    /// frame's matrix and drawn opaque.
++    Nv12,
++    /// One plane of 4-byte B, G, R, A pixels with premultiplied alpha, blended over what lies
++    /// beneath; no colour conversion.
++    Bgra,
++}
++
++/// One decoded video frame in CPU memory, drawn by renderers that own their surface textures
++/// (the wgpu and DirectX 11 renderers). The renderer keeps one texture set per `id` and uploads
++/// only when `generation` changes, so a paused stream costs no upload.
++#[cfg(not(target_os = "macos"))]
+ #[derive(Clone)]
+ pub struct OwnedSurfaceFrame {
+     id: u64,
+     generation: u64,
+     size: Size<crate::DevicePixels>,
++    pixel_format: OwnedSurfacePixelFormat,
+     luma: std::sync::Arc<[u8]>,
+     luma_stride: u32,
+     chroma: std::sync::Arc<[u8]>,
+@@ -826,6 +839,7 @@
+             id,
+             generation,
+             size,
++            pixel_format: OwnedSurfacePixelFormat::Nv12,
+             luma,
+             luma_stride,
+             chroma,
+@@ -835,6 +849,35 @@
+         frame.planes_fit().then_some(frame)
+     }
+ 
++    /// A BGRA frame with premultiplied alpha: `pixels` is `height` rows of `width * 4` bytes in
++    /// B, G, R, A order, each row `stride` bytes apart. Returns `None` when `pixels` is shorter
++    /// than its rows need or the size is empty.
++    pub fn bgra(
++        id: u64,
++        generation: u64,
++        width: u32,
++        height: u32,
++        pixels: std::sync::Arc<[u8]>,
++        stride: u32,
++    ) -> Option<Self> {
++        let size = crate::size(
++            crate::DevicePixels(i32::try_from(width).ok()?),
++            crate::DevicePixels(i32::try_from(height).ok()?),
++        );
++        let frame = Self {
++            id,
++            generation,
++            size,
++            pixel_format: OwnedSurfacePixelFormat::Bgra,
++            luma: pixels,
++            luma_stride: stride,
++            chroma: std::sync::Arc::from([]),
++            chroma_stride: 0,
++            ycbcr_to_rgb: DEFAULT_YCBCR_TO_RGB,
++        };
++        frame.planes_fit().then_some(frame)
++    }
++
+     /// Replaces the conversion matrix (column-major, applied to (Y, Cb, Cr, 1)).
+     pub fn with_ycbcr_to_rgb(mut self, matrix: [[f32; 4]; 4]) -> Self {
+         self.ycbcr_to_rgb = matrix;
+@@ -848,12 +891,25 @@
+             let stride = stride as u64;
+             stride >= row && stride * (rows - 1) + row <= len as u64
+         };
+-        width > 0
+-            && height > 0
+-            && fits(self.luma.len(), self.luma_stride, width, height)
+-            && fits(self.chroma.len(), self.chroma_stride, chroma_width * 2, chroma_height)
++        if width == 0 || height == 0 {
++            return false;
++        }
++        match self.pixel_format {
++            OwnedSurfacePixelFormat::Nv12 => {
++                fits(self.luma.len(), self.luma_stride, width, height)
++                    && fits(self.chroma.len(), self.chroma_stride, chroma_width * 2, chroma_height)
++            }
++            OwnedSurfacePixelFormat::Bgra => {
++                fits(self.luma.len(), self.luma_stride, width * 4, height)
++            }
++        }
+     }
+ 
++    /// How this frame's pixels are laid out.
++    pub fn pixel_format(&self) -> OwnedSurfacePixelFormat {
++        self.pixel_format
++    }
++
+     /// The stream this frame belongs to.
+     pub fn id(&self) -> u64 {
+         self.id
+@@ -864,7 +920,7 @@
+         self.generation
+     }
+ 
+-    /// Size in pixels of the luma plane.
++    /// Size in pixels of the picture (of the luma plane for NV12).
+     pub fn size(&self) -> Size<crate::DevicePixels> {
+         self.size
+     }
+@@ -879,16 +935,23 @@
+         self.size.height.0 as u32
+     }
+ 
+-    /// The luma plane and its row stride in bytes.
++    /// The luma plane and its row stride in bytes (the BGRA plane of a BGRA frame; check
++    /// [`OwnedSurfaceFrame::pixel_format`] first).
+     pub fn luma(&self) -> (&[u8], u32) {
+         (&self.luma, self.luma_stride)
+     }
+ 
+-    /// The interleaved CbCr plane and its row stride in bytes.
++    /// The interleaved CbCr plane and its row stride in bytes (empty for a BGRA frame).
+     pub fn chroma(&self) -> (&[u8], u32) {
+         (&self.chroma, self.chroma_stride)
+     }
+ 
++    /// The BGRA plane and its row stride in bytes, `None` for an NV12 frame.
++    pub fn bgra_pixels(&self) -> Option<(&[u8], u32)> {
++        (self.pixel_format == OwnedSurfacePixelFormat::Bgra)
++            .then(|| (&*self.luma, self.luma_stride))
++    }
++
+     /// The YCbCr to RGB matrix, column-major, applied to (Y, Cb, Cr, 1).
+     pub fn ycbcr_to_rgb(&self) -> [[f32; 4]; 4] {
+         self.ycbcr_to_rgb
+@@ -912,6 +975,7 @@
+             .field("id", &self.id)
+             .field("generation", &self.generation)
+             .field("size", &self.size)
++            .field("pixel_format", &self.pixel_format)
+             .finish_non_exhaustive()
+     }
+ }
+diff -ruN a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs	2026-11-04 16:01:35
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs	2026-11-04 16:01:35
+@@ -1632,6 +1632,13 @@
+                 bind_groups.push(None);
+                 continue;
+             }
++            // The surface pipeline here samples NV12 planes only; a BGRA frame has no chroma
++            // plane to upload, so it is skipped rather than drawn as garbage.
++            if frame.pixel_format() != gpui::OwnedSurfacePixelFormat::Nv12 {
++                log::debug!("owned surface {} is BGRA, which this renderer does not draw", frame.id());
++                bind_groups.push(None);
++                continue;
++            }
+ 
+             let device = &resources.device;
+             let textures = resources
+diff -ruN a/crates/gpui_windows/build.rs b/crates/gpui_windows/build.rs
+--- a/crates/gpui_windows/build.rs	2026-11-04 16:01:35
++++ b/crates/gpui_windows/build.rs	2026-11-04 16:01:35
+@@ -39,6 +39,7 @@
+             "subpixel_sprite",
+             "polychrome_sprite",
+             "surface",
++            "bgra_surface",
+         ];
+ 
+         let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
+diff -ruN a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+--- a/crates/gpui_windows/src/directx_renderer.rs	2026-11-04 16:01:35
++++ b/crates/gpui_windows/src/directx_renderer.rs	2026-11-04 16:01:35
+@@ -101,18 +101,39 @@
+     subpixel_sprites: PipelineState<SubpixelSprite>,
+     poly_sprites: PipelineState<PolychromeSprite>,
+     surfaces: PipelineState<SurfaceSprite>,
++    bgra_surfaces: BgraSurfaceShaders,
+ }
+ 
+-/// The luma (R8) and interleaved chroma (R8G8, half size) textures of one owned video stream,
+-/// reused while its size holds; uploaded only when the frame generation changes.
++/// The shaders and blend state that draw a BGRA owned surface. It reads the instance buffer of
++/// the `surfaces` pipeline, which holds one `SurfaceSprite` per scene surface whatever its format.
++struct BgraSurfaceShaders {
++    vertex: ID3D11VertexShader,
++    fragment: ID3D11PixelShader,
++    /// Premultiplied alpha: the sticker's colour is already multiplied by its alpha.
++    blend_state: ID3D11BlendState,
++}
++
++/// The textures of one owned video stream, reused while its size and pixel format hold;
++/// uploaded only when the frame generation changes.
+ struct OwnedSurfaceTextures {
+     size: Size<DevicePixels>,
++    pixel_format: OwnedSurfacePixelFormat,
+     uploaded_generation: Option<u64>,
+-    luma: ID3D11Texture2D,
+-    chroma: ID3D11Texture2D,
++    planes: OwnedSurfacePlanes,
++    /// Bound at t2 and t3; a BGRA stream leaves t3 empty.
+     views: [Option<ID3D11ShaderResourceView>; 2],
+ }
+ 
++enum OwnedSurfacePlanes {
++    /// Luma (R8) and interleaved chroma (R8G8, half size).
++    Nv12 {
++        luma: ID3D11Texture2D,
++        chroma: ID3D11Texture2D,
++    },
++    /// One B8G8R8A8 texture with premultiplied alpha.
++    Bgra { pixels: ID3D11Texture2D },
++}
++
+ /// One owned surface in the instance buffer; mirrors `SurfaceSprite` in shaders.hlsl.
+ #[derive(Clone, Copy)]
+ #[repr(C)]
+@@ -564,12 +585,15 @@
+             if self
+                 .owned_surfaces
+                 .get(&id)
+-                .is_some_and(|textures| textures.size != frame.size())
++                .is_some_and(|textures| {
++                    textures.size != frame.size() || textures.pixel_format != frame.pixel_format()
++                })
+             {
+                 self.owned_surfaces.remove(&id);
+             }
+             if !self.owned_surfaces.contains_key(&id) {
+-                match OwnedSurfaceTextures::new(&devices.device, frame.size()) {
++                match OwnedSurfaceTextures::new(&devices.device, frame.size(), frame.pixel_format())
++                {
+                     Ok(textures) => {
+                         self.owned_surfaces.insert(id, textures);
+                     }
+@@ -584,24 +608,41 @@
+             };
+             if textures.uploaded_generation != Some(frame.generation()) {
+                 let (width, height) = (frame.width(), frame.height());
+-                let (luma, luma_stride) = frame.luma();
+-                let (chroma, chroma_stride) = frame.chroma();
+-                upload_surface_plane(
+-                    &devices.device_context,
+-                    &textures.luma,
+-                    luma,
+-                    luma_stride,
+-                    width,
+-                    height,
+-                );
+-                upload_surface_plane(
+-                    &devices.device_context,
+-                    &textures.chroma,
+-                    chroma,
+-                    chroma_stride,
+-                    width.div_ceil(2) * 2,
+-                    height.div_ceil(2),
+-                );
++                match &textures.planes {
++                    OwnedSurfacePlanes::Nv12 { luma, chroma } => {
++                        let (luma_plane, luma_stride) = frame.luma();
++                        let (chroma_plane, chroma_stride) = frame.chroma();
++                        upload_surface_plane(
++                            &devices.device_context,
++                            luma,
++                            luma_plane,
++                            luma_stride,
++                            width,
++                            height,
++                        );
++                        upload_surface_plane(
++                            &devices.device_context,
++                            chroma,
++                            chroma_plane,
++                            chroma_stride,
++                            width.div_ceil(2) * 2,
++                            height.div_ceil(2),
++                        );
++                    }
++                    OwnedSurfacePlanes::Bgra { pixels } => {
++                        let Some((plane, stride)) = frame.bgra_pixels() else {
++                            continue;
++                        };
++                        upload_surface_plane(
++                            &devices.device_context,
++                            pixels,
++                            plane,
++                            stride,
++                            width * 4,
++                            height,
++                        );
++                    }
++                }
+                 textures.uploaded_generation = Some(frame.generation());
+             }
+         }
+@@ -861,16 +902,27 @@
+                 batch_params_buffer,
+                 (start + offset) as u32,
+             )?;
++            let (vertex, fragment, blend_state) = match textures.planes {
++                OwnedSurfacePlanes::Nv12 { .. } => {
++                    (&pipeline.vertex, &pipeline.fragment, &pipeline.blend_state)
++                }
++                OwnedSurfacePlanes::Bgra { .. } => (
++                    &self.pipelines.bgra_surfaces.vertex,
++                    &self.pipelines.bgra_surfaces.fragment,
++                    &self.pipelines.bgra_surfaces.blend_state,
++                ),
++            };
+             set_pipeline_state(
+                 &devices.device_context,
+                 slice::from_ref(&pipeline.view),
+                 D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+-                &pipeline.vertex,
+-                &pipeline.fragment,
+-                &pipeline.blend_state,
++                vertex,
++                fragment,
++                blend_state,
+             );
+-            // SAFETY: the sampler and both views were created on this device and stay alive for
+-            // the draw; slots s1, t2 and t3 are the ones shaders.hlsl declares for surfaces.
++            // SAFETY: the sampler and the views were created on this device and stay alive for
++            // the draw; slots s1, t2 and t3 are the ones shaders.hlsl declares for surfaces (a
++            // BGRA stream binds t2 and leaves t3 empty).
+             unsafe {
+                 devices
+                     .device_context
+@@ -1068,6 +1120,7 @@
+             4,
+             create_blend_state(device)?,
+         )?;
++        let bgra_surfaces = BgraSurfaceShaders::new(device)?;
+ 
+         Ok(Self {
+             shadow_pipeline,
+@@ -1079,6 +1132,7 @@
+             subpixel_sprites,
+             poly_sprites,
+             surfaces,
++            bgra_surfaces,
+         })
+     }
+ }
+@@ -1358,29 +1412,78 @@
+     }
+ }
+ 
++impl BgraSurfaceShaders {
++    fn new(device: &ID3D11Device) -> Result<Self> {
++        let vertex = {
++            let raw_shader = RawShaderBytes::new(ShaderModule::BgraSurface, ShaderTarget::Vertex)?;
++            create_vertex_shader(device, raw_shader.as_bytes())?
++        };
++        let fragment = {
++            let raw_shader =
++                RawShaderBytes::new(ShaderModule::BgraSurface, ShaderTarget::Fragment)?;
++            create_fragment_shader(device, raw_shader.as_bytes())?
++        };
++        // The path sprite blend is the premultiplied one: colour ONE, INV_SRC_ALPHA.
++        // https://learn.microsoft.com/windows/win32/api/d3d11/ne-d3d11-d3d11_blend
++        let blend_state = create_blend_state_for_path_sprite(device)?;
++        Ok(Self {
++            vertex,
++            fragment,
++            blend_state,
++        })
++    }
++}
++
+ impl OwnedSurfaceTextures {
+-    fn new(device: &ID3D11Device, size: Size<DevicePixels>) -> Result<Self> {
++    fn new(
++        device: &ID3D11Device,
++        size: Size<DevicePixels>,
++        pixel_format: OwnedSurfacePixelFormat,
++    ) -> Result<Self> {
+         let width = size.width.0 as u32;
+         let height = size.height.0 as u32;
+-        let luma = create_surface_plane_texture(device, width, height, DXGI_FORMAT_R8_UNORM)?;
+-        let chroma = create_surface_plane_texture(
+-            device,
+-            width.div_ceil(2),
+-            height.div_ceil(2),
+-            DXGI_FORMAT_R8G8_UNORM,
+-        )?;
+         let mut views = [None, None];
+-        // SAFETY: both textures were just created on `device` with BIND_SHADER_RESOURCE, and
+-        // each out pointer is a live slot of `views`.
+-        unsafe {
+-            device.CreateShaderResourceView(&luma, None, Some(&mut views[0]))?;
+-            device.CreateShaderResourceView(&chroma, None, Some(&mut views[1]))?;
+-        }
++        let planes = match pixel_format {
++            OwnedSurfacePixelFormat::Nv12 => {
++                let luma =
++                    create_surface_plane_texture(device, width, height, DXGI_FORMAT_R8_UNORM)?;
++                let chroma = create_surface_plane_texture(
++                    device,
++                    width.div_ceil(2),
++                    height.div_ceil(2),
++                    DXGI_FORMAT_R8G8_UNORM,
++                )?;
++                // SAFETY: both textures were just created on `device` with BIND_SHADER_RESOURCE,
++                // and each out pointer is a live slot of `views`.
++                unsafe {
++                    device.CreateShaderResourceView(&luma, None, Some(&mut views[0]))?;
++                    device.CreateShaderResourceView(&chroma, None, Some(&mut views[1]))?;
++                }
++                OwnedSurfacePlanes::Nv12 { luma, chroma }
++            }
++            OwnedSurfacePixelFormat::Bgra => {
++                // why: B8G8R8A8_UNORM keeps the decoder's byte order, so the upload is a plain
++                // row copy; the sampler returns it as RGBA.
++                // https://learn.microsoft.com/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format
++                let pixels = create_surface_plane_texture(
++                    device,
++                    width,
++                    height,
++                    DXGI_FORMAT_B8G8R8A8_UNORM,
++                )?;
++                // SAFETY: the texture was just created on `device` with BIND_SHADER_RESOURCE,
++                // and the out pointer is a live slot of `views`.
++                unsafe {
++                    device.CreateShaderResourceView(&pixels, None, Some(&mut views[0]))?;
++                }
++                OwnedSurfacePlanes::Bgra { pixels }
++            }
++        };
+         Ok(Self {
+             size,
++            pixel_format,
+             uploaded_generation: None,
+-            luma,
+-            chroma,
++            planes,
+             views,
+         })
+     }
+@@ -1896,6 +1999,7 @@
+         SubpixelSprite,
+         PolychromeSprite,
+         Surface,
++        BgraSurface,
+         EmojiRasterization,
+     }
+ 
+@@ -1974,6 +2078,10 @@
+                     ShaderTarget::Vertex => SURFACE_VERTEX_BYTES,
+                     ShaderTarget::Fragment => SURFACE_FRAGMENT_BYTES,
+                 },
++                ShaderModule::BgraSurface => match target {
++                    ShaderTarget::Vertex => BGRA_SURFACE_VERTEX_BYTES,
++                    ShaderTarget::Fragment => BGRA_SURFACE_FRAGMENT_BYTES,
++                },
+                 ShaderModule::EmojiRasterization => match target {
+                     ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
+                     ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
+@@ -2065,6 +2173,7 @@
+                 ShaderModule::SubpixelSprite => "subpixel_sprite",
+                 ShaderModule::PolychromeSprite => "polychrome_sprite",
+                 ShaderModule::Surface => "surface",
++                ShaderModule::BgraSurface => "bgra_surface",
+                 ShaderModule::EmojiRasterization => "emoji_rasterization",
+             }
+         }
+diff -ruN a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
+--- a/crates/gpui_windows/src/shaders.hlsl	2026-11-04 16:01:35
++++ b/crates/gpui_windows/src/shaders.hlsl	2026-11-04 16:01:35
+@@ -1326,3 +1326,17 @@
+         + sprite.ycbcr_to_rgb_3;
+     return float4(saturate(rgb.rgb), 1.0);
+ }
++
++// An owned BGRA frame with premultiplied alpha (a WebM sticker with its alpha stream joined in):
++// one B8G8R8A8 texture, which the sampler returns as RGBA, drawn with the premultiplied blend
++// state (ONE, INV_SRC_ALPHA). The sprite and the vertex stage are the NV12 surface's; the
++// conversion matrix is unused.
++Texture2D<float4> t_surface_bgra: register(t2);
++
++SurfaceVertexOutput bgra_surface_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
++    return surface_vertex(vertex_id, instance_id);
++}
++
++float4 bgra_surface_fragment(SurfaceFragmentInput input): SV_Target {
++    return t_surface_bgra.Sample(s_surface, input.texture_position);
++}

@@ -1,0 +1,370 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -169,6 +169,29 @@
+                     self.insert_primitive(primitive);
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds + offset),
++                PaintOperation::EndLayer => self.pop_layer(),
++            }
++        }
++    }
++
++    /// Replays a range of the previous scene painted under one transformation as the paint under
++    /// another (Riseonly 0053): a cached view flying in a zoom transition keeps its last frame and
++    /// takes the matrix and the clip of this one instead of rendering. Layers keep their bounds,
++    /// which only order what they hold.
++    pub(crate) fn replay_transformed(
++        &mut self,
++        range: Range<usize>,
++        prev_scene: &Scene,
++        replay: &TransformedReplay,
++    ) {
++        for operation in &prev_scene.paint_operations[range] {
++            match operation {
++                PaintOperation::Primitive(primitive) => {
++                    let mut primitive = primitive.clone();
++                    primitive.retransform(replay);
++                    self.insert_primitive(primitive);
++                }
++                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
+             }
+         }
+@@ -371,6 +394,71 @@
+                 transformed_bounds(&sprite.bounds, &sprite.transformation)
+             }
+             primitive => *primitive.bounds(),
++        }
++    }
++
++    /// Carries a primitive painted under the old transformation to the new one (Riseonly 0053), as
++    /// `Window::with_transformation` would have painted it: paths and transformed sprites take the
++    /// delta, a surface its box, the rest stays where layout put it; every clip becomes the mask
++    /// the transformation clips with now, the only mask a paint under it records.
++    fn retransform(&mut self, replay: &TransformedReplay) {
++        let delta = &replay.delta;
++        let map = |position: Point<ScaledPixels>| {
++            point(
++                ScaledPixels(delta.rotation_scale[0][0] * position.x.0 + delta.translation[0]),
++                ScaledPixels(delta.rotation_scale[1][1] * position.y.0 + delta.translation[1]),
++            )
++        };
++        let map_bounds = |bounds: &Bounds<ScaledPixels>| {
++            Bounds::from_corners(map(bounds.origin), map(bounds.bottom_right()))
++        };
++        let snapped = |bounds: Bounds<ScaledPixels>| {
++            let left = bounds.origin.x.0.round();
++            let top = bounds.origin.y.0.round();
++            let right = bounds.bottom_right().x.0.round().max(left);
++            let bottom = bounds.bottom_right().y.0.round().max(top);
++            Bounds::from_corners(
++                point(ScaledPixels(left), ScaledPixels(top)),
++                point(ScaledPixels(right), ScaledPixels(bottom)),
++            )
++        };
++        let retransformed = |transformation: &mut TransformationMatrix| {
++            // invariant: a sprite left untransformed under the old matrix stays so under the new.
++            if *transformation != TransformationMatrix::unit() {
++                *transformation = delta.compose(*transformation);
++            }
++        };
++        match self {
++            Primitive::Shadow(shadow) => shadow.content_mask = replay.snapped_mask.clone(),
++            Primitive::Quad(quad) => quad.content_mask = replay.snapped_mask.clone(),
++            Primitive::Underline(underline) => underline.content_mask = replay.snapped_mask.clone(),
++            Primitive::Path(path) => {
++                path.bounds = map_bounds(&path.bounds);
++                path.content_mask = replay.path_mask.clone();
++                for vertex in &mut path.vertices {
++                    vertex.xy_position = map(vertex.xy_position);
++                    vertex.content_mask = replay.path_mask.clone();
++                }
++            }
++            Primitive::MonochromeSprite(sprite) => {
++                sprite.content_mask = replay.snapped_mask.clone();
++                retransformed(&mut sprite.transformation);
++            }
++            Primitive::SubpixelSprite(sprite) => {
++                sprite.content_mask = replay.snapped_mask.clone();
++                retransformed(&mut sprite.transformation);
++            }
++            Primitive::PolychromeSprite(sprite) => {
++                sprite.content_mask = replay.snapped_mask.clone();
++                retransformed(&mut sprite.transformation);
++            }
++            Primitive::Surface(surface) => {
++                surface.bounds = snapped(map_bounds(&surface.bounds));
++                if surface.corner_clip_bounds != Bounds::default() {
++                    surface.corner_clip_bounds = snapped(map_bounds(&surface.corner_clip_bounds));
++                }
++                surface.content_mask = replay.snapped_mask.clone();
++            }
+         }
+     }
+ 
+@@ -795,6 +883,16 @@
+     Dashed = 1,
+ }
+ 
++/// How a cached view painted under one transformation replays under another (Riseonly 0053).
++pub(crate) struct TransformedReplay {
++    /// The new transformation after the inverse of the old one: an axis-aligned scale and a move.
++    pub(crate) delta: TransformationMatrix,
++    /// The mask the new transformation clips with, as a path keeps it.
++    pub(crate) path_mask: ContentMask<ScaledPixels>,
++    /// The same mask snapped out to device pixels, as every other primitive keeps it.
++    pub(crate) snapped_mask: ContentMask<ScaledPixels>,
++}
++
+ /// A data type representing a 2 dimensional transformation that can be applied to an element.
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ #[repr(C)]
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -3,6 +3,7 @@
+     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
+     Pixels, Point, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
+ };
++use crate::window::PaintContext;
+ use crate::{Empty, Window};
+ use anyhow::Result;
+ use collections::FxHashSet;
+@@ -323,6 +324,8 @@
+     stale_while_hidden: bool,
+     /// The prepaint replayed moved by this offset; the paint that follows replays moved too.
+     moved_by: Option<Point<Pixels>>,
++    /// What the primitives of the paint range were painted under (Riseonly 0053).
++    painted_under: PaintContext,
+     /// The recorded ranges hold mouse listeners and element states of an earlier origin: this view
+     /// or a cached view inside it replayed moved since it last rendered (Riseonly 0044).
+     positions_moved: bool,
+@@ -696,6 +699,7 @@
+                                 dropped_deferred: window.hidden_dropped_deferred != dropped_before,
+                                 stale_while_hidden: false,
+                                 moved_by: None,
++                                painted_under: PaintContext::default(),
+                                 positions_moved,
+                             },
+                         )
+@@ -741,12 +745,33 @@
+                                 element.paint(window, cx);
+                                 window.refreshing = refreshing;
+                                 element_state.painted_frame = window.draw_count;
++                                element_state.painted_under = window.paint_context();
+                             } else if element_state.painted_frame + 1 == window.draw_count {
++                                let range = element_state.paint_range.clone();
++                                let now = window.paint_context();
+                                 match element_state.moved_by.take() {
+                                     // Riseonly 0041: the prepaint replayed at a new origin.
+-                                    Some(offset) => window
+-                                        .reuse_moved_paint(element_state.paint_range.clone(), offset),
+-                                    None => window.reuse_paint(element_state.paint_range.clone()),
++                                    Some(offset) => window.reuse_moved_paint(range, offset),
++                                    None if element_state.painted_under.places_alike(&now) => {
++                                        window.reuse_paint(range)
++                                    }
++                                    // Riseonly 0053: the transformation around the view moved (a
++                                    // zoom flight): its frame follows the matrix and the clip.
++                                    None if window.reuse_transformed_paint(
++                                        range.clone(),
++                                        &element_state.painted_under,
++                                        &now,
++                                    ) =>
++                                    {
++                                        element_state.painted_under = now;
++                                    }
++                                    // Riseonly 0053: the old frame cannot follow, so it shows once
++                                    // more where it was and the view renders in the next frame,
++                                    // instead of staying frozen while the transformation moves.
++                                    None => {
++                                        window.reuse_paint(range);
++                                        cx.notify(entity_id);
++                                    }
+                                 }
+                                 element_state.painted_frame = window.draw_count;
+                             } else if let Some(parked) = element_state.parked.take() {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1,5 +1,6 @@
+ #[cfg(any(feature = "inspector", debug_assertions))]
+ use crate::Inspector;
++use crate::scene::TransformedReplay;
+ use crate::{
+     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
+     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
+@@ -958,6 +959,43 @@
+     /// Cached views drawn with mouse listeners of an earlier origin and their bounds now: the
+     /// mouse entering one makes it render (Riseonly 0044).
+     pub(crate) moved_views: Vec<(EntityId, Bounds<Pixels>)>,
++}
++
++/// What a paint ran under that a replay of it must match or carry over (Riseonly 0053): the
++/// transformation and the mask [`Window::with_transformation`] clips with, and the element opacity
++/// baked into the colours.
++#[derive(Clone, PartialEq)]
++pub(crate) struct PaintContext {
++    transformation: TransformationMatrix,
++    transformation_mask: Option<ContentMask<Pixels>>,
++    opacity: f32,
++}
++
++impl PaintContext {
++    /// Whether a paint under `self` lands where a paint under `other` would, the opacity aside.
++    pub(crate) fn places_alike(&self, other: &PaintContext) -> bool {
++        self.transformation == other.transformation
++            && self.transformation_mask == other.transformation_mask
++    }
++}
++
++impl Default for PaintContext {
++    fn default() -> Self {
++        Self {
++            transformation: TransformationMatrix::unit(),
++            transformation_mask: None,
++            opacity: 1.0,
++        }
++    }
++}
++
++/// How a paint range of the frame just drawn goes into the next one.
++enum PaintReplay {
++    Same,
++    /// Moved by an offset in scaled pixels (Riseonly 0041).
++    Moved(Point<ScaledPixels>),
++    /// Under another transformation (Riseonly 0053).
++    Transformed(TransformedReplay),
+ }
+ 
+ /// A prepaint callback that reads window positions, recorded so a cached view replayed at a new
+@@ -3824,16 +3862,106 @@
+     }
+ 
+     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+-        self.reuse_paint_at(range, None);
++        self.reuse_paint_at(range, PaintReplay::Same);
+     }
+ 
++    /// What the paint running now is painted under (Riseonly 0053).
++    pub(crate) fn paint_context(&self) -> PaintContext {
++        PaintContext {
++            transformation: self.transformation(),
++            transformation_mask: self.transformation_stack.last().map(|(_, mask)| mask.clone()),
++            opacity: self.element_opacity,
++        }
++    }
++
++    /// Replays a paint range of the frame just drawn, painted under `painted`, as the paint under
++    /// `now` (Riseonly 0053): a cached view under a zoom flight keeps its frame while the matrix
++    /// and the clip around it move. False, replaying nothing, when the replay would not be what a
++    /// paint draws: a turn or a mirror, a paint outside any transformation, another opacity, or a
++    /// clip that now shows what the old one cut away (the scene dropped those primitives).
++    pub(crate) fn reuse_transformed_paint(
++        &mut self,
++        range: Range<PaintIndex>,
++        painted: &PaintContext,
++        now: &PaintContext,
++    ) -> bool {
++        match self.transformed_replay(painted, now) {
++            Some(replay) => {
++                self.reuse_paint_at(range, PaintReplay::Transformed(replay));
++                true
++            }
++            None => false,
++        }
++    }
++
++    fn transformed_replay(&self, painted: &PaintContext, now: &PaintContext) -> Option<TransformedReplay> {
++        fn scales_only(matrix: &TransformationMatrix) -> bool {
++            let [[scale_x, shear_x], [shear_y, scale_y]] = matrix.rotation_scale;
++            shear_x == 0.0 && shear_y == 0.0 && scale_x > 0.0 && scale_y > 0.0
++        }
++        if painted.opacity != now.opacity
++            || !scales_only(&painted.transformation)
++            || !scales_only(&now.transformation)
++        {
++            return None;
++        }
++        let (Some(old_mask), Some(new_mask)) = (&painted.transformation_mask, &now.transformation_mask)
++        else {
++            return None;
++        };
++        let (old, new) = (&painted.transformation, &now.transformation);
++        let scale_x = new.rotation_scale[0][0] / old.rotation_scale[0][0];
++        let scale_y = new.rotation_scale[1][1] / old.rotation_scale[1][1];
++        let move_x = new.translation[0] - scale_x * old.translation[0];
++        let move_y = new.translation[1] - scale_y * old.translation[1];
++        let delta = TransformationMatrix {
++            rotation_scale: [[scale_x, 0.0], [0.0, scale_y]],
++            translation: [move_x, move_y],
++        };
++        let scale = self.scale_factor();
++        let edges = |bounds: &Bounds<Pixels>| {
++            [
++                bounds.left().0 * scale,
++                bounds.top().0 * scale,
++                bounds.right().0 * scale,
++                bounds.bottom().0 * scale,
++            ]
++        };
++        let within = |inner: [f32; 4], outer: [f32; 4]| {
++            const SLACK: f32 = 0.01;
++            inner[0] >= outer[0] - SLACK
++                && inner[1] >= outer[1] - SLACK
++                && inner[2] <= outer[2] + SLACK
++                && inner[3] <= outer[3] + SLACK
++        };
++        let (old_edges, new_edges) = (edges(&old_mask.bounds), edges(&new_mask.bounds));
++        // why: the scene drops a primitive its clip hides, so the new clip may only show less:
++        // on screen for what stays untransformed, and through the delta for what follows it.
++        let new_in_old_space = [
++            (new_edges[0] - move_x) / scale_x,
++            (new_edges[1] - move_y) / scale_y,
++            (new_edges[2] - move_x) / scale_x,
++            (new_edges[3] - move_y) / scale_y,
++        ];
++        if !within(new_edges, old_edges) || !within(new_in_old_space, old_edges) {
++            return None;
++        }
++        Some(TransformedReplay {
++            delta,
++            path_mask: new_mask.scale(scale),
++            snapped_mask: ContentMask {
++                bounds: self.cover_bounds(new_mask.bounds),
++            },
++        })
++    }
++
+     /// Replays a paint range of the frame just drawn moved by `offset` (Riseonly 0041).
+     pub(crate) fn reuse_moved_paint(&mut self, range: Range<PaintIndex>, offset: Point<Pixels>) {
+         let offset = offset.scale(self.scale_factor());
+-        self.reuse_paint_at(range, Some(offset));
++        self.reuse_paint_at(range, PaintReplay::Moved(offset));
+     }
+ 
+-    fn reuse_paint_at(&mut self, range: Range<PaintIndex>, offset: Option<Point<ScaledPixels>>) {
++    fn reuse_paint_at(&mut self, range: Range<PaintIndex>, replay: PaintReplay) {
+         self.next_frame.cursor_styles.extend(
+             self.rendered_frame.cursor_styles
+                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
+@@ -3866,13 +3994,18 @@
+         self.text_system
+             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+         let scene_range = range.start.scene_index..range.end.scene_index;
+-        match offset {
+-            Some(offset) => {
++        match replay {
++            PaintReplay::Moved(offset) => {
+                 self.next_frame
+                     .scene
+                     .replay_moved(scene_range, &self.rendered_frame.scene, offset)
+             }
+-            None => self
++            PaintReplay::Transformed(replay) => {
++                self.next_frame
++                    .scene
++                    .replay_transformed(scene_range, &self.rendered_frame.scene, &replay)
++            }
++            PaintReplay::Same => self
+                 .next_frame
+                 .scene
+                 .replay(scene_range, &self.rendered_frame.scene),

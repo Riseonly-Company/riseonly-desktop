@@ -1,0 +1,16 @@
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -3760,7 +3760,12 @@
+                                 }
+                             });
+                         *active_tooltip.borrow_mut() = new_tooltip;
+-                        window.refresh();
++                        // Riseonly 0064: a label coming up refreshed the window, so every cached
++                        // view rendered again under a 22 pt badge's hover label (X1641: the whole
++                        // profile post grid after each badge pick). The label is requested in the
++                        // prepaint of its own element, so only the view that holds it (and its
++                        // ancestors) has to draw again, as `CheckVisible` already does.
++                        cx.notify(current_view);
+                     })
+                     .ok();
+                 }

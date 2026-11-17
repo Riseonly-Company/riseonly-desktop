@@ -1,0 +1,811 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1,7 +1,7 @@
+ #[cfg(any(feature = "inspector", debug_assertions))]
+ use crate::Inspector;
+ use crate::scene::TransformedReplay;
+-use crate::SpliceSpans;
++use crate::{SpliceNodes, SpliceSpans};
+ use crate::{
+     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
+     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
+@@ -943,6 +943,9 @@
+     absolute_offset: Point<Pixels>,
+     prepaint_range: Range<PrepaintStateIndex>,
+     paint_range: Range<PaintIndex>,
++    /// Riseonly 0098: the index in the frame just drawn of the draw this one replays, so a spliced
++    /// frame finds the holes it holds.
++    copied_from: Option<usize>,
+ }
+ 
+ pub(crate) struct Frame {
+@@ -983,8 +986,8 @@
+     pub(crate) prepaint_end: PrepaintStateIndex,
+     pub(crate) paint_start: PaintIndex,
+     pub(crate) paint_end: PaintIndex,
+-    /// Drawn by the root pass alone (no deferred draw, tooltip, prompt, drag or inspector) at
+-    /// `viewport`, so the next frame may splice it (Riseonly 0088).
++    /// Drawn by the root pass and its deferred draws alone (no tooltip, prompt, drag or inspector)
++    /// at `viewport`, so the next frame may splice it (Riseonly 0088, deferred draws 0098).
+     pub(crate) spliceable: bool,
+     pub(crate) viewport: (Size<Pixels>, f32),
+ }
+@@ -1047,64 +1050,122 @@
+     ENV_SNAPSHOT_HOOKS.with(|cell| cell.get())
+ }
+ 
+-/// Riseonly 0088: where the copied spans of a spliced frame went. Segment k is the span before
+-/// hole k (the last one after the last hole), as (old range, new start).
+-pub(crate) struct SpliceMap {
+-    prepaint: Vec<(Range<PrepaintStateIndex>, PrepaintStateIndex)>,
+-    paint: Vec<(Range<PaintIndex>, PaintIndex)>,
+-    hole_prepaints: Vec<Range<PrepaintStateIndex>>,
+-    hole_paints: Vec<Range<PaintIndex>>,
++/// Riseonly 0098: one pass of a spliced frame (the root pass, or one deferred draw) and where its
++/// copied spans went. Segment k is the span before hole k (the last one after the last hole), as
++/// (old range, new start); a pass replayed whole is one segment and no hole.
++pub(crate) struct SplicePass<I> {
++    segments: Vec<(Range<I>, I)>,
++    holes: Vec<Range<I>>,
+ }
+ 
+-impl SpliceMap {
+-    /// Where a prepaint range of the frame just drawn lies in the spliced one: None when it lies
+-    /// inside a hole (drawn fresh) or only partly in one.
+-    pub(crate) fn remap_prepaint(&self, range: &Range<PrepaintStateIndex>) -> Option<Range<PrepaintStateIndex>> {
++impl<I: Clone> SplicePass<I> {
++    fn whole(old: Range<I>, new_start: I) -> Self {
++        Self {
++            segments: vec![(old, new_start)],
++            holes: Vec::new(),
++        }
++    }
++
++    /// Where `range` lies in the spliced frame: None when it lies outside this pass, inside a
++    /// hole (drawn fresh) or only partly in one.
++    fn remap(
++        &self,
++        range: &Range<I>,
++        le: fn(&I, &I) -> bool,
++        rebase: fn(&Range<I>, &Range<I>, &I) -> Option<Range<I>>,
++    ) -> Option<Range<I>> {
++        let (first, _) = self.segments.first()?;
++        let (last, _) = self.segments.last()?;
++        if !(le(&first.start, &range.start) && le(&range.end, &last.end)) {
++            return None;
++        }
+         let mut start_segment = 0;
+         let mut end_segment = 0;
+-        for hole in &self.hole_prepaints {
+-            if hole.start.le(&range.start) && range.end.le(&hole.end) {
++        for hole in &self.holes {
++            if le(&hole.start, &range.start) && le(&range.end, &hole.end) {
+                 return None;
+             }
+-            if hole.end.le(&range.start) {
++            if le(&hole.end, &range.start) {
+                 start_segment += 1;
+-            } else if hole.start.le(&range.start) {
++            } else if le(&hole.start, &range.start) {
+                 return None;
+             }
+-            if !range.end.le(&hole.start) {
++            if !le(&range.end, &hole.start) {
+                 end_segment += 1;
+             }
+         }
+-        let point = |index: &PrepaintStateIndex, segment: usize| {
+-            let (old, new_start) = self.prepaint.get(segment)?;
+-            PrepaintStateIndex::rebase_within(&(index.clone()..index.clone()), old, new_start)
+-                .map(|range| range.start)
++        let point = |index: &I, segment: usize| {
++            let (old, new_start) = self.segments.get(segment)?;
++            rebase(&(index.clone()..index.clone()), old, new_start).map(|range| range.start)
+         };
+         Some(point(&range.start, start_segment)?..point(&range.end, end_segment)?)
+     }
++}
+ 
++/// Riseonly 0088: where the copied spans of a spliced frame went, per pass (0098).
++#[derive(Default)]
++pub(crate) struct SpliceMap {
++    prepaint: Vec<SplicePass<PrepaintStateIndex>>,
++    paint: Vec<SplicePass<PaintIndex>>,
++}
++
++impl SpliceMap {
++    /// Where a prepaint range of the frame just drawn lies in the spliced one: None when it lies
++    /// inside a hole (drawn fresh), only partly in one, or in a pass the frame did not copy.
++    pub(crate) fn remap_prepaint(&self, range: &Range<PrepaintStateIndex>) -> Option<Range<PrepaintStateIndex>> {
++        self.prepaint
++            .iter()
++            .find_map(|pass| pass.remap(range, PrepaintStateIndex::le, PrepaintStateIndex::rebase_within))
++    }
++
+     /// [`Self::remap_prepaint`] for a paint range.
+     pub(crate) fn remap_paint(&self, range: &Range<PaintIndex>) -> Option<Range<PaintIndex>> {
+-        let mut start_segment = 0;
+-        let mut end_segment = 0;
+-        for hole in &self.hole_paints {
+-            if hole.start.le(&range.start) && range.end.le(&hole.end) {
+-                return None;
+-            }
+-            if hole.end.le(&range.start) {
+-                start_segment += 1;
+-            } else if hole.start.le(&range.start) {
+-                return None;
+-            }
+-            if !range.end.le(&hole.start) {
+-                end_segment += 1;
+-            }
++        self.paint
++            .iter()
++            .find_map(|pass| pass.remap(range, PaintIndex::le, PaintIndex::rebase_within))
++    }
++}
++
++/// Riseonly 0098: which pass of the frame just drawn a hole lies in: the root pass, or the
++/// deferred draw with this index.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum HolePass {
++    Root,
++    Deferred(usize),
++}
++
++impl HolePass {
++    fn order(self) -> usize {
++        match self {
++            HolePass::Root => 0,
++            HolePass::Deferred(index) => index + 1,
+         }
+-        let point = |index: &PaintIndex, segment: usize| {
+-            let (old, new_start) = self.paint.get(segment)?;
+-            PaintIndex::rebase_within(&(index.clone()..index.clone()), old, new_start).map(|range| range.start)
+-        };
+-        Some(point(&range.start, start_segment)?..point(&range.end, end_segment)?)
++    }
++}
++
++/// Riseonly 0098: a hole of a spliced frame, laid out before anything is copied.
++struct SpliceHole {
++    view_id: EntityId,
++    pass: HolePass,
++    prepaint_range: Range<PrepaintStateIndex>,
++    paint_range: Range<PaintIndex>,
++    paint_stacks: Rc<HoleStacks>,
++    element: AnyElement,
++    stacks: HoleStacks,
++    bounds: Bounds<Pixels>,
++    drawn: bool,
++}
++
++/// Riseonly 0098: the holes of a spliced frame and where the spans of every pass went.
++struct SpliceDraw {
++    holes: Vec<SpliceHole>,
++    map: SpliceMap,
++    nodes: SpliceNodes,
++}
++
++impl SpliceDraw {
++    fn holds(&self, pass: HolePass) -> bool {
++        self.holes.iter().any(|hole| hole.pass == pass)
+     }
+ }
+ 
+@@ -3771,7 +3832,7 @@
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
+ 
+-        self.prepaint_deferred_draws(cx);
++        self.prepaint_deferred_draws(None, cx);
+         self.hitbox_layer = usize::MAX;
+ 
+         let mut prompt_element = None;
+@@ -3805,18 +3866,18 @@
+         self.next_frame.paint_start = self.paint_index();
+         root_element.paint(self, cx);
+         self.next_frame.paint_end = self.paint_index();
+-        // Riseonly 0088: a frame drawn by the root pass alone may be spliced by the next one.
++        // Riseonly 0088: a frame drawn by the root pass and its deferred draws (0098) alone may be
++        // spliced by the next one.
+         self.next_frame.spliceable = prompt_element.is_none()
+             && active_drag_element.is_none()
+             && tooltip_element.is_none()
+-            && self.next_frame.deferred_draws.is_empty()
+             && self.next_frame.tooltip_requests.iter().all(Option::is_none);
+         self.next_frame.viewport = (self.viewport_size, self.scale_factor);
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         self.paint_inspector(inspector_element, cx);
+ 
+-        self.paint_deferred_draws(cx);
++        self.paint_deferred_draws(None, cx);
+ 
+         if let Some(mut prompt_element) = prompt_element {
+             prompt_element.paint(self, cx);
+@@ -3924,39 +3985,73 @@
+                 holes.push(view_id);
+             }
+         }
+-        holes.sort_by_key(|view_id| self.rendered_frame.holes[view_id].prepaint_range.start.dispatch_tree_index);
+-
+-        // invariant: the holes lie inside the root pass, in frame order, apart in every index.
+-        let mut prepaint_cursor = self.rendered_frame.prepaint_start.clone();
+-        let mut paint_cursor = self.rendered_frame.paint_start.clone();
++        // Riseonly 0098: each hole lies in the root pass or in one deferred draw, and the frame is
++        // copied around it there in the same way.
++        let mut placed: Vec<(EntityId, HolePass)> = Vec::with_capacity(holes.len());
+         for view_id in &holes {
+-            let record = &self.rendered_frame.holes[view_id];
+-            if !prepaint_cursor.le(&record.prepaint_range.start)
+-                || !record.prepaint_range.start.le(&record.prepaint_range.end)
+-                || !paint_cursor.le(&record.paint_range.start)
+-                || !record.paint_range.start.le(&record.paint_range.end)
++            let Some(pass) = self.hole_pass(&self.rendered_frame.holes[view_id]) else {
++                if profiler::frame_trace_enabled() {
++                    profiler::note_splice(profiler::detailed_reason("pass", profiler::view_type_name(*view_id)));
++                }
++                return false;
++            };
++            placed.push((*view_id, pass));
++        }
++        placed.sort_by_key(|(view_id, pass)| {
++            (pass.order(), self.rendered_frame.holes[view_id].prepaint_range.start.dispatch_tree_index)
++        });
++
++        // invariant: the holes of a pass lie inside it, in frame order, apart in every index, and a
++        // deferred draw holding holes is copied into the spliced frame.
++        let mut index = 0;
++        while index < placed.len() {
++            let pass = placed[index].1;
++            let (prepaint_bounds, paint_bounds) = self.pass_ranges(pass);
++            let mut prepaint_cursor = prepaint_bounds.start.clone();
++            let mut paint_cursor = paint_bounds.start.clone();
++            while index < placed.len() && placed[index].1 == pass {
++                let record = &self.rendered_frame.holes[&placed[index].0];
++                if !prepaint_cursor.le(&record.prepaint_range.start)
++                    || !record.prepaint_range.start.le(&record.prepaint_range.end)
++                    || !paint_cursor.le(&record.paint_range.start)
++                    || !record.paint_range.start.le(&record.paint_range.end)
++                {
++                    profiler::note_splice("order");
++                    return false;
++                }
++                prepaint_cursor = record.prepaint_range.end.clone();
++                paint_cursor = record.paint_range.end.clone();
++                index += 1;
++            }
++            if !prepaint_cursor.le(&prepaint_bounds.end) || !paint_cursor.le(&paint_bounds.end) {
++                profiler::note_splice("order");
++                return false;
++            }
++            if let HolePass::Deferred(draw) = pass
++                && !self.deferred_copied(draw, &placed)
+             {
+                 profiler::note_splice("order");
+                 return false;
+             }
+-            prepaint_cursor = record.prepaint_range.end.clone();
+-            paint_cursor = record.paint_range.end.clone();
+         }
+-        if !prepaint_cursor.le(&self.rendered_frame.prepaint_end) || !paint_cursor.le(&self.rendered_frame.paint_end) {
+-            profiler::note_splice("order");
+-            return false;
+-        }
+ 
+         // Each hole is laid out first, under the state it was drawn in: one whose style no longer
+         // gives its old size refuses the splice before anything is copied.
+-        let mut drawn: Vec<(AnyElement, HoleStacks, Bounds<Pixels>)> = Vec::with_capacity(holes.len());
+-        for view_id in &holes {
++        let mut splice = SpliceDraw {
++            holes: Vec::with_capacity(placed.len()),
++            map: SpliceMap::default(),
++            nodes: SpliceNodes::default(),
++        };
++        for (view_id, pass) in &placed {
+             let record = &self.rendered_frame.holes[view_id];
+             let view = record.view.clone();
+             let style = record.style.clone();
+             let replays_moved = record.replays_moved;
+             let bounds = record.bounds;
+             let stacks = (*record.prepaint).clone();
++            let paint_stacks = record.paint.clone();
++            let prepaint_range = record.prepaint_range.clone();
++            let paint_range = record.paint_range.clone();
+             let outer = self.swap_hole_stacks(stacks, cx);
+             let mut element = view.cached(style);
+             if replays_moved {
+@@ -3973,49 +4068,30 @@
+                 }
+                 return false;
+             }
+-            drawn.push((element, inner, bounds));
++            splice.holes.push(SpliceHole {
++                view_id: *view_id,
++                pass: *pass,
++                prepaint_range,
++                paint_range,
++                paint_stacks,
++                element,
++                stacks: inner,
++                bounds,
++                drawn: false,
++            });
+         }
+ 
+         self.spliced = true;
+-        let mut map = SpliceMap {
+-            prepaint: Vec::with_capacity(holes.len() + 1),
+-            paint: Vec::with_capacity(holes.len() + 1),
+-            hole_prepaints: Vec::with_capacity(holes.len()),
+-            hole_paints: Vec::with_capacity(holes.len()),
+-        };
+-        for view_id in &holes {
+-            let record = &self.rendered_frame.holes[view_id];
+-            map.hole_prepaints.push(record.prepaint_range.clone());
+-            map.hole_paints.push(record.paint_range.clone());
+-        }
+ 
+-        // Prepaint: the spans between the holes copied, the holes drawn fresh.
++        // Prepaint: the spans between the holes copied, the holes drawn fresh; deferred draws
++        // copied with the spans replay whole or are spliced the same way, the ones a fresh hole
++        // registered draw fresh, over the frame as the root pass does.
+         self.hitbox_layer = 0;
+         self.next_frame.prepaint_start = self.prepaint_index();
+-        let mut spans = SpliceSpans::default();
+-        let mut cursor = self.rendered_frame.prepaint_start.clone();
+-        for (index, (element, stacks, bounds)) in drawn.iter_mut().enumerate() {
+-            let hole = map.hole_prepaints[index].clone();
+-            let new_start = self.prepaint_index();
+-            self.reuse_prepaint_span(cursor.clone()..hole.start.clone(), &mut spans);
+-            map.prepaint.push((cursor..hole.start.clone(), new_start));
+-            let outer = self.swap_hole_stacks(stacks.clone(), cx);
+-            element.prepaint_at(bounds.origin, self, cx);
+-            *stacks = self.swap_hole_stacks(outer, cx);
+-            cursor = hole.end;
+-        }
+-        let new_start = self.prepaint_index();
+-        let end = self.rendered_frame.prepaint_end.clone();
+-        self.reuse_prepaint_span(cursor.clone()..end.clone(), &mut spans);
+-        map.prepaint.push((cursor..end, new_start));
+-        self.next_frame.dispatch_tree.finish_spans(&mut spans);
+-        if spans.contains_focus {
+-            self.next_frame.focus = self.focus;
+-        }
++        let root_prepaint = self.rendered_frame.prepaint_start.clone()..self.rendered_frame.prepaint_end.clone();
++        self.splice_prepaint_pass(HolePass::Root, root_prepaint, None, &mut splice, cx);
+         self.next_frame.prepaint_end = self.prepaint_index();
+-        // The frame copied from had no deferred draws nor tooltips; a fresh hole may add them,
+-        // drawn over the frame as the root pass does.
+-        self.prepaint_deferred_draws(cx);
++        self.prepaint_deferred_draws(Some(&mut splice), cx);
+         self.hitbox_layer = usize::MAX;
+         let mut tooltip_element = self.prepaint_tooltip(cx);
+         self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
+@@ -4024,42 +4100,36 @@
+         self.invalidator.set_phase(DrawPhase::Paint);
+         profiler::note_paint_start();
+         self.next_frame.paint_start = self.paint_index();
+-        let mut cursor = self.rendered_frame.paint_start.clone();
+-        for (index, (element, stacks, _)) in drawn.iter_mut().enumerate() {
+-            let hole = map.hole_paints[index].clone();
+-            let new_start = self.paint_index();
+-            self.reuse_paint(cursor.clone()..hole.start.clone());
+-            map.paint.push((cursor..hole.start.clone(), new_start));
+-            let paint_stacks = (*self.rendered_frame.holes[&holes[index]].paint).clone();
+-            let outer = self.swap_hole_stacks(paint_stacks, cx);
+-            element.paint(self, cx);
+-            *stacks = self.swap_hole_stacks(outer, cx);
+-            cursor = hole.end;
+-        }
+-        let new_start = self.paint_index();
+-        let end = self.rendered_frame.paint_end.clone();
+-        self.reuse_paint(cursor.clone()..end.clone());
+-        map.paint.push((cursor..end, new_start));
++        let root_paint = self.rendered_frame.paint_start.clone()..self.rendered_frame.paint_end.clone();
++        self.splice_paint_pass(HolePass::Root, root_paint, &mut splice, cx);
+         self.next_frame.paint_end = self.paint_index();
+-        // invariant: the same test as the root pass, so a frame with deferred draws or a tooltip
+-        // is never spliced from.
+-        self.next_frame.spliceable = tooltip_element.is_none()
+-            && self.next_frame.deferred_draws.is_empty()
+-            && self.next_frame.tooltip_requests.iter().all(Option::is_none);
+-        self.paint_deferred_draws(cx);
++        // invariant: the same test as the root pass, so a frame with a tooltip is never spliced from.
++        self.next_frame.spliceable =
++            tooltip_element.is_none() && self.next_frame.tooltip_requests.iter().all(Option::is_none);
++        self.paint_deferred_draws(Some(&mut splice), cx);
+         if let Some(tooltip_element) = tooltip_element.as_mut() {
+             tooltip_element.paint(self, cx);
+         }
+         profiler::note_paint_end();
++        // why: a hole whose deferred draw the frame did not copy was laid out but not drawn; its
++        // view renders in the next frame instead of staying stale.
++        for hole in &splice.holes {
++            if !hole.drawn {
++                log::warn!("gpui 0098 spliced hole not drawn");
++                cx.notify(hole.view_id);
++            }
++        }
+ 
+         // What the copied spans hold outside the indexed lists.
++        let hole_views = splice.holes.iter().map(|hole| hole.view_id).collect::<Vec<_>>();
+         let under_hole = |window: &Self, view_id: EntityId| {
+             window
+                 .rendered_frame
+                 .dispatch_tree
+                 .view_path_reversed(view_id)
+-                .any(|ancestor| holes.contains(&ancestor))
++                .any(|ancestor| hole_views.contains(&ancestor))
+         };
++        let map = splice.map;
+         let control_hitboxes = self.rendered_frame.window_control_hitboxes.clone();
+         self.next_frame.window_control_hitboxes.extend(control_hitboxes);
+         let cached_views = self
+@@ -4104,6 +4174,135 @@
+         true
+     }
+ 
++    /// Riseonly 0098: the pass of the frame just drawn whose ranges hold the hole `record`.
++    fn hole_pass(&self, record: &HoleRecord) -> Option<HolePass> {
++        let inside = |prepaint: &Range<PrepaintStateIndex>, paint: &Range<PaintIndex>| {
++            prepaint.start.le(&record.prepaint_range.start)
++                && record.prepaint_range.end.le(&prepaint.end)
++                && paint.start.le(&record.paint_range.start)
++                && record.paint_range.end.le(&paint.end)
++        };
++        let (root_prepaint, root_paint) = self.pass_ranges(HolePass::Root);
++        if inside(&root_prepaint, &root_paint) {
++            return Some(HolePass::Root);
++        }
++        self.rendered_frame
++            .deferred_draws
++            .iter()
++            .position(|draw| inside(&draw.prepaint_range, &draw.paint_range))
++            .map(HolePass::Deferred)
++    }
++
++    /// Riseonly 0098: the prepaint and paint ranges of a pass of the frame just drawn.
++    fn pass_ranges(&self, pass: HolePass) -> (Range<PrepaintStateIndex>, Range<PaintIndex>) {
++        let frame = &self.rendered_frame;
++        match pass {
++            HolePass::Deferred(index) if index < frame.deferred_draws.len() => {
++                let draw = &frame.deferred_draws[index];
++                (draw.prepaint_range.clone(), draw.paint_range.clone())
++            }
++            _ => (
++                frame.prepaint_start.clone()..frame.prepaint_end.clone(),
++                frame.paint_start.clone()..frame.paint_end.clone(),
++            ),
++        }
++    }
++
++    /// Riseonly 0098: whether the deferred draw `draw` of the frame just drawn goes into the spliced
++    /// frame: registered in a copied span (not inside a hole) of a pass that is copied itself.
++    fn deferred_copied(&self, draw: usize, placed: &[(EntityId, HolePass)]) -> bool {
++        let frame = &self.rendered_frame;
++        let registers = |range: &Range<PrepaintStateIndex>, draw: usize| {
++            range.start.deferred_draws_index <= draw && draw < range.end.deferred_draws_index
++        };
++        let mut draw = draw;
++        // why: deferred draws nest at most ten rounds deep (prepaint_deferred_draws).
++        for _ in 0..12 {
++            if placed
++                .iter()
++                .any(|(view_id, _)| registers(&frame.holes[view_id].prepaint_range, draw))
++            {
++                return false;
++            }
++            if registers(&(frame.prepaint_start.clone()..frame.prepaint_end.clone()), draw) {
++                return true;
++            }
++            let Some(outer) = frame
++                .deferred_draws
++                .iter()
++                .position(|outer| registers(&outer.prepaint_range, draw))
++            else {
++                return false;
++            };
++            draw = outer;
++        }
++        false
++    }
++
++    /// Riseonly 0098: copies the prepaint range `old` of one pass of the frame just drawn in spans
++    /// around the holes it holds and prepaints each hole fresh in its place, under the node of its
++    /// view copied just before it. `base` is the node of the frame just drawn the pass hangs under (the parent of a
++    /// deferred draw), None for the root pass.
++    fn splice_prepaint_pass(
++        &mut self,
++        pass: HolePass,
++        old: Range<PrepaintStateIndex>,
++        base: Option<DispatchNodeId>,
++        splice: &mut SpliceDraw,
++        cx: &mut App,
++    ) {
++        let mut spans = SpliceSpans::with_base(base);
++        let mut segments = Vec::new();
++        let mut hole_ranges = Vec::new();
++        let mut cursor = old.start;
++        for hole in splice.holes.iter_mut().filter(|hole| hole.pass == pass) {
++            let new_start = self.prepaint_index();
++            self.reuse_prepaint_span(cursor.clone()..hole.prepaint_range.start.clone(), &mut spans, &mut splice.nodes);
++            segments.push((cursor..hole.prepaint_range.start.clone(), new_start));
++            let outer = self.swap_hole_stacks(hole.stacks.clone(), cx);
++            hole.element.prepaint_at(hole.bounds.origin, self, cx);
++            hole.stacks = self.swap_hole_stacks(outer, cx);
++            hole_ranges.push(hole.prepaint_range.clone());
++            cursor = hole.prepaint_range.end.clone();
++        }
++        let new_start = self.prepaint_index();
++        self.reuse_prepaint_span(cursor.clone()..old.end.clone(), &mut spans, &mut splice.nodes);
++        segments.push((cursor..old.end, new_start));
++        self.next_frame.dispatch_tree.finish_spans(&mut spans);
++        if spans.contains_focus {
++            self.next_frame.focus = self.focus;
++        }
++        splice.map.prepaint.push(SplicePass {
++            segments,
++            holes: hole_ranges,
++        });
++    }
++
++    /// Riseonly 0098: [`Self::splice_prepaint_pass`] for the paint range `old` of the pass.
++    fn splice_paint_pass(&mut self, pass: HolePass, old: Range<PaintIndex>, splice: &mut SpliceDraw, cx: &mut App) {
++        let mut segments = Vec::new();
++        let mut hole_ranges = Vec::new();
++        let mut cursor = old.start;
++        for hole in splice.holes.iter_mut().filter(|hole| hole.pass == pass) {
++            let new_start = self.paint_index();
++            self.reuse_paint(cursor.clone()..hole.paint_range.start.clone());
++            segments.push((cursor..hole.paint_range.start.clone(), new_start));
++            let outer = self.swap_hole_stacks((*hole.paint_stacks).clone(), cx);
++            hole.element.paint(self, cx);
++            hole.stacks = self.swap_hole_stacks(outer, cx);
++            hole.drawn = true;
++            hole_ranges.push(hole.paint_range.clone());
++            cursor = hole.paint_range.end.clone();
++        }
++        let new_start = self.paint_index();
++        self.reuse_paint(cursor.clone()..old.end.clone());
++        segments.push((cursor..old.end, new_start));
++        splice.map.paint.push(SplicePass {
++            segments,
++            holes: hole_ranges,
++        });
++    }
++
+     /// Riseonly 0088: a range whose element state keys are every key the spliced frame recorded,
+     /// in its prepaint and its paint.
+     pub(crate) fn spliced_state_keys(&self) -> Range<PrepaintStateIndex> {
+@@ -4116,7 +4315,12 @@
+     /// Riseonly 0088: [`Self::reuse_prepaint`] for a span of a spliced frame: the root pass only
+     /// (no deferred draw), hitboxes kept as recorded, the dispatch path left open for the hole
+     /// drawn after it.
+-    fn reuse_prepaint_span(&mut self, range: Range<PrepaintStateIndex>, spans: &mut SpliceSpans) {
++    fn reuse_prepaint_span(
++        &mut self,
++        range: Range<PrepaintStateIndex>,
++        spans: &mut SpliceSpans,
++        nodes: &mut SpliceNodes,
++    ) {
+         self.next_frame.move_listeners.extend(
+             self.rendered_frame.move_listeners
+                 [range.start.move_listeners_index..range.end.move_listeners_index]
+@@ -4147,7 +4351,35 @@
+             &mut self.rendered_frame.dispatch_tree,
+             self.focus,
+             spans,
++            nodes,
+         );
++        // Riseonly 0098: the deferred draws the span registered, replayed or spliced after the
++        // root pass under the node their parent was copied to.
++        let fallback = self.next_frame.dispatch_tree.active_node_id();
++        let deferred_from = range.start.deferred_draws_index;
++        let copied = self.rendered_frame.deferred_draws
++            [range.start.deferred_draws_index..range.end.deferred_draws_index]
++            .iter()
++            .enumerate()
++            .filter_map(|(offset, deferred_draw)| {
++                let parent_node = nodes.refresh(deferred_draw.parent_node).or(fallback)?;
++                Some(DeferredDraw {
++                    current_view: deferred_draw.current_view,
++                    parent_node,
++                    element_id_stack: deferred_draw.element_id_stack.clone(),
++                    text_style_stack: deferred_draw.text_style_stack.clone(),
++                    content_mask: deferred_draw.content_mask,
++                    rem_size: deferred_draw.rem_size,
++                    priority: deferred_draw.priority,
++                    element: None,
++                    absolute_offset: deferred_draw.absolute_offset,
++                    prepaint_range: deferred_draw.prepaint_range.clone(),
++                    paint_range: deferred_draw.paint_range.clone(),
++                    copied_from: Some(deferred_from + offset),
++                })
++            })
++            .collect::<Vec<_>>();
++        self.next_frame.deferred_draws.extend(copied);
+     }
+ 
+     /// Riseonly 0088: the state around the cached view `entity_id` being drawn, without its own
+@@ -4285,7 +4517,7 @@
+         None
+     }
+ 
+-    fn prepaint_deferred_draws(&mut self, cx: &mut App) {
++    fn prepaint_deferred_draws(&mut self, mut splice: Option<&mut SpliceDraw>, cx: &mut App) {
+         assert_eq!(self.element_id_stack.len(), 0);
+ 
+         // Process deferred draws in multiple rounds to support nesting.
+@@ -4314,7 +4546,7 @@
+             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
+ 
+             for deferred_draw_ix in traversal_order {
+-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
++                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range, copied_from) = {
+                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+                     self.element_id_stack
+                         .clone_from(&deferred_draw.element_id_stack);
+@@ -4327,8 +4559,13 @@
+                         deferred_draw.rem_size,
+                         deferred_draw.absolute_offset,
+                         deferred_draw.prepaint_range.clone(),
++                        deferred_draw.copied_from,
+                     )
+                 };
++                // Riseonly 0098: a copied draw holding holes of a spliced frame.
++                let spliced_pass = copied_from
++                    .map(HolePass::Deferred)
++                    .filter(|pass| splice.as_ref().is_some_and(|splice| splice.holds(*pass)));
+                 self.hitbox_layer = self.next_frame.deferred_draws[deferred_draw_ix]
+                     .priority
+                     .saturating_add(1);
+@@ -4344,11 +4581,20 @@
+                         });
+                     });
+                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
++                } else if let (Some(pass), Some(splice)) = (spliced_pass, splice.as_deref_mut()) {
++                    let base = copied_from
++                        .and_then(|from| self.rendered_frame.deferred_draws.get(from))
++                        .map(|draw| draw.parent_node);
++                    self.splice_prepaint_pass(pass, prepaint_range.clone(), base, splice, cx);
+                 } else {
+                     self.reuse_prepaint(prepaint_range.clone());
+                     // Riseonly 0080: the cached views inside the replayed draw replayed with it.
+                     let replayed = prepaint_start.clone()..self.prepaint_index();
+                     crate::view::rebase_nested_views(&prepaint_range, &replayed, self);
++                    // Riseonly 0098: holes of the frame just drawn inside it move with it.
++                    if let Some(splice) = splice.as_deref_mut() {
++                        splice.map.prepaint.push(SplicePass::whole(prepaint_range.clone(), prepaint_start.clone()));
++                    }
+                 }
+                 let prepaint_end = self.prepaint_index();
+                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
+@@ -4361,7 +4607,7 @@
+         }
+     }
+ 
+-    fn paint_deferred_draws(&mut self, cx: &mut App) {
++    fn paint_deferred_draws(&mut self, mut splice: Option<&mut SpliceDraw>, cx: &mut App) {
+         assert_eq!(self.element_id_stack.len(), 0);
+ 
+         // Paint all deferred draws in priority order.
+@@ -4382,6 +4628,11 @@
+ 
+             let paint_start = self.paint_index();
+             let content_mask = deferred_draw.content_mask;
++            // Riseonly 0098: a copied draw holding holes of a spliced frame.
++            let spliced_pass = deferred_draw
++                .copied_from
++                .map(HolePass::Deferred)
++                .filter(|pass| splice.as_ref().is_some_and(|splice| splice.holds(*pass)));
+             if let Some(element) = deferred_draw.element.as_mut() {
+                 self.with_rendered_view(deferred_draw.current_view, |window| {
+                     window.with_content_mask(content_mask, |window| {
+@@ -4390,12 +4641,19 @@
+                         });
+                     })
+                 })
++            } else if let (Some(pass), Some(splice)) = (spliced_pass, splice.as_deref_mut()) {
++                let range = deferred_draw.paint_range.clone();
++                self.splice_paint_pass(pass, range, splice, cx);
+             } else if self.paint_range_in_frame(&deferred_draw.paint_range) {
+                 let range = deferred_draw.paint_range.clone();
+                 self.reuse_paint(range.clone());
+                 // Riseonly 0080: the cached views inside the replayed draw replayed with it.
+                 let replayed = paint_start.clone()..self.paint_index();
+                 crate::view::rebase_nested_paints(&range, &replayed, self);
++                // Riseonly 0098: holes of the frame just drawn inside it move with it.
++                if let Some(splice) = splice.as_deref_mut() {
++                    splice.map.paint.push(SplicePass::whole(range, paint_start.clone()));
++                }
+             } else {
+                 // Riseonly 0096: a range of another frame cannot replay; the draw shows nothing
+                 // for this frame and its view renders it fresh in the next one.
+@@ -4477,11 +4735,14 @@
+             self.next_frame.focus = self.focus;
+         }
+ 
++        let deferred_from = range.start.deferred_draws_index;
+         self.next_frame.deferred_draws.extend(
+             self.rendered_frame.deferred_draws
+                 [range.start.deferred_draws_index..range.end.deferred_draws_index]
+                 .iter()
+-                .map(|deferred_draw| DeferredDraw {
++                .enumerate()
++                .map(|(offset, deferred_draw)| DeferredDraw {
++                    copied_from: Some(deferred_from + offset),
+                     current_view: deferred_draw.current_view,
+                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
+                     element_id_stack: deferred_draw.element_id_stack.clone(),
+@@ -5729,6 +5990,7 @@
+             absolute_offset,
+             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
+             paint_range: PaintIndex::default()..PaintIndex::default(),
++            copied_from: None,
+         });
+     }
+ 
+--- a/crates/gpui/src/key_dispatch.rs
++++ b/crates/gpui/src/key_dispatch.rs
+@@ -96,8 +96,38 @@
+     source_stack: Vec<DispatchNodeId>,
+     copied: usize,
+     pub(crate) contains_focus: bool,
++    /// Riseonly 0098: the node of the frame just drawn the copied pass hangs under (the parent of
++    /// a deferred draw), None for the root pass.
++    base: Option<DispatchNodeId>,
+ }
+ 
++impl SpliceSpans {
++    /// Riseonly 0098: spans of a pass that hangs under `base` in the frame just drawn.
++    pub(crate) fn with_base(base: Option<DispatchNodeId>) -> Self {
++        Self {
++            base,
++            ..Self::default()
++        }
++    }
++}
++
++/// Riseonly 0098: where the dispatch nodes a spliced frame copied went, over all its passes, so a
++/// deferred draw copied with a span finds the node its parent was copied to.
++#[derive(Default)]
++pub(crate) struct SpliceNodes {
++    moved: Vec<(Range<usize>, usize)>,
++}
++
++impl SpliceNodes {
++    /// The node of the spliced frame that the node `node_id` of the frame just drawn went to.
++    pub(crate) fn refresh(&self, node_id: DispatchNodeId) -> Option<DispatchNodeId> {
++        self.moved
++            .iter()
++            .find(|(old, _)| old.contains(&node_id.0))
++            .map(|(old, new_start)| DispatchNodeId(node_id.0 - old.start + new_start))
++    }
++}
++
+ pub(crate) struct ReusedSubtree {
+     old_range: Range<usize>,
+     new_range: Range<usize>,
+@@ -325,7 +355,9 @@
+         source: &mut Self,
+         focus: Option<FocusId>,
+         spans: &mut SpliceSpans,
++        nodes: &mut SpliceNodes,
+     ) {
++        nodes.moved.push((old_range.clone(), self.nodes.len()));
+         for (source_node_id, source_node) in source
+             .nodes
+             .iter_mut()
+@@ -345,7 +377,10 @@
+             // why: a node whose parent lies before the copied spans (a hole closed it) cannot be
+             // placed, so the splice must not have been chosen for such a range.
+             debug_assert!(
+-                source_node.parent.is_none() || !spans.source_stack.is_empty() || spans.copied == 0,
++                source_node.parent.is_none()
++                    || !spans.source_stack.is_empty()
++                    || spans.copied == 0
++                    || source_node.parent == spans.base,
+                 "spliced dispatch node lost its parent"
+             );
+             spans.source_stack.push(source_node_id);

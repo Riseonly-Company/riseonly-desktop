@@ -1,0 +1,140 @@
+diff -ruN a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+--- a/crates/gpui_linux/src/linux/wayland/client.rs	2026-11-04 18:06:09
++++ b/crates/gpui_linux/src/linux/wayland/client.rs	2026-11-04 18:06:34
+@@ -337,6 +337,10 @@
+     axis_source: AxisSource,
+     pub mouse_location: Option<Point<Pixels>>,
+     continuous_scroll_delta: Option<Point<Pixels>>,
++    // A finger scroll sent Started and has not ended yet (wl_pointer.axis_stop or leave).
++    finger_scroll_active: bool,
++    // This frame carried a wl_pointer.axis_stop.
++    finger_scroll_stopped: bool,
+     discrete_scroll_delta: Option<Point<f32>>,
+     vertical_modifier: f32,
+     horizontal_modifier: f32,
+@@ -892,6 +896,8 @@
+             axis_source: AxisSource::Wheel,
+             mouse_location: None,
+             continuous_scroll_delta: None,
++            finger_scroll_active: false,
++            finger_scroll_stopped: false,
+             discrete_scroll_delta: None,
+             vertical_modifier: -1.0,
+             horizontal_modifier: -1.0,
+@@ -2071,7 +2077,18 @@
+                 }
+             }
+             wl_pointer::Event::Leave { .. } => {
++                state.finger_scroll_stopped = false;
++                let scroll_ended = std::mem::take(&mut state.finger_scroll_active);
+                 if let Some(focused_window) = state.mouse_focused_window.clone() {
++                    // The surface gets no axis_stop after leave: close an open finger scroll here.
++                    let scroll_input = scroll_ended.then(|| {
++                        PlatformInput::ScrollWheel(ScrollWheelEvent {
++                            position: state.mouse_location.unwrap(),
++                            delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                            modifiers: state.modifiers,
++                            touch_phase: TouchPhase::Ended,
++                        })
++                    });
+                     let input = PlatformInput::MouseExited(MouseExitEvent {
+                         position: state.mouse_location.unwrap(),
+                         pressed_button: state.button_pressed,
+@@ -2083,6 +2100,9 @@
+                     state.cursor_hidden_window = None;
+ 
+                     drop(state);
++                    if let Some(scroll_input) = scroll_input {
++                        focused_window.handle_input(scroll_input);
++                    }
+                     focused_window.handle_input(input);
+                     focused_window.set_hovered(false);
+                 }
+@@ -2266,6 +2286,11 @@
+                     }
+                     _ => unreachable!(),
+                 }
++            }
++            wl_pointer::Event::AxisStop { .. } => {
++                // A finger lifted off the touchpad (wl_pointer.axis_source finger); the
++                // frame that carries it ends the scroll gesture with TouchPhase::Ended.
++                state.finger_scroll_stopped = true;
+             }
+             wl_pointer::Event::AxisDiscrete {
+                 axis: WEnum::Value(axis),
+@@ -2323,34 +2348,54 @@
+                 }
+             }
+             wl_pointer::Event::Frame => {
++                let finger_stopped = std::mem::take(&mut state.finger_scroll_stopped);
++                let mut scroll = None;
+                 if state.scroll_event_received {
+                     state.scroll_event_received = false;
+                     let continuous = state.continuous_scroll_delta.take();
+                     let discrete = state.discrete_scroll_delta.take();
+                     if let Some(continuous) = continuous {
+-                        if let Some(window) = state.mouse_focused_window.clone() {
+-                            let input = PlatformInput::ScrollWheel(ScrollWheelEvent {
+-                                position: state.mouse_location.unwrap(),
+-                                delta: ScrollDelta::Pixels(continuous),
+-                                modifiers: state.modifiers,
+-                                touch_phase: TouchPhase::Moved,
+-                            });
+-                            drop(state);
+-                            window.handle_input(input);
+-                        }
+-                    } else if let Some(discrete) = discrete
+-                        && let Some(window) = state.mouse_focused_window.clone()
+-                    {
+-                        let input = PlatformInput::ScrollWheel(ScrollWheelEvent {
+-                            position: state.mouse_location.unwrap(),
+-                            delta: ScrollDelta::Lines(discrete),
+-                            modifiers: state.modifiers,
+-                            touch_phase: TouchPhase::Moved,
+-                        });
+-                        drop(state);
+-                        window.handle_input(input);
++                        // Finger scrolls carry phases like macOS trackpads: the first frame
++                        // starts the gesture, axis_stop ends it. Other sources stay Moved.
++                        let touch_phase = if state.axis_source == AxisSource::Finger
++                            && !state.finger_scroll_active
++                        {
++                            state.finger_scroll_active = true;
++                            TouchPhase::Started
++                        } else {
++                            TouchPhase::Moved
++                        };
++                        scroll = Some((ScrollDelta::Pixels(continuous), touch_phase));
++                    } else if let Some(discrete) = discrete {
++                        scroll = Some((ScrollDelta::Lines(discrete), TouchPhase::Moved));
+                     }
++                }
++                let scroll_ended = finger_stopped && std::mem::take(&mut state.finger_scroll_active);
++                if scroll.is_none() && !scroll_ended {
++                    return;
++                }
++                let Some(window) = state.mouse_focused_window.clone() else {
++                    return;
++                };
++                let position = state.mouse_location.unwrap();
++                let modifiers = state.modifiers;
++                drop(state);
++                if let Some((delta, touch_phase)) = scroll {
++                    window.handle_input(PlatformInput::ScrollWheel(ScrollWheelEvent {
++                        position,
++                        delta,
++                        modifiers,
++                        touch_phase,
++                    }));
+                 }
++                if scroll_ended {
++                    window.handle_input(PlatformInput::ScrollWheel(ScrollWheelEvent {
++                        position,
++                        delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                        modifiers,
++                        touch_phase: TouchPhase::Ended,
++                    }));
++                }
+             }
+             _ => {}
+         }

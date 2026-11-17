@@ -1,0 +1,281 @@
+Riseonly patch on zed 6b2aa1c (Apache-2.0 crate gpui_wgpu), applied by scripts/vendor-gpui.py after 0005.
+The wgpu renderer (Linux) draws OwnedSurfaceFrame::bgra: one texture per BGRA stream in the colour atlas
+format (Bgra8Unorm, or Rgba8Unorm with a red/blue swap in the shader), uploaded with Queue::write_texture
+on a new generation, sampled by fs_surface without YCbCr and returned premultiplied, or straight when the
+pipeline blends straight alpha (globals.premultiplied_alpha), so a WebM sticker blends over what lies
+beneath (P147 lin).
+
+diff -ruN a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
+--- a/crates/gpui_wgpu/src/shaders.wgsl	2026-11-04 16:02:20
++++ b/crates/gpui_wgpu/src/shaders.wgsl	2026-11-04 16:02:57
+@@ -1316,8 +1316,14 @@
+     bounds: Bounds,
+     content_mask: Bounds,
+     ycbcr_to_rgb: mat4x4<f32>,
++    pixel_format: u32,
+ }
+ 
++// Values of SurfaceParams.pixel_format, the same as SURFACE_FORMAT_* in wgpu_renderer.rs.
++const SURFACE_FORMAT_NV12: u32 = 0u;
++const SURFACE_FORMAT_PREMULTIPLIED: u32 = 1u;
++const SURFACE_FORMAT_PREMULTIPLIED_SWAPPED: u32 = 2u;
++
+ @group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
+ @group(1) @binding(1) var t_y: texture_2d<f32>;
+ @group(1) @binding(2) var t_cb_cr: texture_2d<f32>;
+@@ -1352,6 +1358,18 @@
+     // Alpha clip after using the derivatives.
+     if (any(input.clip_distances < vec4<f32>(0.0))) {
+         return vec4<f32>(0.0);
++    }
++
++    if (surface_locals.pixel_format != SURFACE_FORMAT_NV12) {
++        var color = textureSampleLevel(t_y, s_surface, input.texture_position, 0.0);
++        if (surface_locals.pixel_format == SURFACE_FORMAT_PREMULTIPLIED_SWAPPED) {
++            color = color.bgra;
++        }
++        // The frame is premultiplied; a straight alpha pipeline (blend_color) wants it back.
++        if (globals.premultiplied_alpha == 0u && color.a > 0.0) {
++            color = vec4<f32>(color.rgb / color.a, color.a);
++        }
++        return color;
+     }
+ 
+     let y_cb_cr = vec4<f32>(
+diff -ruN a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs	2026-11-04 16:02:20
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs	2026-11-04 16:03:08
+@@ -83,17 +83,42 @@
+     bounds: PodBounds,
+     content_mask: PodBounds,
+     ycbcr_to_rgb: [[f32; 4]; 4],
++    /// One of the SURFACE_FORMAT_* values; fs_surface picks its sampling path by it.
++    pixel_format: u32,
++    _padding: [u32; 3],
+ }
+ 
+-/// The luma and chroma textures of one owned video stream, reused while its size holds.
++/// fs_surface: `t_y` is NV12 luma and `t_cb_cr` its interleaved chroma.
++#[cfg_attr(target_os = "macos", allow(dead_code))]
++const SURFACE_FORMAT_NV12: u32 = 0;
++/// fs_surface: `t_y` is premultiplied colour read in RGBA order (a Bgra8Unorm texture).
++#[cfg_attr(target_os = "macos", allow(dead_code))]
++const SURFACE_FORMAT_PREMULTIPLIED: u32 = 1;
++/// fs_surface: `t_y` is an Rgba8Unorm texture holding BGRA bytes, so red and blue are swapped back.
++#[cfg_attr(target_os = "macos", allow(dead_code))]
++const SURFACE_FORMAT_PREMULTIPLIED_SWAPPED: u32 = 2;
++
++/// How one owned stream is held on the GPU.
++#[cfg_attr(target_os = "macos", allow(dead_code))]
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum OwnedSurfaceLayout {
++    /// An R8 luma texture and an RG8 chroma texture of half its size.
++    Nv12,
++    /// One colour texture with premultiplied alpha, in the colour atlas format.
++    Bgra,
++}
++
++/// The textures of one owned video stream, reused while its size and layout hold. A BGRA stream
++/// keeps its colour in `luma` and has no chroma texture.
+ #[allow(dead_code)]
+ struct OwnedSurfaceTextures {
+     size: Size<DevicePixels>,
++    layout: OwnedSurfaceLayout,
+     uploaded_generation: Option<u64>,
+     luma: wgpu::Texture,
+     luma_view: wgpu::TextureView,
+-    chroma: wgpu::Texture,
+-    chroma_view: wgpu::TextureView,
++    chroma: Option<wgpu::Texture>,
++    chroma_view: Option<wgpu::TextureView>,
+ }
+ 
+ #[repr(C)]
+@@ -207,6 +232,9 @@
+     /// Textures of the owned video surfaces drawn last frame, keyed by stream id. They belong
+     /// to this device, so a device loss drops them together with the rest of the resources.
+     owned_surfaces: std::collections::HashMap<u64, OwnedSurfaceTextures>,
++    /// The format of colour atlas textures on this adapter (Bgra8Unorm, or Rgba8Unorm where BGRA
++    /// cannot be sampled); BGRA owned surfaces use it too.
++    color_texture_format: wgpu::TextureFormat,
+ }
+ 
+ impl WgpuResources {
+@@ -594,6 +622,7 @@
+             path_msaa_texture: None,
+             path_msaa_view: None,
+             owned_surfaces: std::collections::HashMap::new(),
++            color_texture_format: context.color_texture_format(),
+         };
+ 
+         Ok(Self {
+@@ -1619,6 +1648,7 @@
+             .owned_surfaces
+             .retain(|id, _| scene.surfaces.iter().any(|surface| surface.frame.id() == *id));
+ 
++        let color_format = resources.color_texture_format;
+         let mut bind_groups = Vec::with_capacity(scene.surfaces.len());
+         for surface in &scene.surfaces {
+             let frame = &surface.frame;
+@@ -1632,37 +1662,59 @@
+                 bind_groups.push(None);
+                 continue;
+             }
+-            // The surface pipeline here samples NV12 planes only; a BGRA frame has no chroma
+-            // plane to upload, so it is skipped rather than drawn as garbage.
+-            if frame.pixel_format() != gpui::OwnedSurfacePixelFormat::Nv12 {
+-                log::debug!("owned surface {} is BGRA, which this renderer does not draw", frame.id());
+-                bind_groups.push(None);
+-                continue;
+-            }
+ 
++            let bgra = frame.bgra_pixels();
++            let layout = if bgra.is_some() {
++                OwnedSurfaceLayout::Bgra
++            } else {
++                OwnedSurfaceLayout::Nv12
++            };
+             let device = &resources.device;
+             let textures = resources
+                 .owned_surfaces
+                 .entry(frame.id())
+                 .and_modify(|textures| {
+-                    if textures.size != frame.size() {
+-                        *textures = Self::create_owned_surface_textures(device, frame.size());
++                    if textures.size != frame.size() || textures.layout != layout {
++                        *textures = Self::create_owned_surface_textures(
++                            device,
++                            frame.size(),
++                            layout,
++                            color_format,
++                        );
+                     }
+                 })
+-                .or_insert_with(|| Self::create_owned_surface_textures(device, frame.size()));
++                .or_insert_with(|| {
++                    Self::create_owned_surface_textures(device, frame.size(), layout, color_format)
++                });
+ 
+             if textures.uploaded_generation != Some(frame.generation()) {
+-                let (luma, luma_stride) = frame.luma();
+-                let (chroma, chroma_stride) = frame.chroma();
+-                Self::upload_plane(&resources.queue, &textures.luma, luma, luma_stride);
+-                Self::upload_plane(&resources.queue, &textures.chroma, chroma, chroma_stride);
++                if let Some((pixels, stride)) = bgra {
++                    Self::upload_plane(&resources.queue, &textures.luma, pixels, stride);
++                } else if let Some(chroma_texture) = &textures.chroma {
++                    let (luma, luma_stride) = frame.luma();
++                    let (chroma, chroma_stride) = frame.chroma();
++                    Self::upload_plane(&resources.queue, &textures.luma, luma, luma_stride);
++                    Self::upload_plane(&resources.queue, chroma_texture, chroma, chroma_stride);
++                }
+                 textures.uploaded_generation = Some(frame.generation());
+             }
+ 
++            let pixel_format = match layout {
++                OwnedSurfaceLayout::Nv12 => SURFACE_FORMAT_NV12,
++                // why: the colour atlas falls back to Rgba8Unorm where Bgra8Unorm cannot be
++                // sampled (WgpuContext::select_color_texture_format); the shader swaps the bytes
++                // back instead of a CPU copy of every frame.
++                OwnedSurfaceLayout::Bgra if color_format == wgpu::TextureFormat::Rgba8Unorm => {
++                    SURFACE_FORMAT_PREMULTIPLIED_SWAPPED
++                }
++                OwnedSurfaceLayout::Bgra => SURFACE_FORMAT_PREMULTIPLIED,
++            };
+             let params = SurfaceParams {
+                 bounds: surface.bounds.into(),
+                 content_mask: surface.content_mask.bounds.into(),
+                 ycbcr_to_rgb: frame.ycbcr_to_rgb(),
++                pixel_format,
++                _padding: [0; 3],
+             };
+             let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                 label: Some("owned_surface_params"),
+@@ -1674,6 +1726,9 @@
+                 .queue
+                 .write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
+ 
++            // why: the surfaces layout always has two sampled textures; a BGRA stream binds its
++            // colour texture to both, fs_surface never reads t_cb_cr for it.
++            let second_view = textures.chroma_view.as_ref().unwrap_or(&textures.luma_view);
+             bind_groups.push(Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                 label: Some("owned_surface_bind_group"),
+                 layout: &resources.bind_group_layouts.surfaces,
+@@ -1688,7 +1743,7 @@
+                     },
+                     wgpu::BindGroupEntry {
+                         binding: 2,
+-                        resource: wgpu::BindingResource::TextureView(&textures.chroma_view),
++                        resource: wgpu::BindingResource::TextureView(second_view),
+                     },
+                     wgpu::BindGroupEntry {
+                         binding: 3,
+@@ -1700,11 +1755,14 @@
+         bind_groups
+     }
+ 
+-    /// An R8 luma texture of `size` and an RG8 chroma texture of half of it, rounded up (NV12).
++    /// NV12: an R8 luma texture of `size` and an RG8 chroma texture of half of it, rounded up.
++    /// BGRA: one texture of `size` in the colour atlas format.
+     #[cfg(not(target_os = "macos"))]
+     fn create_owned_surface_textures(
+         device: &wgpu::Device,
+         size: Size<DevicePixels>,
++        layout: OwnedSurfaceLayout,
++        color_format: wgpu::TextureFormat,
+     ) -> OwnedSurfaceTextures {
+         let width = size.width.0 as u32;
+         let height = size.height.0 as u32;
+@@ -1726,20 +1784,38 @@
+             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+             (texture, view)
+         };
+-        let (luma, luma_view) = create("owned_surface_luma", wgpu::TextureFormat::R8Unorm, width, height);
+-        let (chroma, chroma_view) = create(
+-            "owned_surface_chroma",
+-            wgpu::TextureFormat::Rg8Unorm,
+-            width.div_ceil(2),
+-            height.div_ceil(2),
+-        );
+-        OwnedSurfaceTextures {
+-            size,
+-            uploaded_generation: None,
+-            luma,
+-            luma_view,
+-            chroma,
+-            chroma_view,
++        match layout {
++            OwnedSurfaceLayout::Nv12 => {
++                let (luma, luma_view) =
++                    create("owned_surface_luma", wgpu::TextureFormat::R8Unorm, width, height);
++                let (chroma, chroma_view) = create(
++                    "owned_surface_chroma",
++                    wgpu::TextureFormat::Rg8Unorm,
++                    width.div_ceil(2),
++                    height.div_ceil(2),
++                );
++                OwnedSurfaceTextures {
++                    size,
++                    layout,
++                    uploaded_generation: None,
++                    luma,
++                    luma_view,
++                    chroma: Some(chroma),
++                    chroma_view: Some(chroma_view),
++                }
++            }
++            OwnedSurfaceLayout::Bgra => {
++                let (color, color_view) = create("owned_surface_bgra", color_format, width, height);
++                OwnedSurfaceTextures {
++                    size,
++                    layout,
++                    uploaded_generation: None,
++                    luma: color,
++                    luma_view: color_view,
++                    chroma: None,
++                    chroma_view: None,
++                }
++            }
+         }
+     }
+ 

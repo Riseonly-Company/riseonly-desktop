@@ -1,0 +1,82 @@
+--- a/crates/gpui_windows/src/direct_manipulation.rs	2026-11-05 02:17:40
++++ b/crates/gpui_windows/src/direct_manipulation.rs	2026-11-05 02:17:40
+@@ -142,6 +142,7 @@
+     last_x_offset: Cell<f32>,
+     last_y_offset: Cell<f32>,
+     scroll_phase: Cell<TouchPhase>,
++    scroll_end_reported: Cell<bool>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
+ }
+ 
+@@ -159,23 +160,44 @@
+             last_x_offset: Cell::new(0.0),
+             last_y_offset: Cell::new(0.0),
+             scroll_phase: Cell::new(TouchPhase::Started),
++            scroll_end_reported: Cell::new(false),
+             pending_events,
+         }
+     }
+ 
++    // Riseonly: the fingers lifted and the system runs the inertia, so the sequence ends here and
++    // the rest arrives as Moved, the contract of a macOS trackpad (Ended on lift, then momentum).
++    fn end_scroll_on_lift(&self) {
++        if self.gesture_kind.get() != GestureKind::Scroll || self.scroll_end_reported.get() {
++            return;
++        }
++        self.scroll_end_reported.set(true);
++        self.scroll_phase.set(TouchPhase::Moved);
++        self.pending_events
++            .borrow_mut()
++            .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
++                position: self.mouse_position(),
++                delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                modifiers: current_modifiers(),
++                touch_phase: TouchPhase::Ended,
++            }));
++    }
++
+     fn end_gesture(&self) {
+         let position = self.mouse_position();
+         let modifiers = current_modifiers();
+         match self.gesture_kind.get() {
+             GestureKind::Scroll => {
+-                self.pending_events
+-                    .borrow_mut()
+-                    .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+-                        position,
+-                        delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
+-                        modifiers,
+-                        touch_phase: TouchPhase::Ended,
+-                    }));
++                if !self.scroll_end_reported.get() {
++                    self.pending_events
++                        .borrow_mut()
++                        .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
++                            position,
++                            delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                            modifiers,
++                            touch_phase: TouchPhase::Ended,
++                        }));
++                }
+             }
+             GestureKind::Pinch => {
+                 self.pending_events
+@@ -190,6 +212,7 @@
+             GestureKind::None => {}
+         }
+         self.gesture_kind.set(GestureKind::None);
++        self.scroll_end_reported.set(false);
+     }
+ 
+     fn mouse_position(&self) -> Point<Pixels> {
+@@ -214,6 +237,10 @@
+             return Ok(());
+         }
+ 
++        if current == DIRECTMANIPULATION_INERTIA {
++            self.end_scroll_on_lift();
++        }
++
+         // A new gesture interrupted inertia, so end the old sequence.
+         if current == DIRECTMANIPULATION_RUNNING && previous == DIRECTMANIPULATION_INERTIA {
+             self.end_gesture();

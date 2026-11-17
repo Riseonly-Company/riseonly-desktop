@@ -1,0 +1,109 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -722,9 +722,23 @@
+ /// switch of the page on every tap (X1284). Each nested view painted in the frame just before and
+ /// prepainted in this one (0045 rebased it) now takes the range its paint was copied to and this
+ /// frame, as if it had replayed itself. A moved or transformed replay leaves them as they were.
+-pub(crate) fn rebase_nested_paints(old: &Range<PaintIndex>, replayed: &Range<PaintIndex>, window: &mut Window) {
++///
++/// Riseonly 0113: an in-place replay (`carry_holes`) also keeps the hole record (0088) of each
++/// nested view it rebased, at its new ranges. Holes were recorded only by views that drew
++/// themselves, so after any full frame in which a page replayed, a notify of a cell inside it
++/// (a poster landing in an archive tile, X1937) found no hole and laid out the whole window
++/// (no_hole, 3-5 ms layout for 3 views) instead of drawing that cell alone.
++pub(crate) fn rebase_nested_paints(
++    old: &Range<PaintIndex>,
++    replayed: &Range<PaintIndex>,
++    carry_holes: bool,
++    window: &mut Window,
++) {
+     let frame = window.draw_count;
+-    window.update_replayed_paint_states(replayed, view_element_state_type_id(), |state, _| {
++    let carry_holes =
++        carry_holes && window.hidden_depth == 0 && window.transformation() == crate::TransformationMatrix::default();
++    let mut carried: Vec<(EntityId, Range<PrepaintStateIndex>, Range<PaintIndex>)> = Vec::new();
++    window.update_replayed_paint_states(replayed, view_element_state_type_id(), |key, state, _| {
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+             return;
+         };
+@@ -738,9 +752,24 @@
+         let Some(range) = PaintIndex::rebase_within(&state.paint_range, old, &replayed.start) else {
+             return;
+         };
++        if carry_holes && let Some(ElementId::View(entity_id)) = key.0.last() {
++            carried.push((*entity_id, state.prepaint_range.clone(), range.clone()));
++        }
+         state.paint_range = range;
+         state.painted_frame = frame;
+     });
++    for (entity_id, prepaint_range, paint_range) in carried {
++        if window.next_frame.holes.contains_key(&entity_id) {
++            continue;
++        }
++        let Some(record) = window.rendered_frame.holes.get(&entity_id) else {
++            continue;
++        };
++        let mut record = record.clone();
++        record.prepaint_range = prepaint_range;
++        record.paint_range = paint_range;
++        window.next_frame.holes.insert(entity_id, record);
++    }
+ }
+ 
+ /// Riseonly 0073: a cached view that replays at a new origin (a list cell on a wheel step, 0041)
+@@ -1311,7 +1340,7 @@
+                                         window.reuse_moved_paint(range.clone(), offset);
+                                         // Riseonly 0073: the cached views inside moved with it.
+                                         let replayed = paint_start.clone()..window.paint_index();
+-                                        rebase_nested_paints(&range, &replayed, window);
++                                        rebase_nested_paints(&range, &replayed, false, window);
+                                         // Riseonly 0065: a moved replay keeps the opacity it was
+                                         // painted with, so a view moving inside a fade shows the
+                                         // old opacity once and renders in the next frame.
+@@ -1326,7 +1355,7 @@
+                                         window.reuse_paint(range.clone());
+                                         // Riseonly 0063: the cached views inside replayed with it.
+                                         let replayed = paint_start.clone()..window.paint_index();
+-                                        rebase_nested_paints(&range, &replayed, window);
++                                        rebase_nested_paints(&range, &replayed, true, window);
+                                     }
+                                     // Riseonly 0065: same place, another opacity. A view first
+                                     // painted inside a fade-in kept that faint frame forever
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1074,6 +1074,7 @@
+ }
+ 
+ /// Riseonly 0088: a cached view drawn shown and in place, and how to draw it again alone there.
++#[derive(Clone)]
+ pub(crate) struct HoleRecord {
+     pub(crate) view: AnyView,
+     pub(crate) style: crate::StyleRefinement,
+@@ -4801,7 +4802,8 @@
+                 self.reuse_paint(range.clone());
+                 // Riseonly 0080: the cached views inside the replayed draw replayed with it.
+                 let replayed = paint_start.clone()..self.paint_index();
+-                crate::view::rebase_nested_paints(&range, &replayed, self);
++                // Riseonly 0113: a deferred draw keeps no holes of its nested views.
++                crate::view::rebase_nested_paints(&range, &replayed, false, self);
+                 // Riseonly 0098: holes of the frame just drawn inside it move with it.
+                 if let Some(splice) = splice.as_deref_mut() {
+                     splice.map.paint.push(SplicePass::whole(range, paint_start.clone()));
+@@ -5180,7 +5182,7 @@
+         &mut self,
+         replayed: &Range<PaintIndex>,
+         type_id: TypeId,
+-        mut update: impl FnMut(&mut dyn Any, &mut Self),
++        mut update: impl FnMut(&GlobalElementId, &mut dyn Any, &mut Self),
+     ) {
+         let keys = self.next_frame.accessed_element_states[replayed
+             .start
+@@ -5192,7 +5194,7 @@
+             .collect::<Vec<_>>();
+         for key in keys {
+             if let Some(mut state) = self.rendered_frame.element_states.remove(&key) {
+-                update(&mut *state.inner, self);
++                update(&key.0, &mut *state.inner, self);
+                 self.rendered_frame.element_states.insert(key, state);
+             }
+         }

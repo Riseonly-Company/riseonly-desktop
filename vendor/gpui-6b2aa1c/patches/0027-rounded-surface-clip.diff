@@ -1,0 +1,256 @@
+diff -ru a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
+--- a/crates/gpui/src/elements/div.rs	2026-11-14 09:32:50
++++ b/crates/gpui/src/elements/div.rs	2026-11-14 09:33:20
+@@ -2404,6 +2404,26 @@
+                     tab_group = self.tab_index;
+                 }
+ 
++                // A rounded clipping container also cuts the surfaces inside it (a circular video).
++                let surface_corner_clip = style
++                    .overflow_mask(bounds, window.rem_size())
++                    .map(|_| {
++                        style
++                            .corner_radii
++                            .clone()
++                            .to_pixels(window.rem_size())
++                            .clamp_radii_for_quad_size(bounds.size)
++                    })
++                    .filter(|radii| {
++                        [
++                            radii.top_left,
++                            radii.top_right,
++                            radii.bottom_right,
++                            radii.bottom_left,
++                        ]
++                        .iter()
++                        .any(|radius| *radius > Pixels::ZERO)
++                    });
+                 window.with_element_opacity(style.opacity, |window| {
+                     style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
+                         window.with_text_style(style.text_style().cloned(), |window| {
+@@ -2475,7 +2495,14 @@
+                                             }
+                                         }
+ 
+-                                        f(&style, window, cx);
++                                        match surface_corner_clip {
++                                            Some(radii) => window.with_surface_corner_clip(
++                                                bounds,
++                                                radii,
++                                                |window| f(&style, window, cx),
++                                            ),
++                                            None => f(&style, window, cx),
++                                        }
+ 
+                                         if let Some(_hitbox) = hitbox {
+                                             #[cfg(any(feature = "inspector", debug_assertions))]
+diff -ru a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+--- a/crates/gpui/src/scene.rs	2026-11-14 09:32:50
++++ b/crates/gpui/src/scene.rs	2026-11-14 09:33:20
+@@ -819,6 +819,11 @@
+     pub order: DrawOrder,
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
++    /// The rounded box of the innermost clipping container with corner radii (a circle for
++    /// `rounded_full().overflow_hidden()`): the surface is cut to it, zero radii cut nothing.
++    pub corner_clip_bounds: Bounds<ScaledPixels>,
++    /// Radii of `corner_clip_bounds`.
++    pub corner_radii: Corners<ScaledPixels>,
+     #[cfg(target_os = "macos")]
+     pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+     /// The decoded frame, off macOS: renderers that own their textures upload and draw it.
+diff -ru a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+--- a/crates/gpui/src/window.rs	2026-11-14 09:32:50
++++ b/crates/gpui/src/window.rs	2026-11-14 09:33:20
+@@ -1106,6 +1106,7 @@
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
++    pub(crate) surface_corner_clip_stack: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
+     pub(crate) transformation_stack: Vec<(TransformationMatrix, ContentMask<Pixels>)>,
+     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+     pub(crate) image_cache_stack: Vec<AnyImageCache>,
+@@ -1857,6 +1858,7 @@
+             rendered_entity_stack: Vec::new(),
+             element_offset_stack: Vec::new(),
+             content_mask_stack: Vec::new(),
++            surface_corner_clip_stack: Vec::new(),
+             transformation_stack: Vec::new(),
+             element_opacity: 1.0,
+             requested_autoscroll: None,
+@@ -2757,6 +2759,31 @@
+         }
+     }
+ 
++    /// Surfaces painted by `f` are cut to `bounds` with `corner_radii`, the rounded box a
++    /// clipping container draws its own background with. The content mask stays rectangular for
++    /// every other primitive; a surface has no other way to follow a rounded clip.
++    pub fn with_surface_corner_clip<R>(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        self.surface_corner_clip_stack.push((bounds, corner_radii));
++        let result = f(self);
++        self.surface_corner_clip_stack.pop();
++        result
++    }
++
++    fn surface_corner_clip(&self) -> (Bounds<ScaledPixels>, Corners<ScaledPixels>) {
++        match self.surface_corner_clip_stack.last() {
++            Some((bounds, corner_radii)) => (
++                self.snap_bounds(self.surface_bounds_under_transformation(*bounds)),
++                corner_radii.scale(self.scale_factor()),
++            ),
++            None => (Bounds::default(), Corners::default()),
++        }
++    }
++
+     /// Call to prevent the default action of an event. Currently only used to prevent
+     /// parent elements from becoming focused on mouse down.
+     pub fn prevent_default(&mut self) {
+@@ -4687,10 +4714,13 @@
+ 
+         let bounds = self.snap_bounds(self.surface_bounds_under_transformation(bounds));
+         let content_mask = self.snapped_content_mask();
++        let (corner_clip_bounds, corner_radii) = self.surface_corner_clip();
+         self.next_frame.scene.insert_primitive(PaintSurface {
+             order: 0,
+             bounds,
+             content_mask,
++            corner_clip_bounds,
++            corner_radii,
+             image_buffer,
+         });
+     }
+@@ -4707,10 +4737,13 @@
+ 
+         let bounds = self.snap_bounds(self.surface_bounds_under_transformation(bounds));
+         let content_mask = self.snapped_content_mask();
++        let (corner_clip_bounds, corner_radii) = self.surface_corner_clip();
+         self.next_frame.scene.insert_primitive(PaintSurface {
+             order: 0,
+             bounds,
+             content_mask,
++            corner_clip_bounds,
++            corner_radii,
+             frame,
+         });
+     }
+diff -ru a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+--- a/crates/gpui_macos/src/metal_renderer.rs	2026-11-14 09:32:50
++++ b/crates/gpui_macos/src/metal_renderer.rs	2026-11-14 09:33:40
+@@ -7,7 +7,7 @@
+     quartzcore::AutoresizingMask,
+ };
+ use gpui::{
+-    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, PaintSurface, Path, Point,
++    AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, PaintSurface, Path, Point,
+     PrimitiveBatch, ScaledPixels, Scene, Size, point, size,
+ };
+ #[cfg(any(test, feature = "test-support"))]
+@@ -1148,6 +1148,11 @@
+             Some(&instance_bindings.surfaces.buffer),
+             instance_bindings.surfaces.offset as u64,
+         );
++        command_encoder.set_fragment_buffer(
++            SurfaceInputIndex::Surfaces as u64,
++            Some(&instance_bindings.surfaces.buffer),
++            instance_bindings.surfaces.offset as u64,
++        );
+         command_encoder.set_vertex_bytes(
+             SurfaceInputIndex::ViewportSize as u64,
+             mem::size_of_val(&viewport_size) as u64,
+@@ -1435,6 +1440,8 @@
+         surfaces: writer.write_iter(scene.surfaces.iter().map(|surface| SurfaceBounds {
+             bounds: surface.bounds,
+             content_mask: surface.content_mask,
++            corner_clip_bounds: surface.corner_clip_bounds,
++            corner_radii: surface.corner_radii.clone(),
+         }))?,
+     })
+ }
+@@ -1627,6 +1634,8 @@
+ pub struct SurfaceBounds {
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
++    pub corner_clip_bounds: Bounds<ScaledPixels>,
++    pub corner_radii: Corners<ScaledPixels>,
+ }
+ 
+ #[cfg(any(test, feature = "test-support"))]
+diff -ru a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
+--- a/crates/gpui_macos/src/shaders.metal	2026-11-14 09:32:50
++++ b/crates/gpui_macos/src/shaders.metal	2026-11-14 09:33:20
+@@ -858,16 +858,29 @@
+ }
+ 
+ struct SurfaceVertexOutput {
++  uint surface_id [[flat]];
+   float4 position [[position]];
+   float2 texture_position;
+   float clip_distance [[clip_distance]][4];
+ };
+ 
+ struct SurfaceFragmentInput {
++  uint surface_id [[flat]];
+   float4 position [[position]];
+   float2 texture_position;
+ };
+ 
++// Coverage of the surface's rounded clip at this pixel, 1 without corner radii.
++float surface_corner_coverage(float2 point, SurfaceBounds surface) {
++  Corners_ScaledPixels radii = surface.corner_radii;
++  if (radii.top_left == 0.0 && radii.top_right == 0.0 &&
++      radii.bottom_right == 0.0 && radii.bottom_left == 0.0) {
++    return 1.0;
++  }
++  float distance = quad_sdf(point, surface.corner_clip_bounds, radii);
++  return saturate(0.5 - distance);
++}
++
+ vertex SurfaceVertexOutput surface_vertex(
+     uint unit_vertex_id [[vertex_id]], uint surface_id [[instance_id]],
+     constant float2 *unit_vertices [[buffer(SurfaceInputIndex_Vertices)]],
+@@ -886,12 +899,15 @@
+   // to the current vertex of the unit triangle.
+   float2 texture_position = unit_vertex;
+   return SurfaceVertexOutput{
++      surface_id,
+       device_position,
+       texture_position,
+       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+ }
+ 
+ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
++                                 constant SurfaceBounds *surfaces
++                                 [[buffer(SurfaceInputIndex_Surfaces)]],
+                                  texture2d<float> y_texture
+                                  [[texture(SurfaceInputIndex_YTexture)]],
+                                  texture2d<float> cb_cr_texture
+@@ -906,15 +922,22 @@
+       y_texture.sample(texture_sampler, input.texture_position).r,
+       cb_cr_texture.sample(texture_sampler, input.texture_position).rg, 1.0);
+ 
+-  return ycbcrToRGBTransform * ycbcr;
++  float4 color = ycbcrToRGBTransform * ycbcr;
++  color.a *= surface_corner_coverage(input.position.xy, surfaces[input.surface_id]);
++  return color;
+ }
+ 
+ // A 32BGRA surface with premultiplied alpha (bound in the luma slot), drawn as it is.
+ fragment float4 bgra_surface_fragment(SurfaceFragmentInput input [[stage_in]],
++                                      constant SurfaceBounds *surfaces
++                                      [[buffer(SurfaceInputIndex_Surfaces)]],
+                                       texture2d<float> bgra_texture
+                                       [[texture(SurfaceInputIndex_YTexture)]]) {
+   constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
+-  return bgra_texture.sample(texture_sampler, input.texture_position);
++  float coverage =
++      surface_corner_coverage(input.position.xy, surfaces[input.surface_id]);
++  // Premultiplied: the whole color scales with the coverage.
++  return bgra_texture.sample(texture_sampler, input.texture_position) * coverage;
+ }
+ 
+ float4 hsla_to_rgba(Hsla hsla) {

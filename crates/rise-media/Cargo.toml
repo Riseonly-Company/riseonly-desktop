@@ -1,0 +1,141 @@
+[package]
+name = "rise-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Links libavcodec through rsmpeg. Requires the LGPL prefix from
+# scripts/build-ffmpeg-lgpl.sh; build.rs refuses to guess at a system FFmpeg
+# because every distribution's default is GPL.
+ffmpeg = ["dep:rsmpeg", "dep:reqwest", "dep:rustls", "dep:rustls-platform-verifier"]
+# Compiles the vendored rlottie (MIT) into the crate. Requires the source from
+# scripts/vendor-rlottie.sh; build.rs refuses to look for a system librlottie
+# because no operating system ships one.
+rlottie = []
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+parking_lot.workspace = true
+gpui.workspace = true
+rise-core.workspace = true
+rise-platform.workspace = true
+rise-energy = { path = "../rise-energy" }
+rise-diagnostics = { path = "../rise-diagnostics" }
+# Decode guard ceilings (X23), the workspace crate rise-diagnostics already links.
+rise-limits.workspace = true
+rsmpeg = { version = "0.16", default-features = false, features = ["ffmpeg7", "link_system_ffmpeg"], optional = true }
+cpal = "0.16"
+# Codec set chosen against what the backend actually accepts (file-service
+# upload_policy.rs) minus what has no pure-Rust decoder. Opus is the gap and is
+# reported by name rather than silently producing silence.
+symphonia = { version = "0.5", default-features = false, features = [
+    "mp3",
+    "aac",
+    "alac",
+    "flac",
+    "caf",
+    "isomp4",
+    "ogg",
+    "vorbis",
+    "wav",
+    "pcm",
+    "adpcm",
+] }
+image = { version = "0.25", default-features = false }
+smallvec.workspace = true
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Calls: the same SFU client as iOS (docs/DEPENDENCIES.md). Pins are the ones gpui's Zed
+# rev 6b2aa1c resolves; webrtc-sys links the prebuilt libwebrtc webrtc-a545de4, from a local copy
+# when LK_CUSTOM_WEBRTC is set, otherwise build.rs downloads it.
+livekit = { version = "=0.7.32", default-features = false, features = ["tokio", "rustls-tls-native-roots"] }
+# The crate livekit already links, named for set_signal_stream_opener (P256, vendored patch).
+livekit-api = { version = "=0.4.14", default-features = false }
+futures.workspace = true
+
+# macOS only: gpui draws a decoded VideoToolbox frame through gpui::surface(CVPixelBuffer), and a
+# CVPixelBuffer is built from FFmpeg's raw CVPixelBufferRef only through core-foundation's TCFType.
+# Both are the versions gpui 6b2aa1c already links, so no second copy ships.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-video = { version = "0.5.2", default-features = false }
+core-foundation = { version = "0.10", default-features = false }
+# video_export (P48) drives AVAssetExportSession, AVMutableComposition and AVAssetImageGenerator
+# through the objc2 runtime, the same workspace pins rise-platform already links (no new crate).
+objc2.workspace = true
+objc2-foundation.workspace = true
+
+# Windows only: the audio_capture branch writes AAC m4a through the Media Foundation Sink Writer
+# (P84). The interfaces and GUIDs come from the windows crate rise-platform already links, plus the
+# Win32_Media_MediaFoundation feature; the Media Foundation functions themselves are resolved at
+# run time (audio_capture/windows.rs), so no load time import of mfplat.dll or mfreadwrite.dll.
+# https://learn.microsoft.com/windows/win32/medfound/tutorial--using-the-sink-writer-to-encode-video
+# The camera_capture branch (P86) uses the same interfaces for the Source Reader and an H.264 .mp4
+# segment, resolving mf.dll at run time as well, and reads the side of the machine a camera looks
+# from through Windows.Devices.Enumeration (DeviceInformation.EnclosureLocation), hence the
+# Devices_Enumeration feature (Foundation for its IAsyncOperation is already on in the workspace).
+# https://learn.microsoft.com/uwp/api/windows.devices.enumeration.enclosurelocation
+# The av_player branch (P105) plays the silent clip loop with the Media Foundation Media Engine in
+# frame-server mode on its own D3D11 device, hence the Direct3D 11 and DXGI features; the engine's
+# event callback is a COM object of ours (IMFMediaEngineNotify), and the windows `implement` macro
+# expands to paths of windows-core, the 0.62 the windows crate already links (no second copy).
+# https://learn.microsoft.com/windows/win32/api/mfmediaengine/nn-mfmediaengine-imfmediaenginenotify
+# The audio_route branch (X22) watches the default render endpoint through the MMDevice API
+# (IMMDeviceEnumerator, IMMNotificationClient), hence Win32_Media_Audio.
+# https://learn.microsoft.com/windows/win32/api/mmdeviceapi/nn-mmdeviceapi-immnotificationclient
+# The screen_capture branch (P247) takes the machine's sound through process loopback:
+# ActivateAudioInterfaceAsync carries its parameters in a PROPVARIANT blob, hence
+# Win32_System_Com_StructuredStorage and Win32_System_Variant.
+# https://learn.microsoft.com/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-activateaudiointerfaceasync
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Devices_Enumeration",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }
+windows-core.workspace = true
+
+# Linux screen_capture X11 arm (P135): monitor and window sizes for the 1440p shelf on an own
+# connection (RRGetMonitors, GetGeometry). The workspace x11rb rise-platform and gpui_linux already
+# resolve, so Cargo.lock gains no crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+# Screen share system sound (screen_capture/linux.rs, P245); links libpipewire-0.3 at load time.
+pipewire = "0.8"
+x11rb.workspace = true
+
+# Linux and Windows: the poster of a remote chat video (video_export remote_poster, P153) feeds
+# libavformat through ranged GET requests, because the LGPL prefix ships without network protocols
+# (scripts/build-ffmpeg-lgpl.sh). The workspace reqwest the app and rise-engine already resolve, so
+# Cargo.lock gains no crate; macOS reads the URL through AVURLAsset.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+reqwest = { workspace = true, optional = true }
+# The trust decision of the OS for the same remote poster (P256), the pins the app already links.
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
+
+# Maps: MapLibre Native, the engine iOS draws with (docs/DEPENDENCIES.md). build.rs links
+# the prebuilt amalgam core, from a local copy when MLN_CORE_LIBRARY_PATH and
+# MLN_CORE_LIBRARY_HEADERS_PATH are set: Metal on macOS, Vulkan on Linux.
+# maplibre-native publishes no Windows core and build.rs refuses Windows, so the crate is not a
+# Windows dependency and map_view answers there with the reason (map_view/windows.rs).
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+maplibre_native = { version = "=0.10.0", default-features = false, features = ["geojson", "json"] }
+
+[build-dependencies]
+cc = "1"

@@ -1,0 +1,47 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -563,7 +563,7 @@
+ /// before now takes the range its prepaint was copied to and this frame, and keeps its parked paint
+ /// alive, as if it had replayed itself; its paint range is left as it was, so a shown nested view
+ /// whose paint was not replayed by itself still renders.
+-fn rebase_nested_views(
++pub(crate) fn rebase_nested_views(
+     old: &Range<PrepaintStateIndex>,
+     replayed: &Range<PrepaintStateIndex>,
+     window: &mut Window,
+@@ -596,7 +596,7 @@
+ /// switch of the page on every tap (X1284). Each nested view painted in the frame just before and
+ /// prepainted in this one (0045 rebased it) now takes the range its paint was copied to and this
+ /// frame, as if it had replayed itself. A moved or transformed replay leaves them as they were.
+-fn rebase_nested_paints(old: &Range<PaintIndex>, replayed: &Range<PaintIndex>, window: &mut Window) {
++pub(crate) fn rebase_nested_paints(old: &Range<PaintIndex>, replayed: &Range<PaintIndex>, window: &mut Window) {
+     let frame = window.draw_count;
+     window.update_replayed_paint_states(replayed, view_element_state_type_id(), |state, _| {
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3656,7 +3656,10 @@
+                     });
+                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
+                 } else {
+-                    self.reuse_prepaint(prepaint_range);
++                    self.reuse_prepaint(prepaint_range.clone());
++                    // Riseonly 0080: the cached views inside the replayed draw replayed with it.
++                    let replayed = prepaint_start.clone()..self.prepaint_index();
++                    crate::view::rebase_nested_views(&prepaint_range, &replayed, self);
+                 }
+                 let prepaint_end = self.prepaint_index();
+                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
+@@ -3699,7 +3702,11 @@
+                     })
+                 })
+             } else {
+-                self.reuse_paint(deferred_draw.paint_range.clone());
++                let range = deferred_draw.paint_range.clone();
++                self.reuse_paint(range.clone());
++                // Riseonly 0080: the cached views inside the replayed draw replayed with it.
++                let replayed = paint_start.clone()..self.paint_index();
++                crate::view::rebase_nested_paints(&range, &replayed, self);
+             }
+             let paint_end = self.paint_index();
+             deferred_draw.paint_range = paint_start..paint_end;

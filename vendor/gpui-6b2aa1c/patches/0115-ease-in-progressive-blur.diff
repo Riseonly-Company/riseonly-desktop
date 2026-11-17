@@ -1,0 +1,25 @@
+--- a/crates/gpui_macos/src/shaders.metal
++++ b/crates/gpui_macos/src/shaders.metal
+@@ -1354,8 +1354,11 @@
+ }
+ 
+ // Riseonly 0114: progressive 1 (from the top) or -1 (from the bottom) scales sigma along the
+-// quad's height: full over the first `fade` from that edge, then smoothstep down to none at the
+-// opposite edge. Both passes take the sigma of the row they draw.
++// quad's height: full over the first `fade` from that edge, then down to none at the opposite
++// edge. Both passes take the sigma of the row they draw.
++// Riseonly 0115: the fall is an ease in seen from the content side, 1 - cos(u * pi / 2) with u
++// running from 0 at the opposite edge to 1 at the held band, so the blur starts unnoticeably at
++// the content and keeps growing all the way to the edge instead of stepping up in the middle.
+ float backdrop_blur_sigma(float y, float4 bounds, float4 settings) {
+   float sigma = settings.x;
+   float progressive = settings.w;
+@@ -1366,7 +1369,7 @@
+   float from_edge = progressive > 0.0 ? y - bounds.y : bounds.y + bounds.w - y;
+   float hold = clamp(settings.z, 0.0, height - 1.0);
+   float t = saturate((from_edge - hold) / (height - hold));
+-  return sigma * (1.0 - t * t * (3.0 - 2.0 * t));
++  return sigma * (1.0 - cos((1.0 - t) * M_PI_F * 0.5));
+ }
+ 
+ fragment float4 backdrop_blur_fragment(

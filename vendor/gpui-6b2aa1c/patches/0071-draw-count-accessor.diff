@@ -1,0 +1,16 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2673,6 +2673,13 @@
+         self.on_next_frame(move |_, cx| crate::profiler::with_dirty_origin(origin, || cx.notify(entity)));
+     }
+ 
++    /// Riseonly 0071: the number of the frame being drawn, raised at the start of every draw. An
++    /// element prepainted under a layer that is drawn later in the same frame compares it with the
++    /// frame the layer last prepainted in, to know whether it sits under or inside that layer.
++    pub fn draw_count(&self) -> u64 {
++        self.draw_count
++    }
++
+     /// Runs all callbacks scheduled via [`Self::on_next_frame`], returning how many ran.
+     ///
+     /// Tests have no platform frame loop, so this simulates the delivery of the

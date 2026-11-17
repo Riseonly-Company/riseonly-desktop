@@ -1,0 +1,188 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -61,8 +61,43 @@
+     pub subpixel_sprites: Vec<SubpixelSprite>,
+     pub polychrome_sprites: Vec<PolychromeSprite>,
+     pub surfaces: Vec<PaintSurface>,
++    /// Paint operations painted under a shift key and how far their copies on screen moved
++    /// since (Riseonly 0084).
++    pub(crate) shift_groups: Vec<ShiftGroup>,
+ }
+ 
++/// The paint operations [`crate::Window::with_shift_group`] recorded under `key`, and the offset
++/// [`Scene::shift_group`] moved their primitives on screen by (Riseonly 0084).
++#[derive(Clone, Debug)]
++pub(crate) struct ShiftGroup {
++    key: u64,
++    operations: Range<usize>,
++    moved: Point<ScaledPixels>,
++}
++
++/// Replaces the primitive of `list` (sorted by draw order) drawn at `order` with `bounds` by
++/// `next` of it (Riseonly 0084). False when none is.
++fn shift_live<T>(
++    list: &mut [T],
++    order: DrawOrder,
++    bounds: Bounds<ScaledPixels>,
++    of: impl Fn(&T) -> (DrawOrder, Bounds<ScaledPixels>),
++    next: impl FnOnce(&T) -> T,
++) -> bool {
++    let start = list.partition_point(|item| of(item).0 < order);
++    for item in &mut list[start..] {
++        let (item_order, item_bounds) = of(item);
++        if item_order != order {
++            break;
++        }
++        if item_bounds == bounds {
++            *item = next(item);
++            return true;
++        }
++    }
++    false
++}
++
+ #[expect(missing_docs)]
+ impl Scene {
+     pub fn clear(&mut self) {
+@@ -77,6 +112,101 @@
+         self.subpixel_sprites.clear();
+         self.polychrome_sprites.clear();
+         self.surfaces.clear();
++        self.shift_groups.clear();
++    }
++
++    /// Names the paint operations from `start` to now `key` (Riseonly 0084). Zero names nothing.
++    pub(crate) fn close_shift_group(&mut self, key: u64, start: usize) {
++        let end = self.paint_operations.len();
++        if key != 0 && end > start {
++            self.shift_groups.push(ShiftGroup {
++                key,
++                operations: start..end,
++                moved: Point::default(),
++            });
++        }
++    }
++
++    /// Moves every primitive painted under the shift key `key` by `offset` in the frame on screen,
++    /// clip included, as a moved replay does (Riseonly 0084). The copies kept for replay stay where
++    /// they were painted, so a later replay at a new spot still moves them from there. False when
++    /// no group carries the key or a primitive of it was not found on screen; the caller then
++    /// repaints through its view.
++    pub fn shift_group(&mut self, key: u64, offset: Point<ScaledPixels>) -> bool {
++        let Some(index) = self.shift_groups.iter().rposition(|group| group.key == key) else {
++            return false;
++        };
++        if offset.x.0 == 0.0 && offset.y.0 == 0.0 {
++            return true;
++        }
++        let group = self.shift_groups[index].clone();
++        let mut found = true;
++        for operation in &self.paint_operations[group.operations.clone()] {
++            let PaintOperation::Primitive(painted) = operation else {
++                continue;
++            };
++            let mut shown = painted.clone();
++            shown.translate(group.moved);
++            let mut next = shown.clone();
++            next.translate(offset);
++            found &= match (shown, next) {
++                (Primitive::Shadow(shown), Primitive::Shadow(next)) => {
++                    shift_live(&mut self.shadows, shown.order, shown.bounds, |item| (item.order, item.bounds), |_| next)
++                }
++                (Primitive::Quad(shown), Primitive::Quad(next)) => {
++                    shift_live(&mut self.quads, shown.order, shown.bounds, |item| (item.order, item.bounds), |_| next)
++                }
++                (Primitive::Path(shown), Primitive::Path(next)) => shift_live(
++                    &mut self.paths,
++                    shown.order,
++                    shown.bounds,
++                    |item| (item.order, item.bounds),
++                    |live| {
++                        let mut next = next;
++                        next.id = live.id;
++                        next
++                    },
++                ),
++                (Primitive::Underline(shown), Primitive::Underline(next)) => shift_live(
++                    &mut self.underlines,
++                    shown.order,
++                    shown.bounds,
++                    |item| (item.order, item.bounds),
++                    |_| next,
++                ),
++                (Primitive::MonochromeSprite(shown), Primitive::MonochromeSprite(next)) => shift_live(
++                    &mut self.monochrome_sprites,
++                    shown.order,
++                    shown.bounds,
++                    |item| (item.order, item.bounds),
++                    |_| next,
++                ),
++                (Primitive::SubpixelSprite(shown), Primitive::SubpixelSprite(next)) => shift_live(
++                    &mut self.subpixel_sprites,
++                    shown.order,
++                    shown.bounds,
++                    |item| (item.order, item.bounds),
++                    |_| next,
++                ),
++                (Primitive::PolychromeSprite(shown), Primitive::PolychromeSprite(next)) => shift_live(
++                    &mut self.polychrome_sprites,
++                    shown.order,
++                    shown.bounds,
++                    |item| (item.order, item.bounds),
++                    |_| next,
++                ),
++                (Primitive::Surface(shown), Primitive::Surface(next)) => shift_live(
++                    &mut self.surfaces,
++                    shown.order,
++                    shown.bounds,
++                    |item| (item.order, item.bounds),
++                    |_| next,
++                ),
++                _ => false,
++            };
++        }
++        self.shift_groups[index].moved = group.moved + offset;
++        found
+     }
+ 
+     pub fn len(&self) -> usize {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4517,8 +4517,37 @@
+             self.needs_present.set(true);
+         }
+         Some(shows)
++    }
++
++    /// Names everything `f` paints with the shift key `key` (Riseonly 0084), so
++    /// [`Self::shift_group`] can move it in the frame on screen. Zero names nothing. A cached view
++    /// replayed whole around the call keeps no group; the shift then refuses.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    pub fn with_shift_group<R>(&mut self, key: u64, f: impl FnOnce(&mut Self) -> R) -> R {
++        self.invalidator.debug_assert_paint();
++        let start = self.next_frame.scene.paint_operations.len();
++        let result = f(self);
++        self.next_frame.scene.close_shift_group(key, start);
++        result
+     }
+ 
++    /// Moves everything painted under the shift key `key` by `offset` in the frame on screen, clip
++    /// included, and presents (Riseonly 0084): a map pin follows the camera without a render, layout
++    /// or paint of the views around it. Hitboxes stay where they were painted; the caller renders
++    /// once the motion ends. Pass whole device pixels. False when the key left the frame or a
++    /// primitive of it was not found; the caller then repaints through its view.
++    pub fn shift_group(&mut self, key: u64, offset: Point<Pixels>) -> bool {
++        let shifted = self
++            .rendered_frame
++            .scene
++            .shift_group(key, offset.scale(self.scale_factor()));
++        if shifted && offset != Point::default() {
++            self.needs_present.set(true);
++        }
++        shifted
++    }
++
+     /// Marks every image `f` paints with `key` (Riseonly 0057), so [`Self::swap_image`] can give
+     /// it another picture in the frame on screen. Zero names nothing.
+     ///

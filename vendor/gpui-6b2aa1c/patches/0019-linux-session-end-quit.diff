@@ -1,0 +1,100 @@
+--- a/crates/gpui_linux/src/linux/platform.rs
++++ b/crates/gpui_linux/src/linux/platform.rs
+@@ -45,6 +45,88 @@
+ #[cfg(any(feature = "wayland", feature = "x11"))]
+ const FILE_PICKER_PORTAL_MISSING: &str =
+     "Couldn't open file picker due to missing xdg-desktop-portal implementation.";
++
++// Riseonly: a session that ends (log out, shut down) reaches a Linux process only as signals: systemd
++// sends the session scope SIGTERM and SIGHUP right after it, and their default action kills the
++// process with the loop still running, so on_quit never runs. The handler only writes to a pipe,
++// and a thread stops the loop as Platform::quit does; run() then calls the quit callback as usual.
++// The reader stays for the life of the process: a closed pipe would raise SIGPIPE in the handler.
++// A signal that is already ignored stays ignored (nohup). Installed after on_finish_launching: during
++// launch there is nothing to save, so the default action is right.
++// https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html
++fn stop_loop_on_session_end(signal: LoopSignal) {
++    use std::io::Read as _;
++    use std::os::fd::FromRawFd as _;
++    use std::sync::atomic::{AtomicI32, Ordering};
++
++    static WRITE_END: AtomicI32 = AtomicI32::new(-1);
++
++    extern "C" fn on_session_end_signal(_: libc::c_int) {
++        let byte = 1u8;
++        // SAFETY: write(2) and a lock-free atomic load are async-signal-safe, the write end is
++        // non-blocking and `byte` outlives the call. The write only fails on a full pipe, and a
++        // full pipe already holds the stop request.
++        unsafe {
++            libc::write(
++                WRITE_END.load(Ordering::Relaxed),
++                (&raw const byte).cast(),
++                1,
++            );
++        }
++    }
++
++    let mut ends = [-1; 2];
++    // SAFETY: `ends` is the two-element array pipe2(2) fills.
++    if unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
++        log::warn!("no pipe for session end signals: {}", std::io::Error::last_os_error());
++        return;
++    }
++    let [read_end, write_end] = ends;
++    // SAFETY: pipe2 just returned `read_end` and nothing else owns it.
++    let mut reader = unsafe { std::fs::File::from_raw_fd(read_end) };
++    let watcher = std::thread::Builder::new()
++        .name("gpui-session-end".into())
++        .spawn(move || {
++            let mut byte = [0u8];
++            if reader.read_exact(&mut byte).is_ok() {
++                // EventLoop::run clears the stop flag on entry, so one stop could be lost right
++                // before the loop starts. Repeat until the process exits.
++                loop {
++                    signal.stop();
++                    signal.wakeup();
++                    std::thread::sleep(std::time::Duration::from_millis(100));
++                }
++            }
++        });
++    if let Err(error) = watcher {
++        log::warn!("no thread for session end signals: {error}");
++        return;
++    }
++    // SAFETY: `write_end` is a valid descriptor from pipe2; F_SETFL takes the flags as its argument.
++    unsafe {
++        libc::fcntl(write_end, libc::F_SETFL, libc::O_NONBLOCK);
++    }
++    WRITE_END.store(write_end, Ordering::Relaxed);
++    for number in [libc::SIGTERM, libc::SIGHUP] {
++        // SAFETY: zeroed is a valid libc::sigaction (no handler, empty flags), sigemptyset fills its
++        // mask, and sigaction only reads `action` and writes `previous`. The handler touches only
++        // WRITE_END, stored above.
++        unsafe {
++            let mut previous: libc::sigaction = std::mem::zeroed();
++            if libc::sigaction(number, std::ptr::null(), &mut previous) != 0
++                || previous.sa_sigaction == libc::SIG_IGN
++            {
++                continue;
++            }
++            let mut action: libc::sigaction = std::mem::zeroed();
++            action.sa_sigaction = on_session_end_signal as extern "C" fn(libc::c_int)
++                as *const () as libc::sighandler_t;
++            action.sa_flags = libc::SA_RESTART;
++            libc::sigemptyset(&mut action.sa_mask);
++            libc::sigaction(number, &action, std::ptr::null_mut());
++        }
++    }
++}
+ 
+ pub(crate) trait LinuxClient {
+     fn compositor_name(&self) -> &'static str;
+@@ -265,6 +347,8 @@
+     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
+         on_finish_launching();
+ 
++        stop_loop_on_session_end(self.inner.with_common(|common| common.signal.clone()));
++
+         LinuxClient::run(&self.inner);
+ 
+         let quit = self

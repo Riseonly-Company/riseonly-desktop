@@ -1,0 +1,49 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -305,6 +305,9 @@
+     parked: Option<crate::window::ParkedPaint>,
+     /// The render that recorded the prepaint ranges dropped a deferred draw under a hidden div.
+     dropped_deferred: bool,
++    /// Turned dirty while a hidden div held it: the replayed frame is old, so the frame that shows
++    /// it again renders it fresh (Riseonly 0039).
++    stale_while_hidden: bool,
+ }
+ 
+ impl ViewElementState {
+@@ -316,7 +319,7 @@
+         if window.hidden_depth > 0 {
+             return !window.prepaint_range_defers(&self.prepaint_range);
+         }
+-        if self.dropped_deferred {
++        if self.dropped_deferred || self.stale_while_hidden {
+             return false;
+         }
+         self.painted_frame + 1 == window.draw_count
+@@ -433,12 +436,18 @@
+                                     && element_state.cache_key.content_mask == content_mask
+                                     && element_state.cache_key.text_style == text_style
+                                     && element_state.cache_key.env_fingerprint == env_fingerprint))
+-                            && !window.dirty_views.contains(&entity_id)
++                            // Riseonly 0039: a dirty view under a hidden div paints nothing, so it
++                            // waits for the frame that shows it instead of rendering and laying
++                            // out every frame a store it read notifies (the feed under Settings).
++                            && (window.hidden_depth > 0 || !window.dirty_views.contains(&entity_id))
+                             && !window.refreshing
+                             && element_state.prepainted_frame + 1 == window.draw_count
+                             && element_state.can_replay(window)
+                         {
+                             if window.hidden_depth > 0 {
++                                if window.dirty_views.contains(&entity_id) {
++                                    element_state.stale_while_hidden = true;
++                                }
+                                 // Riseonly 0034: the paint of the frame just drawn is skipped from
+                                 // now on; keep it for the frame that shows the view again.
+                                 if element_state.parked.is_none()
+@@ -507,6 +516,7 @@
+                                 },
+                                 parked: None,
+                                 dropped_deferred: window.hidden_dropped_deferred != dropped_before,
++                                stale_while_hidden: false,
+                             },
+                         )
+                     },

@@ -1,0 +1,150 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -6479,6 +6479,40 @@
+                 right: px(0.),
+                 bottom: fade.max(px(0.)),
+                 left: px(0.),
++            },
++            border_color: crate::transparent_black(),
++            border_style: BorderStyle::BackdropBlur,
++        });
++    }
++
++    /// Blurs what is painted under `bounds` so far with a radius that changes along the height
++    /// (Riseonly 0114): `sigma` at the edge (`from_bottom` picks the bottom one, else the top),
++    /// held over the first `hold` from that edge, then easing down to no blur at the opposite
++    /// edge, so the content leaves the edge gradually. Same two passes as `paint_backdrop_blur`.
++    /// Paint the tint after it. Draws nothing where `BACKDROP_BLUR_SUPPORTED` is false.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    pub fn paint_progressive_backdrop_blur(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: impl Into<Corners<Pixels>>,
++        sigma: Pixels,
++        hold: Pixels,
++        from_bottom: bool,
++    ) {
++        if !crate::BACKDROP_BLUR_SUPPORTED || sigma <= px(0.) || bounds.is_empty() {
++            return;
++        }
++        let (left, right) = if from_bottom { (px(0.), px(1.)) } else { (px(1.), px(0.)) };
++        self.paint_quad(PaintQuad {
++            bounds,
++            corner_radii: corner_radii.into(),
++            background: crate::transparent_black().into(),
++            border_widths: Edges {
++                top: sigma,
++                right,
++                bottom: hold.max(px(0.)),
++                left,
+             },
+             border_color: crate::transparent_black(),
+             border_style: BorderStyle::BackdropBlur,
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -816,6 +816,15 @@
+         }
+         let sigma = quad.border_widths.top.0.clamp(1., 64.);
+         let fade = quad.border_widths.bottom.0.max(0.);
++        // Riseonly 0114: a marked side makes the radius progressive from the top (left) or
++        // the bottom (right) edge, and the bottom width is then the stretch held at full sigma.
++        let progressive = if quad.border_widths.left.0 > 0. {
++            1.
++        } else if quad.border_widths.right.0 > 0. {
++            -1.
++        } else {
++            0.
++        };
+         // Taps stay inside `area`; the pass across still covers a margin so the rows the pass down
+         // reads at the edges of `area` are always written.
+         let reach = ScaledPixels((sigma * 3.).ceil() + 1.);
+@@ -866,7 +875,7 @@
+                     corners.bottom_left.0,
+                 ],
+                 [width as f32, height as f32, direction[0], direction[1]],
+-                [sigma, down, fade, 0.],
++                [sigma, down, fade, progressive],
+                 [area.origin.x.0, area.origin.y.0, area.size.width.0, area.size.height.0],
+             ]
+         };
+--- a/crates/gpui_macos/src/shaders.metal
++++ b/crates/gpui_macos/src/shaders.metal
+@@ -1325,7 +1325,7 @@
+ // textures have the viewport's size, so a pixel samples the same coordinates in either.
+ // params: [0] area drawn (x, y, w, h), [1] quad bounds (x, y, w, h), [2] corner radii (top left,
+ // top right, bottom right, bottom left), [3] (viewport w, viewport h, direction x, direction y),
+-// [4] (sigma, 1 on the pass onto the drawable, fade, unused), [5] the visible quad (quad bounds
++// [4] (sigma, 1 on the pass onto the drawable, fade, progressive), [5] the visible quad (quad bounds
+ // within its content mask and the viewport, x, y, w, h): every tap stays on whole pixels inside it,
+ // so nothing painted beside the quad (a neighbouring panel's video) bleeds into its edge.
+ struct BackdropBlurVertexOutput {
+@@ -1351,6 +1351,22 @@
+       : (center_to_point.y < 0.0 ? radii.y : radii.z);
+   float2 corner = fabs(center_to_point) - half_size + radius;
+   return length(max(corner, 0.0)) + min(max(corner.x, corner.y), 0.0) - radius;
++}
++
++// Riseonly 0114: progressive 1 (from the top) or -1 (from the bottom) scales sigma along the
++// quad's height: full over the first `fade` from that edge, then smoothstep down to none at the
++// opposite edge. Both passes take the sigma of the row they draw.
++float backdrop_blur_sigma(float y, float4 bounds, float4 settings) {
++  float sigma = settings.x;
++  float progressive = settings.w;
++  if (progressive == 0.0) {
++    return sigma;
++  }
++  float height = max(bounds.w, 1.0);
++  float from_edge = progressive > 0.0 ? y - bounds.y : bounds.y + bounds.w - y;
++  float hold = clamp(settings.z, 0.0, height - 1.0);
++  float t = saturate((from_edge - hold) / (height - hold));
++  return sigma * (1.0 - t * t * (3.0 - 2.0 * t));
+ }
+ 
+ fragment float4 backdrop_blur_fragment(
+@@ -1362,29 +1378,34 @@
+   float2 point = input.position.xy;
+   float2 texel = 1.0 / float2(source.get_width(), source.get_height());
+   float2 direction = params[3].zw;
+-  float sigma = params[4].x;
++  float sigma = backdrop_blur_sigma(point.y, params[1], params[4]);
+   const int taps = 24;
+   float step = sigma * 3.0 / float(taps);
+   float4 visible = params[5];
+   float2 lowest = ceil(visible.xy) + 0.5;
+   float2 highest = max(lowest, floor(visible.xy + visible.zw) - 0.5);
+-  float4 sum = float4(0.0);
+-  float weight_sum = 0.0;
+-  for (int i = -taps; i <= taps; i++) {
+-    float offset = float(i) * step;
+-    float weight = exp(-0.5 * offset * offset / (sigma * sigma));
+-    float2 tap = clamp(point + direction * offset, lowest, highest);
+-    sum += source.sample(source_sampler, tap * texel) * weight;
+-    weight_sum += weight;
++  float4 color;
++  if (sigma < 0.35) {
++    color = source.sample(source_sampler, clamp(point, lowest, highest) * texel);
++  } else {
++    float4 sum = float4(0.0);
++    float weight_sum = 0.0;
++    for (int i = -taps; i <= taps; i++) {
++      float offset = float(i) * step;
++      float weight = exp(-0.5 * offset * offset / (sigma * sigma));
++      float2 tap = clamp(point + direction * offset, lowest, highest);
++      sum += source.sample(source_sampler, tap * texel) * weight;
++      weight_sum += weight;
++    }
++    color = sum / weight_sum;
+   }
+-  float4 color = sum / weight_sum;
+   if (params[4].y < 0.5) {
+     return color;
+   }
+   float4 bounds = params[1];
+   float coverage = saturate(0.5 - backdrop_blur_shape(point, bounds, params[2]));
+   float fade = params[4].z;
+-  if (fade > 0.0) {
++  if (fade > 0.0 && params[4].w == 0.0) {
+     float t = saturate((point.y - (bounds.y + bounds.w - fade)) / fade);
+     coverage *= 1.0 - t * t * (3.0 - 2.0 * t);
+   }

@@ -1,0 +1,21 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3640,12 +3640,18 @@
+                 .cloned(),
+         );
+         let hidden = self.hidden_depth > 0;
++        // Riseonly 0058: a replayed hitbox takes the layer of the pass replaying it. A range holds
++        // only hitboxes of one pass (deferred draws prepaint in their own ranges), so the layer it
++        // was recorded on is stale once a cached view first drawn in an overlay replays in the
++        // root pass: it would stay above every root hitbox and swallow the mouse there.
++        let layer = self.hitbox_layer;
+         self.next_frame.hitboxes.extend(
+             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
+                 .iter()
+                 .cloned()
+                 .map(|mut hitbox| {
+                     hitbox.hidden = hidden;
++                    hitbox.layer = layer;
+                     hitbox
+                 }),
+         );

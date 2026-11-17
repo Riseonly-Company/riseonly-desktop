@@ -1,0 +1,78 @@
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -2666,6 +2666,10 @@
+             .as_ref()
+             .map(|handle| handle.is_focused(window))
+             .unwrap_or(false);
++        // Riseonly 0047: a press or release changes the pending click and the active state of
++        // this element only, so the view that painted it renders again; a window refresh rendered
++        // every cached view of the window on each click.
++        let click_view = window.current_view();
+ 
+         // If this element can be focused, register a mouse down listener
+         // that will automatically transfer focus when hitting the element.
+@@ -2849,13 +2853,13 @@
+                     let pending_mouse_down = pending_mouse_down.clone();
+                     let hitbox = hitbox.clone();
+                     let has_aux_click_listeners = !aux_click_listeners.is_empty();
+-                    move |event: &MouseDownEvent, phase, window, _cx| {
++                    move |event: &MouseDownEvent, phase, window, cx| {
+                         if phase == DispatchPhase::Bubble
+                             && (event.button == MouseButton::Left || has_aux_click_listeners)
+                             && hitbox.is_hovered(window)
+                         {
+                             *pending_mouse_down.borrow_mut() = Some(event.clone());
+-                            window.refresh();
++                            cx.notify(click_view);
+                         }
+                     }
+                 });
+@@ -2983,7 +2987,7 @@
+                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                 captured_mouse_down = pending_mouse_down.take();
+-                                window.refresh();
++                                cx.notify(click_view);
+                             } else if pending_mouse_down.is_some() {
+                                 // Clear the pending mouse down event (without firing click handlers)
+                                 // if the hitbox is not being hovered.
+@@ -2991,7 +2995,7 @@
+                                 // immediately after being clicked.
+                                 // See https://github.com/zed-industries/zed/issues/24600 for more details
+                                 pending_mouse_down.take();
+-                                window.refresh();
++                                cx.notify(click_view);
+                             }
+                         }
+                         // Fire click handlers during the bubble phase.
+@@ -3113,10 +3117,10 @@
+ 
+             {
+                 let active_state = active_state.clone();
+-                window.on_mouse_event(move |_: &MouseUpEvent, phase, window, _cx| {
++                window.on_mouse_event(move |_: &MouseUpEvent, phase, _window, cx| {
+                     if phase == DispatchPhase::Capture && active_state.borrow().is_clicked() {
+                         *active_state.borrow_mut() = ElementClickedState::default();
+-                        window.refresh();
++                        cx.notify(click_view);
+                     }
+                 });
+             }
+@@ -3127,7 +3131,7 @@
+                     .as_ref()
+                     .and_then(|group_active| GroupHitboxes::get(&group_active.group, cx));
+                 let hitbox = hitbox.clone();
+-                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _cx| {
++                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
+                     if phase == DispatchPhase::Bubble && !window.default_prevented() {
+                         let group_hovered = active_group_hitbox
+                             .is_some_and(|group_hitbox_id| group_hitbox_id.is_hovered(window));
+@@ -3137,7 +3141,7 @@
+                                 group: group_hovered,
+                                 element: element_hovered,
+                             };
+-                            window.refresh();
++                            cx.notify(click_view);
+                         }
+                     }
+                 });

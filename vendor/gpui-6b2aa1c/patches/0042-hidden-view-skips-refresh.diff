@@ -1,0 +1,19 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -538,12 +538,14 @@
+                             // waits for the frame that shows it instead of rendering and laying
+                             // out every frame a store it read notifies (the feed under Settings).
+                             && (window.hidden_depth > 0 || !window.dirty_views.contains(&entity_id))
+-                            && !window.refreshing
++                            // Riseonly 0042: a window refresh does not render a hidden view either;
++                            // it waits, stale, for the frame that shows it (the feed under Settings).
++                            && (window.hidden_depth > 0 || !window.refreshing)
+                             && element_state.prepainted_frame + 1 == window.draw_count
+                             && element_state.can_replay(window)
+                         {
+                             if window.hidden_depth > 0 {
+-                                if window.dirty_views.contains(&entity_id) {
++                                if window.dirty_views.contains(&entity_id) || window.refreshing {
+                                     element_state.stale_while_hidden = true;
+                                 }
+                                 // Riseonly 0034: the paint of the frame just drawn is skipped from

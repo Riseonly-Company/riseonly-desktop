@@ -1,0 +1,111 @@
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -2684,6 +2684,8 @@
+         // Riseonly 0048: the call site of every notify goes to the frame trace, so an idle window
+         // that keeps drawing names the code that dirties it.
+         crate::profiler::note_dirty_source(std::panic::Location::caller());
++        // Riseonly 0103: the last notify site per entity, so a root splice refusal names it.
++        crate::profiler::note_notify_site(entity_id, std::panic::Location::caller());
+         let window_invalidators = mem::take(
+             self.window_invalidators_by_entity
+                 .entry(entity_id)
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3606,6 +3606,7 @@
+         self.dirty_views.clear();
+         self.direct_dirty.clear();
+         self.root_dirty = false;
++        profiler::clear_root_dirty();
+         self.next_frame.window_active = self.active.get();
+ 
+         // Register requested input handler with the platform window.
+@@ -3743,6 +3744,11 @@
+         for entity in views.drain() {
+             // Riseonly 0088: the root reads it, so only a full draw shows it.
+             if self.root_own.contains(&entity) {
++                // why: Riseonly 0103, the splice column names the first root read entity
++                // and its notify site ("root:<type>@file:line") instead of a bare "root".
++                if !self.root_dirty {
++                    profiler::note_root_dirty(entity);
++                }
+                 self.root_dirty = true;
+             }
+             self.mark_view_dirty(entity);
+@@ -3974,7 +3980,7 @@
+         let refusal = if self.refreshing {
+             "refresh"
+         } else if self.root_dirty {
+-            "root"
++            profiler::root_dirty_reason().unwrap_or("root")
+         } else if self.direct_dirty.is_empty() {
+             "no_notify"
+         } else if !self.rendered_frame.spliceable {
+--- a/crates/gpui/src/profiler.rs
++++ b/crates/gpui/src/profiler.rs
+@@ -825,8 +825,66 @@
+         .as_ref()
+         .and_then(|types| types.get(&view_id).copied())
+         .unwrap_or("?")
++}
++
++static NOTIFY_SITES: spin::Mutex<Option<HashMap<EntityId, &'static std::panic::Location<'static>>>> =
++    spin::Mutex::new(None);
++
++static ROOT_REASONS: spin::Mutex<Option<HashMap<(&'static str, &'static std::panic::Location<'static>), &'static str>>> =
++    spin::Mutex::new(None);
++
++thread_local! {
++    static ROOT_DIRTY_REASON: Cell<Option<&'static str>> = const { Cell::new(None) };
++}
++
++/// Riseonly 0103: remembers where an entity was last notified (a relay counts under its
++/// origin, 0051). No-op unless frame tracing is enabled.
++pub(crate) fn note_notify_site(entity: EntityId, location: &'static std::panic::Location<'static>) {
++    if !frame_trace_enabled() {
++        return;
++    }
++    std::hint::cold_path();
++    let location = DIRTY_ORIGIN.with(|origin| origin.get()).unwrap_or(location);
++    NOTIFY_SITES
++        .lock()
++        .get_or_insert_with(HashMap::default)
++        .insert(entity, location);
++}
++
++/// Riseonly 0103: the root read `entity` was notified; the frame's splice refusal becomes
++/// `root:<view type or store>@file:line`. No-op unless frame tracing is enabled.
++pub(crate) fn note_root_dirty(entity: EntityId) {
++    if !frame_trace_enabled() {
++        return;
++    }
++    let type_name = match view_type_name(entity) {
++        "?" => "store",
++        name => name.rsplit("::").next().unwrap_or(name),
++    };
++    let Some(location) = NOTIFY_SITES.lock().as_ref().and_then(|sites| sites.get(&entity).copied()) else {
++        ROOT_DIRTY_REASON.with(|reason| reason.set(Some(detailed_reason("root", type_name))));
++        return;
++    };
++    let mut reasons = ROOT_REASONS.lock();
++    let reason = *reasons
++        .get_or_insert_with(HashMap::default)
++        .entry((type_name, location))
++        .or_insert_with(|| {
++            &*Box::leak(format!("root:{type_name}@{}:{}", location.file(), location.line()).into_boxed_str())
++        });
++    ROOT_DIRTY_REASON.with(|cell| cell.set(Some(reason)));
+ }
+ 
++/// Riseonly 0103: the named root refusal of the frame being drawn, if any.
++pub(crate) fn root_dirty_reason() -> Option<&'static str> {
++    ROOT_DIRTY_REASON.with(|reason| reason.get())
++}
++
++/// Riseonly 0103: a drawn frame starts with no root refusal.
++pub(crate) fn clear_root_dirty() {
++    ROOT_DIRTY_REASON.with(|reason| reason.set(None));
++}
++
+ /// Riseonly 0081: counts a line the platform text system shaped on this thread's frame.
+ /// No-op unless frame tracing is enabled.
+ pub(crate) fn note_text_shaped(elapsed: Duration) {

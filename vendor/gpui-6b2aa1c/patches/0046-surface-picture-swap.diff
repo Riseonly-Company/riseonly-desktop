@@ -1,0 +1,162 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -174,6 +174,29 @@
+         }
+     }
+ 
++    /// Gives every surface painted with `swap_key` a new picture in place (Riseonly 0046): a video
++    /// frame reaches the screen with a present of this scene, without a render, layout or paint of
++    /// the views around it. The copies kept for replay take it too. False when no surface of the
++    /// scene carries the key (its element left the scene or was clipped away).
++    pub fn swap_surface(&mut self, swap_key: u64, mut update: impl FnMut(&mut PaintSurface)) -> bool {
++        if swap_key == 0 {
++            return false;
++        }
++        let mut found = false;
++        for surface in self.surfaces.iter_mut().filter(|surface| surface.swap_key == swap_key) {
++            update(surface);
++            found = true;
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(Primitive::Surface(surface)) = operation
++                && surface.swap_key == swap_key
++            {
++                update(surface);
++            }
++        }
++        found
++    }
++
+     pub fn finish(&mut self) {
+         self.shadows.sort_by_key(|shadow| shadow.order);
+         self.quads.sort_by_key(|quad| quad.order);
+@@ -919,6 +942,8 @@
+     /// The decoded frame, off macOS: renderers that own their textures upload and draw it.
+     #[cfg(not(target_os = "macos"))]
+     pub frame: OwnedSurfaceFrame,
++    /// Names the surface for [`Scene::swap_surface`] (Riseonly 0046); zero names nothing.
++    pub swap_key: u64,
+ }
+ 
+ /// The YCbCr to RGB conversion the surface shader applies when a frame names none: full-range
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5157,6 +5157,13 @@
+     /// This method should only be called as part of the paint phase of element drawing.
+     #[cfg(target_os = "macos")]
+     pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer) {
++        self.paint_swappable_surface(bounds, image_buffer, 0);
++    }
++
++    /// [`Self::paint_surface`] whose picture [`Self::swap_surface`] can replace until the next
++    /// draw (Riseonly 0046); `swap_key` zero names nothing.
++    #[cfg(target_os = "macos")]
++    pub fn paint_swappable_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer, swap_key: u64) {
+         use crate::PaintSurface;
+ 
+         self.invalidator.debug_assert_paint();
+@@ -5171,6 +5178,7 @@
+             corner_clip_bounds,
+             corner_radii,
+             image_buffer,
++            swap_key,
+         });
+     }
+ 
+@@ -5180,6 +5188,18 @@
+     /// This method should only be called as part of the paint phase of element drawing.
+     #[cfg(not(target_os = "macos"))]
+     pub fn paint_owned_surface(&mut self, bounds: Bounds<Pixels>, frame: crate::OwnedSurfaceFrame) {
++        self.paint_swappable_owned_surface(bounds, frame, 0);
++    }
++
++    /// [`Self::paint_owned_surface`] whose frame [`Self::swap_surface`] can replace until the next
++    /// draw (Riseonly 0046); `swap_key` zero names nothing.
++    #[cfg(not(target_os = "macos"))]
++    pub fn paint_swappable_owned_surface(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        frame: crate::OwnedSurfaceFrame,
++        swap_key: u64,
++    ) {
+         use crate::PaintSurface;
+ 
+         self.invalidator.debug_assert_paint();
+@@ -5194,7 +5214,27 @@
+             corner_clip_bounds,
+             corner_radii,
+             frame,
++            swap_key,
++        });
++    }
++
++    /// Puts a new picture into every surface of the frame on screen painted with `swap_key`
++    /// (Riseonly 0046) and asks for a present of that frame: a playing video shows its next picture
++    /// without rendering, laying out or painting any view. Call it outside a draw, from an
++    /// [`Self::on_next_frame`] callback. False when the frame on screen holds no surface with the
++    /// key (hidden, clipped away or gone): the caller stops swapping and the next render of its
++    /// element paints the picture again.
++    pub fn swap_surface(&mut self, swap_key: u64, source: crate::SurfaceSource) -> bool {
++        let found = self.rendered_frame.scene.swap_surface(swap_key, |surface| match &source {
++            #[cfg(target_os = "macos")]
++            crate::SurfaceSource::Surface(buffer) => surface.image_buffer = buffer.clone(),
++            #[cfg(not(target_os = "macos"))]
++            crate::SurfaceSource::Owned(frame) => surface.frame = frame.clone(),
+         });
++        if found {
++            self.needs_present.set(true);
++        }
++        found
+     }
+ 
+     /// Removes an image from the sprite atlas.
+--- a/crates/gpui/src/elements/surface.rs
++++ b/crates/gpui/src/elements/surface.rs
+@@ -35,6 +35,7 @@
+ pub struct Surface {
+     source: SurfaceSource,
+     object_fit: ObjectFit,
++    swap_key: u64,
+     style: StyleRefinement,
+ }
+ 
+@@ -43,6 +44,7 @@
+     Surface {
+         source: source.into(),
+         object_fit: ObjectFit::Contain,
++        swap_key: 0,
+         style: Default::default(),
+     }
+ }
+@@ -53,6 +55,13 @@
+         self.object_fit = object_fit;
+         self
+     }
++
++    /// Names the painted surface for [`Window::swap_surface`] (Riseonly 0046): until the next draw
++    /// a newer picture of the same stream replaces it in place, drawn with the same bounds.
++    pub fn swap_key(mut self, swap_key: u64) -> Self {
++        self.swap_key = swap_key;
++        self
++    }
+ }
+ 
+ impl Element for Surface {
+@@ -107,7 +116,7 @@
+                 let size = crate::size(surface.get_width().into(), surface.get_height().into());
+                 let new_bounds = self.object_fit.get_bounds(bounds, size);
+                 // TODO: Add support for corner_radii
+-                window.paint_surface(new_bounds, surface.clone());
++                window.paint_swappable_surface(new_bounds, surface.clone(), self.swap_key);
+             }
+             #[cfg(not(target_os = "macos"))]
+             SurfaceSource::Owned(frame) => {
+@@ -116,7 +125,7 @@
+                     crate::px(frame.height() as f32),
+                 );
+                 let new_bounds = self.object_fit.get_bounds(bounds, size);
+-                window.paint_owned_surface(new_bounds, frame.clone());
++                window.paint_swappable_owned_surface(new_bounds, frame.clone(), self.swap_key);
+             }
+             #[allow(unreachable_patterns)]
+             _ => {}

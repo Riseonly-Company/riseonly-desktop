@@ -1,0 +1,41 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -398,6 +398,28 @@
+         }
+     }
+ 
++    /// Riseonly 0054: the mask around the view moved (a reveal growing its clip, a sheet edge) but
++    /// cut nothing the view drew or hit-tests in the frame just drawn, neither under the mask it
++    /// rendered with nor under the new one. The replay then draws the same pixels and the recorded
++    /// clips stay valid, so the clip alone does not render the view. The key keeps the mask the
++    /// view rendered under, which its recorded primitives carry.
++    fn mask_change_clear(&self, content_mask: &ContentMask<Pixels>, window: &Window) -> bool {
++        self.painted_frame + 1 == window.draw_count
++            && self.prepainted_frame + 1 == window.draw_count
++            && window.ranges_clear_of_mask(
++                &self.prepaint_range,
++                &self.paint_range,
++                self.cache_key.content_mask.bounds,
++                Point::default(),
++            )
++            && window.ranges_clear_of_mask(
++                &self.prepaint_range,
++                &self.paint_range,
++                content_mask.bounds,
++                Point::default(),
++            )
++    }
++
+     /// Whether the recorded prepaint may replay in this frame (Riseonly 0034). Under a hidden div it
+     /// may unless it carries deferred draws, which would paint over what is shown. Shown, the paint
+     /// that follows must replay too: from the frame just before or from a valid parked paint;
+@@ -593,7 +615,8 @@
+                         if let Some(mut element_state) = element_state
+                             && (window.hidden_depth > 0
+                                 || (element_state.cache_key.bounds == bounds
+-                                    && element_state.cache_key.content_mask == content_mask
++                                    && (element_state.cache_key.content_mask == content_mask
++                                        || element_state.mask_change_clear(&content_mask, window))
+                                     && element_state.cache_key.text_style == text_style
+                                     && element_state.cache_key.env_fingerprint == env_fingerprint))
+                             // Riseonly 0039: a dirty view under a hidden div paints nothing, so it

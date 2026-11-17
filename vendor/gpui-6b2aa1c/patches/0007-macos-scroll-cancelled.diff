@@ -1,0 +1,13 @@
+diff -ruN a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
+--- a/crates/gpui_macos/src/events.rs	2026-11-04 16:40:27
++++ b/crates/gpui_macos/src/events.rs	2026-11-04 16:40:27
+@@ -261,6 +261,9 @@
+                         TouchPhase::Started
+                     }
+                     NSEventPhase::NSEventPhaseEnded => TouchPhase::Ended,
++                    // Fingers that rested on the trackpad (MayBegin) and lifted without
++                    // scrolling end with Cancelled; as Moved the gesture never closed.
++                    NSEventPhase::NSEventPhaseCancelled => TouchPhase::Cancelled,
+                     _ => TouchPhase::Moved,
+                 };
+ 

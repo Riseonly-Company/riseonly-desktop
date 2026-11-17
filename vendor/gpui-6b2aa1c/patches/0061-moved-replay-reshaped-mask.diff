@@ -1,0 +1,21 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -387,9 +387,17 @@
+             && new_mask.size == old_mask.size;
+         // The mask stayed (the scroll viewport) and cut nothing of the view before or after.
+         let mask_stays_clear = key.content_mask == *content_mask
++            && window.ranges_clear_of_mask(&self.prepaint_range, &self.paint_range, new_mask, offset);
++        // Riseonly 0061: the mask changed shape (a page sliding into a clipped column: its own clip
++        // moves along, the column's stays, so their intersection grows each frame) but cut nothing of
++        // the view before nor cuts it after. The replay moves the recorded clips with the view, and
++        // they still cut nothing, so the pixels and the hit test are the ones a render would give.
++        let mask_reshaped_clear = !mask_moved_along
++            && key.content_mask != *content_mask
++            && window.ranges_clear_of_mask(&self.prepaint_range, &self.paint_range, old_mask, Point::default())
+             && window.ranges_clear_of_mask(&self.prepaint_range, &self.paint_range, new_mask, offset);
+         // Riseonly 0043: the second offset is how far the mask moved, for the callbacks that read it.
+-        if mask_moved_along {
++        if mask_moved_along || mask_reshaped_clear {
+             Some((offset, offset))
+         } else if mask_stays_clear {
+             Some((offset, Point::default()))

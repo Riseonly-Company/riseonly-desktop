@@ -1,0 +1,42 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -305,13 +305,38 @@
+ 
+ /// Riseonly 0077: a cached view laid out wholly outside the clip it rendered under (its primitives
+ /// were dropped by the scene, not recorded) that the new clip reaches. Its replay would draw nothing.
++/// Riseonly 0089: also a view the clip cut in part, when the new clip shows a part of it (taken
++/// from its own origin) the old clip hid. The scene dropped every primitive cut away whole, so the
++/// hidden part recorded nothing, and a view whose shown strip held only padding recorded nothing at
++/// all: every range check passed on nothing and the replay stayed blank (a report queue row built
++/// with its top padding peeking above the viewport bottom, X1876).
+ fn culled_then_revealed(
+     old_bounds: Bounds<Pixels>,
+     old_mask: Bounds<Pixels>,
+     new_bounds: Bounds<Pixels>,
+     new_mask: Bounds<Pixels>,
+ ) -> bool {
+-    !old_bounds.is_empty() && !old_bounds.intersects(&old_mask) && new_bounds.intersects(&new_mask)
++    if old_bounds.is_empty() || !new_bounds.intersects(&new_mask) {
++        return false;
++    }
++    if !old_bounds.intersects(&old_mask) {
++        return true;
++    }
++    let old_shown = old_bounds.intersect(&old_mask);
++    let new_shown = new_bounds.intersect(&new_mask);
++    let old_left = f32::from(old_shown.left() - old_bounds.left());
++    let old_top = f32::from(old_shown.top() - old_bounds.top());
++    let old_right = f32::from(old_shown.right() - old_bounds.left());
++    let old_bottom = f32::from(old_shown.bottom() - old_bounds.top());
++    let new_left = f32::from(new_shown.left() - new_bounds.left());
++    let new_top = f32::from(new_shown.top() - new_bounds.top());
++    let new_right = f32::from(new_shown.right() - new_bounds.left());
++    let new_bottom = f32::from(new_shown.bottom() - new_bounds.top());
++    let slack = 0.001;
++    new_left < old_left - slack
++        || new_top < old_top - slack
++        || new_right > old_right + slack
++        || new_bottom > old_bottom + slack
+ }
+ 
+ impl<V: View> IntoElement for ViewElement<V> {

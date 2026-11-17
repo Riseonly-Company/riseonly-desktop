@@ -1,0 +1,192 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -15,6 +15,17 @@
+     slice,
+ };
+ 
++/// The two top bits of a glyph swap key whose glyphs may slide inside their clip (Riseonly 0079):
++/// glyphs painted under such a key stay in the scene while their clip hides them, so
++/// [`Scene::shift_glyphs`] can bring them in. The other glyph key families keep these bits apart
++/// (0056 badge keys set bit 31 only, 0078 clock keys bit 30 only).
++pub const GLYPH_SHIFT_KEY_BITS: u32 = 0b11 << 30;
++
++/// Whether `pad` is a glyph swap key whose glyphs may slide (Riseonly 0079).
++pub fn is_glyph_shift_key(pad: u32) -> bool {
++    pad & GLYPH_SHIFT_KEY_BITS == GLYPH_SHIFT_KEY_BITS
++}
++
+ #[allow(non_camel_case_types, unused)]
+ #[expect(missing_docs)]
+ pub type PathVertex_ScaledPixels = PathVertex<ScaledPixels>;
+@@ -86,12 +97,23 @@
+ 
+     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
+         let mut primitive = primitive.into();
+-        let clipped_bounds = primitive
++        let mut clipped_bounds = primitive
+             .painted_bounds()
+             .intersect(&primitive.content_mask().bounds);
+ 
+         if clipped_bounds.is_empty() {
+-            return;
++            // A sliding glyph hidden by its clip now may slide into it later (0079): it is kept and
++            // ordered by its clip, the place it can show up in.
++            let slides = match &primitive {
++                Primitive::MonochromeSprite(sprite) => is_glyph_shift_key(sprite.pad),
++                Primitive::SubpixelSprite(sprite) => is_glyph_shift_key(sprite.pad),
++                Primitive::PolychromeSprite(sprite) => is_glyph_shift_key(sprite.pad),
++                _ => false,
++            };
++            if !slides || primitive.content_mask().bounds.is_empty() {
++                return;
++            }
++            clipped_bounds = primitive.content_mask().bounds;
+         }
+ 
+         let order = self
+@@ -399,6 +421,64 @@
+         true
+     }
+ 
++    /// Moves every glyph painted under the sliding key `key` (see [`GLYPH_SHIFT_KEY_BITS`]) by
++    /// `dx` inside its clip, in the frame on screen and in the copies kept for replay (Riseonly
++    /// 0079): a marquee title slides with a present. None, with nothing changed, when no glyph
++    /// carries the key; otherwise whether any glyph of the key shows inside its clip before or
++    /// after the move (the frame needs a present).
++    pub fn shift_glyphs(&mut self, key: u32, dx: ScaledPixels) -> Option<bool> {
++        if !is_glyph_shift_key(key) {
++            return None;
++        }
++        let carries = self.monochrome_sprites.iter().any(|sprite| sprite.pad == key)
++            || self.subpixel_sprites.iter().any(|sprite| sprite.pad == key)
++            || self.polychrome_sprites.iter().any(|sprite| sprite.pad == key);
++        if !carries {
++            return None;
++        }
++        let offset = point(dx, ScaledPixels(0.0));
++        let mut shows = false;
++        let mut slide = |primitive: Primitive| -> Primitive {
++            let showing = |primitive: &Primitive| {
++                !primitive.painted_bounds().intersect(&primitive.content_mask().bounds).is_empty()
++            };
++            shows |= showing(&primitive);
++            let mut primitive = primitive;
++            primitive.slide_in_clip(offset);
++            shows |= showing(&primitive);
++            primitive
++        };
++        for sprite in self.monochrome_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            if let Primitive::MonochromeSprite(moved) = slide(Primitive::MonochromeSprite(*sprite)) {
++                *sprite = moved;
++            }
++        }
++        for sprite in self.subpixel_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            if let Primitive::SubpixelSprite(moved) = slide(Primitive::SubpixelSprite(*sprite)) {
++                *sprite = moved;
++            }
++        }
++        for sprite in self.polychrome_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            if let Primitive::PolychromeSprite(moved) = slide(Primitive::PolychromeSprite(*sprite)) {
++                *sprite = moved;
++            }
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(primitive) = operation {
++                let carries_key = match primitive {
++                    Primitive::MonochromeSprite(sprite) => sprite.pad == key,
++                    Primitive::SubpixelSprite(sprite) => sprite.pad == key,
++                    Primitive::PolychromeSprite(sprite) => sprite.pad == key,
++                    _ => false,
++                };
++                if carries_key {
++                    primitive.slide_in_clip(offset);
++                }
++            }
++        }
++        Some(shows)
++    }
++
+     /// Moves every image sprite carrying `key` in its pad from the atlas tile `previous` to the same
+     /// place in `next` (Riseonly 0057): an animated sticker or GIF shows its next frame with a
+     /// present, without a render, layout or paint of the views around it. A sprite showing a cut
+@@ -750,6 +830,25 @@
+         }
+     }
+ 
++    /// Moves a sprite by `offset` while its clip stays where it is (Riseonly 0079): a sliding
++    /// glyph moves under a fixed clip. Other primitives do not slide.
++    fn slide_in_clip(&mut self, offset: Point<ScaledPixels>) {
++        if !matches!(
++            self,
++            Primitive::MonochromeSprite(_) | Primitive::SubpixelSprite(_) | Primitive::PolychromeSprite(_)
++        ) {
++            return;
++        }
++        let mask = self.content_mask().clone();
++        self.translate(offset);
++        match self {
++            Primitive::MonochromeSprite(sprite) => sprite.content_mask = mask,
++            Primitive::SubpixelSprite(sprite) => sprite.content_mask = mask,
++            Primitive::PolychromeSprite(sprite) => sprite.content_mask = mask,
++            _ => {}
++        }
++    }
++
+     pub fn content_mask(&self) -> &ContentMask<ScaledPixels> {
+         match self {
+             Primitive::Shadow(shadow) => &shadow.content_mask,
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4488,6 +4488,24 @@
+             self.needs_present.set(true);
+         }
+         found
++    }
++
++    /// Moves the glyphs (emoji included) painted under the sliding key `key` (a glyph swap key
++    /// carrying [`crate::GLYPH_SHIFT_KEY_BITS`], given to [`Self::with_glyph_swap_key`]) by `dx`
++    /// inside their clip in the frame on screen, and presents when a nonzero move touches a glyph
++    /// that shows (Riseonly 0079): a marquee title slides without a render, layout or paint of the
++    /// views around it. Pass whole device pixels so every glyph keeps its rasterised subpixel
++    /// phase; a zero move only probes. None when the key left the frame; the caller then repaints
++    /// through its view. Some(false): clipped out before and after the move.
++    pub fn shift_glyphs(&mut self, key: u32, dx: Pixels) -> Option<bool> {
++        let shows = self
++            .rendered_frame
++            .scene
++            .shift_glyphs(key, dx.scale(self.scale_factor()))?;
++        if shows && dx != Pixels::ZERO {
++            self.needs_present.set(true);
++        }
++        Some(shows)
+     }
+ 
+     /// Marks every image `f` paints with `key` (Riseonly 0057), so [`Self::swap_image`] can give
+@@ -5560,9 +5578,11 @@
+             let opacity = self.element_opacity();
+             let transformation = self.transformation();
+ 
++            // An emoji of a sliding title slides with its glyphs (0079).
++            let pad = if crate::is_glyph_shift_key(self.glyph_swap_key) { self.glyph_swap_key } else { 0 };
+             self.next_frame.scene.insert_primitive(PolychromeSprite {
+                 order: 0,
+-                pad: 0,
++                pad,
+                 grayscale: false.into(),
+                 bounds,
+                 corner_radii: Default::default(),
+--- a/crates/gpui/src/text_system/line.rs
++++ b/crates/gpui/src/text_system/line.rs
+@@ -524,9 +524,11 @@
+                 // Under a transformation the glyph lands away from its layout box, so the
+                 // untransformed cull dropped glyphs a scaled row still shows; the scene culls
+                 // the transformed sprite bounds instead.
++                // A sliding title keeps its clipped glyphs too (0079): they slide into the clip later.
+                 let content_mask = window.content_mask();
+                 let transformed = window.transformation() != crate::TransformationMatrix::unit();
+-                if transformed || max_glyph_bounds.intersects(&content_mask.bounds) {
++                let slides = crate::is_glyph_shift_key(window.glyph_swap_key);
++                if transformed || slides || max_glyph_bounds.intersects(&content_mask.bounds) {
+                     let vertical_offset = point(px(0.0), glyph.position.y);
+                     if glyph.is_emoji {
+                         window.paint_emoji(

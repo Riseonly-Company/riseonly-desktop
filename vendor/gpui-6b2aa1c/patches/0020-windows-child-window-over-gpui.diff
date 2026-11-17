@@ -1,0 +1,28 @@
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -1228,7 +1228,10 @@
+ impl DirectComposition {
+     pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
+         let comp_device = get_comp_device(dxgi_device)?;
+-        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, true) }?;
++        // A native child window (WebView2) floats over the element it covers, as a subview does
++        // on macOS: the visual tree stays behind the children of the window.
++        // https://learn.microsoft.com/en-us/windows/win32/api/dcomp/nf-dcomp-idcompositiondesktopdevice-createtargetforhwnd
++        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, false) }?;
+         let comp_visual = unsafe { comp_device.CreateVisual() }?;
+ 
+         Ok(Self {
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -491,6 +491,11 @@
+         lparam: LPARAM,
+     ) -> Option<isize> {
+         unsafe { SetCapture(handle) };
++        // A click on the window itself takes the keyboard back from a focused child window: the
++        // window is already active, so nothing else moves the focus.
++        if unsafe { GetFocus() } != handle {
++            unsafe { SetFocus(Some(handle)) }.ok();
++        }
+ 
+         let Some(mut func) = self.state.callbacks.input.take() else {
+             return Some(1);

@@ -1,0 +1,46 @@
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -33,6 +33,25 @@
+ pub use headless_app_context::*;
+ use http_client::{HttpClient, Url};
+ use smallvec::SmallVec;
++
++thread_local! {
++    /// Entities the cached view rendering now reads but hears through events only (Riseonly 0075).
++    static EVENT_ONLY_READS: RefCell<SmallVec<[EntityId; 2]>> = RefCell::new(SmallVec::new());
++}
++
++/// Riseonly 0075: the cached view rendering now reads `entity` but hears it through its own
++/// subscription (filtered events), so a notify of `entity` must not make the view or its ancestors
++/// dirty. Call it from the render that reads; the mark lasts for that render, layout and prepaint.
++/// Nested cached views keep tracking the entity as before. Outside a cached view render it is a no-op
++/// for that frame.
++pub fn hear_entity_through_events_only(entity: EntityId) {
++    EVENT_ONLY_READS.with(|reads| {
++        let mut reads = reads.borrow_mut();
++        if !reads.contains(&entity) {
++            reads.push(entity);
++        }
++    });
++}
+ #[cfg(any(test, feature = "test-support"))]
+ pub use test_app::*;
+ #[cfg(any(test, feature = "test-support"))]
+@@ -1089,9 +1108,16 @@
+         // Every entity the callback reads, also one an earlier element of the frame read first:
+         // a cached view must hear each store it depends on (Riseonly 0029).
+         let outer = mem::take(self.entities.accessed_entities.get_mut());
++        let outer_event_only = EVENT_ONLY_READS.with(|reads| mem::take(&mut *reads.borrow_mut()));
+         let result = callback(self);
+-        let entities_accessed_in_callback =
++        let mut entities_accessed_in_callback =
+             mem::replace(self.entities.accessed_entities.get_mut(), outer);
++        // Riseonly 0075: the view hears these entities through its own subscription, so neither it
++        // nor the views around it go dirty on their notify.
++        let event_only = EVENT_ONLY_READS.with(|reads| mem::replace(&mut *reads.borrow_mut(), outer_event_only));
++        for entity_id in event_only {
++            entities_accessed_in_callback.remove(&entity_id);
++        }
+         self.entities.extend_accessed(&entities_accessed_in_callback);
+         (result, entities_accessed_in_callback)
+     }

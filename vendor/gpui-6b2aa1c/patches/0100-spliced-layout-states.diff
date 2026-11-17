@@ -1,0 +1,20 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4122,6 +4122,17 @@
+         // copied with the spans replay whole or are spliced the same way, the ones a fresh hole
+         // registered draw fresh, over the frame as the root pass does.
+         self.hitbox_layer = 0;
++        // Riseonly 0100: the root layout is not run again, so the states it read before the root
++        // prepaint (keyed states, change slots and every other state of the views rendered outside
++        // a cached one) stay as they are; unlisted, the frame swap dropped them and the next root
++        // render built all of them anew (X2004: appear and change handlers notified, the root
++        // rendered again and the next splice dropped them again, 150 frames a second at idle).
++        let layout_states = self.rendered_frame.prepaint_start.accessed_element_states_index;
++        self.next_frame.accessed_element_states.extend(
++            self.rendered_frame.accessed_element_states[..layout_states]
++                .iter()
++                .map(|(id, type_id)| (id.clone(), *type_id)),
++        );
+         self.next_frame.prepaint_start = self.prepaint_index();
+         let root_prepaint = self.rendered_frame.prepaint_start.clone()..self.rendered_frame.prepaint_end.clone();
+         self.splice_prepaint_pass(HolePass::Root, root_prepaint, None, &mut splice, cx);

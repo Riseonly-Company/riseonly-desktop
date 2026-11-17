@@ -1,0 +1,49 @@
+--- a/crates/gpui/src/view.rs	2026-11-16 00:31:58
++++ b/crates/gpui/src/view.rs	2026-11-16 00:31:58
+@@ -749,9 +749,6 @@
+         && near(new_mask.bounds.origin.y, old_mask.bounds.origin.y + offset.y)
+         && new_mask.bounds.size == old_mask.bounds.size;
+     let mask_stayed = new_mask == old_mask;
+-    if !mask_moved_along && !mask_stayed {
+-        return;
+-    }
+     window.update_replayed_states(replayed, view_element_state_type_id(), |state, window| {
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+             return;
+@@ -765,17 +762,28 @@
+         {
+             return;
+         }
++        let moved_own_mask = ContentMask {
++            bounds: Bounds {
++                origin: state.cache_key.content_mask.bounds.origin + offset,
++                size: state.cache_key.content_mask.bounds.size,
++            },
++        };
+         let content_mask = if mask_moved_along {
+-            ContentMask {
+-                bounds: Bounds {
+-                    origin: state.cache_key.content_mask.bounds.origin + offset,
+-                    size: state.cache_key.content_mask.bounds.size,
+-                },
+-            }
+-        } else if state.cache_key.content_mask == *old_mask {
++            moved_own_mask
++        } else if mask_stayed && state.cache_key.content_mask == *old_mask {
+             new_mask.clone()
+-        } else if let Some(bounds) = clip_moved_inside(&state.cache_key.content_mask, old_mask, new_mask, offset) {
++        } else if let Some(bounds) = mask_stayed
++            .then(|| clip_moved_inside(&state.cache_key.content_mask, old_mask, new_mask, offset))
++            .flatten()
++        {
+             ContentMask { bounds }
++        } else if window.ranges_hidden_by_mask(&state.prepaint_range, &state.paint_range, new_mask.bounds, offset) {
++            // Riseonly 0106: shown nothing before and nothing after (a grid cell of a pager page
++            // off screen, under its own scroll clip): its mask moves along, as the 0067 replay of
++            // the view itself would take it. Left behind, every cell of the hidden Stories page
++            // was a frame behind (origin:gap) and rendered on the next render of its page, 30
++            // cells and 26-30 ms on a Comments/Reposts switch (X1370).
++            moved_own_mask
+         } else {
+             return;
+         };

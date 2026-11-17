@@ -1,0 +1,323 @@
+Riseonly patch on zed 6b2aa1c (Apache-2.0 crates gpui, gpui_windows), applied by scripts/vendor-gpui.py after 0007.
+A D3D11VA picture reaches the DirectX 11 renderer without a CPU copy (P149, P27 win step 2): on Windows
+OwnedSurfaceFrame::shared_nv12 carries a SharedSurfaceHandle (an NT handle of an NV12 texture the decoder's
+device shares with D3D11_RESOURCE_MISC_SHARED_NTHANDLE and a keyed mutex) and keeps the producer's texture
+alive with the frame. The renderer opens the handle once per shared texture with
+ID3D11Device1::OpenSharedResource1, views its planes as R8 (t2) and R8G8 (t3), and draws it with the NV12
+surface shader inside AcquireSync(0)/ReleaseSync(0). Other platforms are unchanged.
+
+--- a/crates/gpui/src/scene.rs	2026-11-04 16:01:56
++++ b/crates/gpui/src/scene.rs	2026-11-04 16:02:31
+@@ -798,6 +798,19 @@
+     Bgra,
+ }
+ 
++/// An NV12 picture already on the GPU, in a texture another D3D11 device shares by NT handle
++/// (IDXGIResource1::CreateSharedHandle, D3D11_RESOURCE_MISC_SHARED_NTHANDLE with a keyed mutex).
++/// The DirectX 11 renderer opens it with ID3D11Device1::OpenSharedResource1 instead of uploading
++/// planes, and takes key 0 of its IDXGIKeyedMutex around the draw.
++#[cfg(target_os = "windows")]
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct SharedSurfaceHandle {
++    /// The NT handle, valid while the frame that carries it lives.
++    pub handle: isize,
++    /// Stable for the life of the shared texture: the renderer caches what it opened by it.
++    pub key: u64,
++}
++
+ /// One decoded video frame in CPU memory, drawn by renderers that own their surface textures
+ /// (the wgpu and DirectX 11 renderers). The renderer keeps one texture set per `id` and uploads
+ /// only when `generation` changes, so a paused stream costs no upload.
+@@ -813,6 +826,12 @@
+     chroma: std::sync::Arc<[u8]>,
+     chroma_stride: u32,
+     ycbcr_to_rgb: [[f32; 4]; 4],
++    /// Set for a shared GPU picture: the handle and what keeps its texture and handle alive.
++    #[cfg(target_os = "windows")]
++    shared: Option<(
++        SharedSurfaceHandle,
++        std::sync::Arc<dyn std::any::Any + Send + Sync>,
++    )>,
+ }
+ 
+ #[cfg(not(target_os = "macos"))]
+@@ -845,6 +864,8 @@
+             chroma,
+             chroma_stride,
+             ycbcr_to_rgb: DEFAULT_YCBCR_TO_RGB,
++            #[cfg(target_os = "windows")]
++            shared: None,
+         };
+         frame.planes_fit().then_some(frame)
+     }
+@@ -874,10 +895,52 @@
+             chroma: std::sync::Arc::from([]),
+             chroma_stride: 0,
+             ycbcr_to_rgb: DEFAULT_YCBCR_TO_RGB,
++            #[cfg(target_os = "windows")]
++            shared: None,
+         };
+         frame.planes_fit().then_some(frame)
+     }
+ 
++    /// An NV12 picture of `width` x `height` (both even) in a shared D3D11 texture; `keep` owns
++    /// the texture and its handle and is dropped with the last clone of the frame, so the producer
++    /// does not reuse the texture while a scene still draws it. Returns `None` for an odd or empty
++    /// size or a null handle.
++    #[cfg(target_os = "windows")]
++    pub fn shared_nv12(
++        id: u64,
++        generation: u64,
++        width: u32,
++        height: u32,
++        handle: SharedSurfaceHandle,
++        keep: std::sync::Arc<dyn std::any::Any + Send + Sync>,
++    ) -> Option<Self> {
++        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 || handle.handle == 0 {
++            return None;
++        }
++        let size = crate::size(
++            crate::DevicePixels(i32::try_from(width).ok()?),
++            crate::DevicePixels(i32::try_from(height).ok()?),
++        );
++        Some(Self {
++            id,
++            generation,
++            size,
++            pixel_format: OwnedSurfacePixelFormat::Nv12,
++            luma: std::sync::Arc::from([]),
++            luma_stride: 0,
++            chroma: std::sync::Arc::from([]),
++            chroma_stride: 0,
++            ycbcr_to_rgb: DEFAULT_YCBCR_TO_RGB,
++            shared: Some((handle, keep)),
++        })
++    }
++
++    /// The shared texture of a GPU picture, `None` for a frame whose planes are in CPU memory.
++    #[cfg(target_os = "windows")]
++    pub fn shared_handle(&self) -> Option<SharedSurfaceHandle> {
++        self.shared.as_ref().map(|(handle, _)| *handle)
++    }
++
+     /// Replaces the conversion matrix (column-major, applied to (Y, Cb, Cr, 1)).
+     pub fn with_ycbcr_to_rgb(mut self, matrix: [[f32; 4]; 4]) -> Self {
+         self.ycbcr_to_rgb = matrix;
+--- a/crates/gpui_windows/src/directx_renderer.rs	2026-11-04 16:01:56
++++ b/crates/gpui_windows/src/directx_renderer.rs	2026-11-04 16:03:24
+@@ -7,7 +7,7 @@
+ use gpui_util::ResultExt;
+ use windows::{
+     Win32::{
+-        Foundation::HWND,
++        Foundation::{HANDLE, HWND},
+         Graphics::{
+             Direct3D::*,
+             Direct3D11::*,
+@@ -57,6 +57,12 @@
+     /// the current device, so a device loss clears them.
+     owned_surfaces: std::collections::HashMap<u64, OwnedSurfaceTextures>,
+ 
++    /// Shared GPU pictures opened on the current device, keyed by `SharedSurfaceHandle::key`;
++    /// a device loss clears them too.
++    shared_surfaces: std::collections::HashMap<u64, SharedSurfaceTexture>,
++    /// Counts prepared scenes, so a shared texture a stream stopped using is released.
++    shared_surface_epoch: u64,
++
+     /// Whether we want to skip drwaing due to device lost events.
+     ///
+     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
+@@ -123,7 +129,23 @@
+     /// Bound at t2 and t3; a BGRA stream leaves t3 empty.
+     views: [Option<ID3D11ShaderResourceView>; 2],
+ }
++
++/// A producer's NV12 texture opened on this device: its two planes are viewed as R8 (t2) and
++/// R8G8 (t3), so it draws with the NV12 surface shader and no upload.
++struct SharedSurfaceTexture {
++    stream: u64,
++    last_seen: u64,
++    mutex: IDXGIKeyedMutex,
++    views: [Option<ID3D11ShaderResourceView>; 2],
++}
++
++/// Scenes after which a shared texture its stream no longer shows is released (the producer
++/// cycles a few textures per stream, each opened once).
++const SHARED_SURFACE_IDLE_SCENES: u64 = 240;
+ 
++/// How long a draw waits for the producer to release a shared texture's keyed mutex, in ms.
++const SHARED_SURFACE_WAIT_MS: u32 = 4;
++
+ enum OwnedSurfacePlanes {
+     /// Luma (R8) and interleaved chroma (R8G8, half size).
+     Nv12 {
+@@ -244,6 +266,8 @@
+             width: 1,
+             height: 1,
+             owned_surfaces: std::collections::HashMap::new(),
++            shared_surfaces: std::collections::HashMap::new(),
++            shared_surface_epoch: 0,
+             skip_draws: false,
+         })
+     }
+@@ -324,6 +348,7 @@
+ 
+             self.resources.take();
+             self.owned_surfaces.clear();
++            self.shared_surfaces.clear();
+             if let Some(devices) = &self.devices {
+                 devices.device_context.OMSetRenderTargets(None, None);
+                 devices.device_context.ClearState();
+@@ -565,10 +590,30 @@
+         let devices = self.devices.as_ref().context("devices missing")?;
+         self.owned_surfaces
+             .retain(|id, _| scene.surfaces.iter().any(|surface| surface.frame.id() == *id));
++        self.shared_surface_epoch += 1;
++        let epoch = self.shared_surface_epoch;
++        self.shared_surfaces.retain(|_, texture| {
++            scene.surfaces.iter().any(|surface| surface.frame.id() == texture.stream)
++                && epoch - texture.last_seen < SHARED_SURFACE_IDLE_SCENES
++        });
+ 
+         for surface in &scene.surfaces {
+             let frame = &surface.frame;
+             let id = frame.id();
++            if let Some(shared) = frame.shared_handle() {
++                self.owned_surfaces.remove(&id);
++                if let Some(texture) = self.shared_surfaces.get_mut(&shared.key) {
++                    texture.last_seen = epoch;
++                    continue;
++                }
++                match SharedSurfaceTexture::open(&devices.device, id, shared, epoch) {
++                    Ok(texture) => {
++                        self.shared_surfaces.insert(shared.key, texture);
++                    }
++                    Err(error) => log::error!("opening shared surface {}: {error:#}", shared.key),
++                }
++                continue;
++            }
+             if frame.width() > MAX_SURFACE_TEXTURE_DIMENSION
+                 || frame.height() > MAX_SURFACE_TEXTURE_DIMENSION
+             {
+@@ -893,6 +938,49 @@
+             pipeline.label
+         );
+         for (offset, surface) in surfaces.iter().enumerate() {
++            if let Some(shared) = surface.frame.shared_handle() {
++                // A shared texture that could not be opened, or that the producer still holds,
++                // is skipped for this draw.
++                let Some(texture) = self.shared_surfaces.get(&shared.key) else {
++                    continue;
++                };
++                if !acquire_keyed_mutex(&texture.mutex, 0, SHARED_SURFACE_WAIT_MS) {
++                    log::debug!("shared surface {} is still being written", shared.key);
++                    continue;
++                }
++                let drawn = update_batch_start(
++                    &devices.device_context,
++                    batch_params_buffer,
++                    (start + offset) as u32,
++                )
++                .map(|()| {
++                    set_pipeline_state(
++                        &devices.device_context,
++                        slice::from_ref(&pipeline.view),
++                        D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
++                        &pipeline.vertex,
++                        &pipeline.fragment,
++                        &pipeline.blend_state,
++                    );
++                    // SAFETY: the sampler and both plane views were created on this device and
++                    // stay alive for the draw, which runs while this device holds the keyed
++                    // mutex; slots s1, t2 and t3 are the NV12 surface slots of shaders.hlsl.
++                    unsafe {
++                        devices
++                            .device_context
++                            .PSSetSamplers(1, Some(slice::from_ref(&self.globals.surface_sampler)));
++                        devices
++                            .device_context
++                            .PSSetShaderResources(2, Some(texture.views.as_slice()));
++                        devices.device_context.DrawInstanced(4, 1, 0, 0);
++                    }
++                });
++                // SAFETY: this device acquired key 0 above; releasing it orders the producer's
++                // next copy after this draw on the GPU.
++                unsafe { texture.mutex.ReleaseSync(0) }.log_err();
++                drawn?;
++                continue;
++            }
+             // A frame that could not be uploaded (too large, texture creation failed) is skipped.
+             let Some(textures) = self.owned_surfaces.get(&surface.frame.id()) else {
+                 continue;
+@@ -1430,8 +1518,71 @@
+             vertex,
+             fragment,
+             blend_state,
++        })
++    }
++}
++
++impl SharedSurfaceTexture {
++    fn open(
++        device: &ID3D11Device,
++        stream: u64,
++        shared: SharedSurfaceHandle,
++        epoch: u64,
++    ) -> Result<Self> {
++        let device1: ID3D11Device1 = device.cast()?;
++        // SAFETY: the frame carrying `shared` keeps the NT handle open while it lives, and it
++        // lives through this prepare; the opened resource holds its own reference afterwards.
++        // https://learn.microsoft.com/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11device1-opensharedresource1
++        let texture: ID3D11Texture2D =
++            unsafe { device1.OpenSharedResource1(HANDLE(shared.handle as *mut _)) }?;
++        let mut desc = D3D11_TEXTURE2D_DESC::default();
++        // SAFETY: `texture` is live and `desc` a writable local.
++        unsafe { texture.GetDesc(&mut desc) };
++        anyhow::ensure!(
++            desc.Format == DXGI_FORMAT_NV12,
++            "shared surface format {:?} is not NV12",
++            desc.Format
++        );
++        let mutex: IDXGIKeyedMutex = texture.cast()?;
++        let mut views = [None, None];
++        for (view, format) in views
++            .iter_mut()
++            .zip([DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM])
++        {
++            // R8 views the luma plane of an NV12 texture and R8G8 its half-size chroma plane.
++            // https://learn.microsoft.com/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#nv12
++            let view_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
++                Format: format,
++                ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
++                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
++                    Texture2D: D3D11_TEX2D_SRV {
++                        MostDetailedMip: 0,
++                        MipLevels: 1,
++                    },
++                },
++            };
++            // SAFETY: `view_desc` is fully initialised for a 2D texture of one mip level, and the
++            // out pointer is a live slot of `views`.
++            unsafe { device.CreateShaderResourceView(&texture, Some(&view_desc), Some(view)) }?;
++        }
++        Ok(Self {
++            stream,
++            last_seen: epoch,
++            mutex,
++            views,
+         })
+     }
++}
++
++/// Takes `key` of a keyed mutex. AcquireSync reports WAIT_TIMEOUT and WAIT_ABANDONED as success
++/// HRESULTs, which the wrapper's Result hides, so only S_OK counts as held.
++/// https://learn.microsoft.com/windows/win32/api/dxgi/nf-dxgi-idxgikeyedmutex-acquiresync
++fn acquire_keyed_mutex(mutex: &IDXGIKeyedMutex, key: u64, milliseconds: u32) -> bool {
++    // SAFETY: `mutex` is a live interface and AcquireSync takes no pointers.
++    let status = unsafe {
++        (Interface::vtable(mutex).AcquireSync)(Interface::as_raw(mutex), key, milliseconds)
++    };
++    status.0 == 0
+ }
+ 
+ impl OwnedSurfaceTextures {

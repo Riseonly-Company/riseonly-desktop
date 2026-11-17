@@ -1,0 +1,58 @@
+--- a/crates/gpui/src/text_system/line_layout.rs
++++ b/crates/gpui/src/text_system/line_layout.rs
+@@ -174,7 +174,11 @@
+                     last_candidate_x = x;
+                 }
+             } else {
+-                if ch != ' ' && first_non_whitespace_ix.is_some() {
++                // Brackets stay with their word, as in `LineWrapper::wrap_line` (patch 0033).
++                if ch != ' '
++                    && first_non_whitespace_ix.is_some()
++                    && !LineWrapper::is_glued_bracket(prev_ch, ch)
++                {
+                     last_candidate_ix = Some(boundary);
+                     last_candidate_x = x;
+                 }
+--- a/crates/gpui/src/text_system/line_wrapper.rs
++++ b/crates/gpui/src/text_system/line_wrapper.rs
+@@ -78,7 +78,10 @@
+                             }
+                         } else {
+                             // CJK may not be space separated, e.g.: `Hello world你好世界`
+-                            if c != ' ' && first_non_whitespace_ix.is_some() {
++                            if c != ' '
++                                && first_non_whitespace_ix.is_some()
++                                && !Self::is_glued_bracket(prev_c, c)
++                            {
+                                 last_candidate_ix = ix;
+                                 last_candidate_width = width;
+                             }
+@@ -494,6 +497,15 @@
+         (text, Cow::Borrowed(runs))
+     }
+ 
++    /// No line break before a closing bracket or closing punctuation, after an opening bracket,
++    /// or between a letter or digit and the opening bracket that follows it (UAX #14 LB13, LB14,
++    /// LB30), so `joined(a)` stays one unit as in Core Text.
++    pub(crate) fn is_glued_bracket(prev: char, c: char) -> bool {
++        matches!(c, ')' | ']' | '}' | '»' | '!' | '?')
++            || matches!(prev, '(' | '[' | '{' | '«')
++            || (matches!(c, '(' | '[' | '{') && Self::is_word_char(prev) && prev != ' ')
++    }
++
+     /// Any character in this list should be treated as a word character,
+     /// meaning it can be part of a word that should not be wrapped.
+     pub(crate) fn is_word_char(c: char) -> bool {
+@@ -1201,6 +1213,12 @@
+         assert_word("more⋯");
+         assert_word("won’t");
+         assert_word("‘twas");
++
++        // Brackets glue to their word: no break inside `joined(a)`.
++        assert!(LineWrapper::is_glued_bracket('(', 'a'));
++        assert!(LineWrapper::is_glued_bracket('a', ')'));
++        assert!(LineWrapper::is_glued_bracket('z', '('));
++        assert!(!LineWrapper::is_glued_bracket(' ', '('));
+ 
+         // Space
+         assert_not_word("foo bar");

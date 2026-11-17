@@ -1,0 +1,55 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -392,6 +392,30 @@
+                 && shows_previous(&*sprite)
+             {
+                 sprite.tile = moved(sprite.tile);
++            }
++        }
++        true
++    }
++
++    /// Scales the opacity of every image sprite painted under `key` by `factor`, in the scene and
++    /// in the paint operations kept for replay (Riseonly 0072). False when no sprite carries the key.
++    pub fn fade_image_sprites(&mut self, key: u32, factor: f32) -> bool {
++        if key == 0 || !factor.is_finite() || factor < 0.0 {
++            return false;
++        }
++        let mut found = false;
++        for sprite in self.polychrome_sprites.iter_mut().filter(|sprite| sprite.pad == key) {
++            sprite.opacity = (sprite.opacity * factor).min(1.0);
++            found = true;
++        }
++        if !found {
++            return false;
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(Primitive::PolychromeSprite(sprite)) = operation
++                && sprite.pad == key
++            {
++                sprite.opacity = (sprite.opacity * factor).min(1.0);
+             }
+         }
+         true
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4499,6 +4499,19 @@
+         found
+     }
+ 
++    /// Scales the opacity of every image of the frame on screen painted under `key` (see
++    /// [`Self::with_image_swap_key`]) by `factor` and presents (Riseonly 0072): a picture fading in
++    /// or out costs a present, not a render of its view and of every view above it. Call it
++    /// outside a draw. False when no image of the frame carries the key; the caller then repaints
++    /// through its view.
++    pub fn fade_swapped_image(&mut self, key: u32, factor: f32) -> bool {
++        let found = self.rendered_frame.scene.fade_image_sprites(key, factor);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
++    }
++
+     fn image_tile(&mut self, data: &Arc<RenderImage>, frame_index: usize) -> Option<AtlasTile> {
+         let bytes = data.as_bytes(frame_index)?;
+         let params = RenderImageParams {

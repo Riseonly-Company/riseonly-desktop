@@ -1,0 +1,91 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -644,7 +644,7 @@
+     window: &mut Window,
+ ) {
+     let frame = window.draw_count;
+-    window.update_replayed_states(replayed, view_element_state_type_id(), |state, window| {
++    window.update_replayed_states(replayed, view_element_state_type_id(), |key, state, window| {
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+             return;
+         };
+@@ -665,16 +665,36 @@
+         if let Some(parked) = state.parked.as_ref() {
+             window.keep_parked_states(parked);
+         }
++        register_nested_reader(key, state, window);
+     });
+ }
+ 
++/// Riseonly 0109: a cached view replayed inside its replayed ancestor names itself as a reader
++/// of what it read, as its own replay does. Left out of `cached_views`, a notify of a store it
++/// reads dirtied only the ancestor, which rendered and replayed the nested view on its stale
++/// frame (X2223: the post composer hero kept its loading spinner after the preview landed,
++/// until a page switch notified the page again).
++fn register_nested_reader(key: &GlobalElementId, state: &ViewElementState, window: &mut Window) {
++    let Some(ElementId::View(entity_id)) = key.0.last() else {
++        return;
++    };
++    window
++        .next_frame
++        .cached_views
++        .push((*entity_id, state.accessed_entities.clone()));
++    window
++        .next_frame
++        .own_reads
++        .insert(*entity_id, state.own_entities.clone());
++}
++
+ /// Riseonly 0088: a spliced frame copied the frame just drawn around its holes, so every cached
+ /// view of the copied spans that was drawn in that frame now lies where its span went, as if it
+ /// had replayed itself; the holes rendered fresh and keep their own ranges.
+ pub(crate) fn rebase_spliced_views(map: &SpliceMap, window: &mut Window) {
+     let frame = window.draw_count;
+     let whole = window.spliced_state_keys();
+-    window.update_replayed_states(&whole, view_element_state_type_id(), |state, _| {
++    window.update_replayed_states(&whole, view_element_state_type_id(), |_, state, _| {
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+             return;
+         };
+@@ -749,7 +769,7 @@
+         && near(new_mask.bounds.origin.y, old_mask.bounds.origin.y + offset.y)
+         && new_mask.bounds.size == old_mask.bounds.size;
+     let mask_stayed = new_mask == old_mask;
+-    window.update_replayed_states(replayed, view_element_state_type_id(), |state, window| {
++    window.update_replayed_states(replayed, view_element_state_type_id(), |key, state, window| {
+         let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
+             return;
+         };
+@@ -798,6 +818,7 @@
+         state.prepainted_frame = frame;
+         state.cache_key.bounds.origin = state.cache_key.bounds.origin + offset;
+         state.cache_key.content_mask = content_mask;
++        register_nested_reader(key, state, window);
+     });
+ }
+ 
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5123,11 +5123,12 @@
+     /// Hands every element state of type `type_id` whose key the replayed prepaint range `replayed`
+     /// copied to `update`, with this window (Riseonly 0045): the cached views nested in a view that
+     /// replayed learn where their own ranges went, instead of holding ranges of an older frame.
++    /// Riseonly 0109: the key goes along, so a nested view can name itself as a reader.
+     pub(crate) fn update_replayed_states(
+         &mut self,
+         replayed: &Range<PrepaintStateIndex>,
+         type_id: TypeId,
+-        mut update: impl FnMut(&mut dyn Any, &mut Self),
++        mut update: impl FnMut(&GlobalElementId, &mut dyn Any, &mut Self),
+     ) {
+         let keys = self.next_frame.accessed_element_states[replayed
+             .start
+@@ -5139,7 +5140,7 @@
+             .collect::<Vec<_>>();
+         for key in keys {
+             if let Some(mut state) = self.rendered_frame.element_states.remove(&key) {
+-                update(&mut *state.inner, self);
++                update(&key.0, &mut *state.inner, self);
+                 self.rendered_frame.element_states.insert(key, state);
+             }
+         }

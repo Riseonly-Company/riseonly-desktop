@@ -1,0 +1,152 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -197,6 +197,30 @@
+         found
+     }
+ 
++    /// Gives every path painted with `swap_key` the geometry of `local` in place (Riseonly 0047):
++    /// `local` is laid out from the anchor the path was painted with, so a spinner turns with a
++    /// present of this scene, without a render, layout or paint of the views around it. Order,
++    /// content mask and colour stay. The copies kept for replay take it too. False when no path of
++    /// the scene carries the key.
++    pub fn swap_path(&mut self, swap_key: u64, local: &Path<ScaledPixels>) -> bool {
++        if swap_key == 0 {
++            return false;
++        }
++        let mut found = false;
++        for path in self.paths.iter_mut().filter(|path| path.swap_key == swap_key) {
++            path.take_local_geometry(local);
++            found = true;
++        }
++        for operation in &mut self.paint_operations {
++            if let PaintOperation::Primitive(Primitive::Path(path)) = operation
++                && path.swap_key == swap_key
++            {
++                path.take_local_geometry(local);
++            }
++        }
++        found
++    }
++
+     pub fn finish(&mut self) {
+         self.shadows.sort_by_key(|shadow| shadow.order);
+         self.quads.sort_by_key(|quad| quad.order);
+@@ -343,6 +367,7 @@
+             Primitive::Path(path) => {
+                 moved(&mut path.bounds, offset);
+                 moved(&mut path.content_mask.bounds, offset);
++                path.swap_anchor = path.swap_anchor + offset;
+                 for vertex in &mut path.vertices {
+                     vertex.xy_position = vertex.xy_position + offset;
+                     moved(&mut vertex.content_mask.bounds, offset);
+@@ -1236,6 +1261,8 @@
+     start: Point<P>,
+     current: Point<P>,
+     contour_count: usize,
++    pub(crate) swap_key: u64,
++    pub(crate) swap_anchor: Point<P>,
+ }
+ 
+ impl Path<Pixels> {
+@@ -1254,6 +1281,8 @@
+             content_mask: Default::default(),
+             color: Default::default(),
+             contour_count: 0,
++            swap_key: 0,
++            swap_anchor: Default::default(),
+         }
+     }
+ 
+@@ -1273,6 +1302,8 @@
+             current: self.current.scale(factor),
+             contour_count: self.contour_count,
+             color: self.color,
++            swap_key: self.swap_key,
++            swap_anchor: self.swap_anchor.scale(factor),
+         }
+     }
+ 
+@@ -1362,6 +1393,28 @@
+     }
+ }
+ 
++impl Path<ScaledPixels> {
++    /// Takes the vertices and bounds of `local`, laid out from the origin, moved to this path's
++    /// swap anchor (Riseonly 0047).
++    fn take_local_geometry(&mut self, local: &Path<ScaledPixels>) {
++        let anchor = self.swap_anchor;
++        self.vertices = local
++            .vertices
++            .iter()
++            .map(|vertex| {
++                let mut vertex = vertex.clone();
++                vertex.xy_position = vertex.xy_position + anchor;
++                vertex.content_mask.bounds.origin = vertex.content_mask.bounds.origin + anchor;
++                vertex
++            })
++            .collect();
++        self.bounds = Bounds {
++            origin: local.bounds.origin + anchor,
++            size: local.bounds.size,
++        };
++    }
++}
++
+ impl From<Path<ScaledPixels>> for Primitive {
+     fn from(path: Path<ScaledPixels>) -> Self {
+         Primitive::Path(path)
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4620,7 +4620,20 @@
+     /// Paint the given `Path` into the scene for the next frame at the current z-index.
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+-    pub fn paint_path(&mut self, mut path: Path<Pixels>, color: impl Into<Background>) {
++    pub fn paint_path(&mut self, path: Path<Pixels>, color: impl Into<Background>) {
++        self.paint_swappable_path(path, color, 0, Point::default());
++    }
++
++    /// [`Self::paint_path`] whose geometry [`Self::swap_path`] can replace until the next draw
++    /// (Riseonly 0047); later geometry is laid out from `anchor`. `swap_key` zero names nothing,
++    /// and a path painted under a transformation takes no swaps.
++    pub fn paint_swappable_path(
++        &mut self,
++        mut path: Path<Pixels>,
++        color: impl Into<Background>,
++        swap_key: u64,
++        anchor: Point<Pixels>,
++    ) {
+         self.invalidator.debug_assert_paint();
+ 
+         let scale_factor = self.scale_factor();
+@@ -4632,6 +4645,9 @@
+         let transformation = self.transformation();
+         if transformation != TransformationMatrix::unit() {
+             transform_path(&mut path, &transformation, scale_factor);
++        } else {
++            path.swap_key = swap_key;
++            path.swap_anchor = anchor;
+         }
+         self.next_frame
+             .scene
+@@ -5237,6 +5253,20 @@
+         found
+     }
+ 
++    /// Gives every path of the frame on screen painted with `swap_key` the geometry of `local`,
++    /// laid out from the anchor it was painted with (Riseonly 0047), and asks for a present of that
++    /// frame: a spinner turns without rendering, laying out or painting any view. Call it outside a
++    /// draw, from an [`Self::on_next_frame`] callback. False when the frame on screen holds no path
++    /// with the key: the caller stops swapping and repaints through its view.
++    pub fn swap_path(&mut self, swap_key: u64, local: Path<Pixels>) -> bool {
++        let local = local.scale(self.scale_factor());
++        let found = self.rendered_frame.scene.swap_path(swap_key, &local);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
++    }
++
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         self.image_drops += 1;

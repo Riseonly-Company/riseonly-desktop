@@ -1,0 +1,19 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -562,6 +562,16 @@
+     /// Obtains whether this handle contains the given handle in the most recently rendered frame.
+     pub fn contains(&self, other: &Self, window: &Window) -> bool {
+         self.id.contains(other.id, window)
++    }
++
++    /// Obtains whether an element of the most recently rendered frame tracks this handle. A live
++    /// handle without one receives no key events: they dispatch from the window root instead.
++    pub fn is_in_rendered_frame(&self, window: &Window) -> bool {
++        window
++            .rendered_frame
++            .dispatch_tree
++            .focusable_node_id(self.id)
++            .is_some()
+     }
+ 
+     /// Dispatch an action on the element that rendered this focus handle

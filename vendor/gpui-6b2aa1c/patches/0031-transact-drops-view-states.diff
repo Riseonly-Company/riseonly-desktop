@@ -1,0 +1,35 @@
+diff -ru a/crates/gpui/src/view.rs b/crates/gpui/src/view.rs
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -285,6 +285,12 @@
+     }
+ }
+ 
++/// Type of the element state a cached view keeps, so a rolled back transaction can drop the
++/// states it recorded (Riseonly 0031).
++pub(crate) fn view_element_state_type_id() -> TypeId {
++    TypeId::of::<ViewElementState>()
++}
++
+ struct ViewElementState {
+     prepaint_range: Range<PrepaintStateIndex>,
+     paint_range: Range<PaintIndex>,
+diff -ru a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3648,6 +3648,15 @@
+         let index = self.prepaint_index();
+         let result = f(self);
+         if result.is_err() {
++            // A cached view prepainted inside the rolled back pass stored ranges into the tail
++            // truncated below; replaying them in a later frame slices past the end (Riseonly 0031).
++            let view_state_type = crate::view::view_element_state_type_id();
++            let frame = &mut self.next_frame;
++            for key in &frame.accessed_element_states[index.accessed_element_states_index..] {
++                if key.1 == view_state_type {
++                    frame.element_states.remove(key);
++                }
++            }
+             self.next_frame.hitboxes.truncate(index.hitboxes_index);
+             self.next_frame
+                 .tooltip_requests

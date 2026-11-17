@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@BUNDLE_ID@</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>@APP_NAME@</name>
+  <summary>Social network and messenger</summary>
+  <description>
+    <p>Riseonly brings posts, chats, calls, shorts, music, vacancies and maps into one desktop app.</p>
+  </description>
+  <launchable type="desktop-id">@BUNDLE_ID@.desktop</launchable>
+  <url type="homepage">https://@WEB_HOST@</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>riseonly</binary>
+  </provides>
+  <releases>
+    <release version="@SHORT_VERSION@"/>
+  </releases>
+</component>

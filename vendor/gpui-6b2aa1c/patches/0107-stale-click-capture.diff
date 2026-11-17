@@ -1,0 +1,15 @@
+--- a/crates/gpui/src/elements/div.rs	2026-11-16 01:44:37
++++ b/crates/gpui/src/elements/div.rs	2026-11-16 01:44:37
+@@ -2984,6 +2984,12 @@
+                         // so that it happens even if another event handler stops
+                         // propagation.
+                         DispatchPhase::Capture => {
++                            // A press whose bubble was stopped by an inner element (a button
++                            // inside a clickable row) never reached this element's bubble, so
++                            // its capture stayed here and fired the row's click on the next
++                            // mouse up anywhere, even over another page (X2153). Each mouse up
++                            // captures afresh.
++                            captured_mouse_down = None;
+                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                 captured_mouse_down = pending_mouse_down.take();

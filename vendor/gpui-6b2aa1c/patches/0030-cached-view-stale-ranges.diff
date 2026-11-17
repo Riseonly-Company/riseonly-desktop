@@ -1,0 +1,87 @@
+diff --git a/crates/gpui/src/view.rs b/crates/gpui/src/view.rs
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -287,6 +287,11 @@
+ struct ViewElementState {
+     prepaint_range: Range<PrepaintStateIndex>,
+     paint_range: Range<PaintIndex>,
++    /// `Window::draw_count` of the frame the ranges above were recorded in. They index the
++    /// previous frame only; a view that was not prepainted or painted last frame (under a hidden
++    /// div, or inside a cached ancestor that was replayed) holds ranges of an older frame.
++    prepainted_frame: u64,
++    painted_frame: u64,
+     cache_key: ViewElementCacheKey,
+     accessed_entities: FxHashSet<EntityId>,
+ }
+@@ -391,6 +396,7 @@
+                             && element_state.cache_key.text_style == text_style
+                             && !window.dirty_views.contains(&entity_id)
+                             && !window.refreshing
++                            && element_state.prepainted_frame + 1 == window.draw_count
+                         {
+                             let prepaint_start = window.prepaint_index();
+                             window.reuse_prepaint(element_state.prepaint_range.clone());
+@@ -398,6 +404,7 @@
+                                 .extend_accessed(&element_state.accessed_entities);
+                             let prepaint_end = window.prepaint_index();
+                             element_state.prepaint_range = prepaint_start..prepaint_end;
++                            element_state.prepainted_frame = window.draw_count;
+ 
+                             return (None, element_state);
+                         }
+@@ -425,6 +432,8 @@
+                                 accessed_entities,
+                                 prepaint_range: prepaint_start..prepaint_end,
+                                 paint_range: PaintIndex::default()..PaintIndex::default(),
++                                prepainted_frame: window.draw_count,
++                                painted_frame: 0,
+                                 cache_key: ViewElementCacheKey {
+                                     bounds,
+                                     content_mask,
+@@ -473,8 +482,16 @@
+                                 let refreshing = mem::replace(&mut window.refreshing, true);
+                                 element.paint(window, cx);
+                                 window.refreshing = refreshing;
+-                            } else {
++                                element_state.painted_frame = window.draw_count;
++                            } else if element_state.painted_frame + 1 == window.draw_count {
+                                 window.reuse_paint(element_state.paint_range.clone());
++                                element_state.painted_frame = window.draw_count;
++                            } else {
++                                // Prepaint was replayed but the last paint is older than the
++                                // previous frame (the view sat under a hidden div): its range
++                                // no longer indexes the rendered frame. Skip this frame and
++                                // render the view fresh in the next one.
++                                cx.notify(entity_id);
+                             }
+ 
+                             let paint_end = window.paint_index();
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1143,6 +1143,9 @@
+     input_latency_tracker: InputLatencyTracker,
+     last_input_modality: InputModality,
+     pub(crate) refreshing: bool,
++    /// Number of the frame being drawn, raised at the start of every draw. A cached view replays
++    /// its recorded ranges only when they were recorded in the frame just before this one.
++    pub(crate) draw_count: u64,
+     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
+     pub(crate) focus: Option<FocusId>,
+     focus_enabled: bool,
+@@ -1893,6 +1896,7 @@
+             input_latency_tracker: InputLatencyTracker::new()?,
+             last_input_modality: InputModality::Mouse,
+             refreshing: false,
++            draw_count: 0,
+             activation_observers: SubscriberSet::new(),
+             focus: None,
+             focus_enabled: true,
+@@ -2865,6 +2869,7 @@
+     /// the contents of the new [`Scene`], use [`Self::present`].
+     #[profiling::function]
+     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
++        self.draw_count += 1;
+         // Drain unconditionally so a stale first-invalidation timestamp can't
+         // leak into a later frame across enable/disable of frame tracing.
+         let frame_dirty = self.invalidator.take_frame_dirty();

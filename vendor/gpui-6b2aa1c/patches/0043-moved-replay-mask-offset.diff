@@ -1,0 +1,105 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -336,7 +336,7 @@
+         text_style: &TextStyle,
+         env_fingerprint: u64,
+         window: &Window,
+-    ) -> Option<Point<Pixels>> {
++    ) -> Option<(Point<Pixels>, Point<Pixels>)> {
+         let key = &self.cache_key;
+         let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.001;
+         if window.hidden_depth > 0
+@@ -372,7 +372,14 @@
+         // The mask stayed (the scroll viewport) and cut nothing of the view before or after.
+         let mask_stays_clear = key.content_mask == *content_mask
+             && window.ranges_clear_of_mask(&self.prepaint_range, &self.paint_range, new_mask, offset);
+-        (mask_moved_along || mask_stays_clear).then_some(offset)
++        // Riseonly 0043: the second offset is how far the mask moved, for the callbacks that read it.
++        if mask_moved_along {
++            Some((offset, offset))
++        } else if mask_stays_clear {
++            Some((offset, Point::default()))
++        } else {
++            None
++        }
+     }
+ 
+     /// Whether the recorded prepaint may replay in this frame (Riseonly 0034). Under a hidden div it
+@@ -495,7 +502,7 @@
+                         // hands the move to the prepaint callbacks that read window positions.
+                         if self.replays_moved
+                             && let Some(state) = element_state.as_mut()
+-                            && let Some(offset) = state.moved_offset(
++                            && let Some((offset, mask_offset)) = state.moved_offset(
+                                 entity_id,
+                                 bounds,
+                                 &content_mask,
+@@ -506,7 +513,7 @@
+                         {
+                             let prepaint_start = window.prepaint_index();
+                             let move_listeners =
+-                                window.reuse_moved_prepaint(state.prepaint_range.clone(), offset);
++                                window.reuse_moved_prepaint(state.prepaint_range.clone(), offset, mask_offset);
+                             cx.entities.extend_accessed(&state.accessed_entities);
+                             window
+                                 .next_frame
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -958,14 +958,17 @@
+ /// origin instead of rendering can hand it the move (Riseonly 0041).
+ #[derive(Clone)]
+ pub(crate) struct MoveListener {
+-    callback: Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App)>,
++    callback: Rc<dyn Fn(Point<Pixels>, Point<Pixels>, &mut Window, &mut App)>,
+     /// How far the view moved since the frame that recorded the callback.
+     offset: Point<Pixels>,
++    /// How far the content mask around the callback moved with it (Riseonly 0043): the offset when
++    /// a clipped cell scrolled whole with its clip, zero when the clip is the viewport that stayed.
++    mask_offset: Point<Pixels>,
+ }
+ 
+ impl MoveListener {
+     pub(crate) fn call(&self, window: &mut Window, cx: &mut App) {
+-        (self.callback)(self.offset, window, cx);
++        (self.callback)(self.offset, self.mask_offset, window, cx);
+     }
+ }
+ 
+@@ -3550,6 +3553,7 @@
+         &mut self,
+         range: Range<PrepaintStateIndex>,
+         offset: Point<Pixels>,
++        mask_offset: Point<Pixels>,
+     ) -> Vec<MoveListener> {
+         let hitboxes_start = self.next_frame.hitboxes.len();
+         let move_listeners_start = self.next_frame.move_listeners.len();
+@@ -3560,6 +3564,7 @@
+         }
+         for listener in &mut self.next_frame.move_listeners[move_listeners_start..] {
+             listener.offset = listener.offset + offset;
++            listener.mask_offset = listener.mask_offset + mask_offset;
+         }
+         self.next_frame.move_listeners[move_listeners_start..].to_vec()
+     }
+@@ -3768,17 +3773,19 @@
+     /// Registers a callback for the element being prepainted that reads window positions (a frame
+     /// reader, a visibility probe). A cached view opted in with `replay_when_moved` that only
+     /// changed its origin replays its last frame instead of rendering, and calls the callback with
+-    /// the offset from the bounds this prepaint saw (Riseonly 0041).
++    /// the offset from the bounds this prepaint saw and the offset by which the content mask around
++    /// it moved, zero when the mask stayed (Riseonly 0041, 0043).
+     ///
+     /// This method should only be called as part of the prepaint phase of element drawing.
+     pub fn on_replayed_move(
+         &mut self,
+-        callback: impl Fn(Point<Pixels>, &mut Window, &mut App) + 'static,
++        callback: impl Fn(Point<Pixels>, Point<Pixels>, &mut Window, &mut App) + 'static,
+     ) {
+         self.invalidator.debug_assert_prepaint();
+         self.next_frame.move_listeners.push(MoveListener {
+             callback: Rc::new(callback),
+             offset: Point::default(),
++            mask_offset: Point::default(),
+         });
+     }
+ 

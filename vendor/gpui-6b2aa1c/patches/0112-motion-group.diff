@@ -1,0 +1,318 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -81,18 +81,62 @@
+     pub(crate) clip_stack: Vec<Bounds<ScaledPixels>>,
+ }
+ 
+-/// The paint operations [`crate::Window::with_shift_group`] recorded under `key`, and the offset
+-/// [`Scene::shift_group`] moved their primitives on screen by (Riseonly 0084).
++/// The paint operations [`crate::Window::with_shift_group`] recorded under `key`, and how
++/// [`Scene::shift_group`] and [`Scene::move_group`] moved, scaled and faded their primitives on
++/// screen from the copies kept for replay (Riseonly 0084, 0112).
+ #[derive(Clone, Debug)]
+ pub(crate) struct ShiftGroup {
+     key: u64,
+     operations: Range<usize>,
+-    moved: Point<ScaledPixels>,
++    motion: GroupMotion,
+     /// The clip of the cached view painting the group (Riseonly 0099): it stays while the group
+     /// moves.
+     outer: Option<Bounds<ScaledPixels>>,
+ }
+ 
++/// Where the primitives of a shift group show against the paint kept for replay (Riseonly 0112):
++/// a point painted at `p` shows at `p * scale + translation`, every colour times `fade`.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub(crate) struct GroupMotion {
++    pub(crate) scale: f32,
++    pub(crate) translation: Point<ScaledPixels>,
++    pub(crate) fade: f32,
++    /// The clips stay where they were painted, as a paint offset inside a fixed mask draws; else
++    /// a moved primitive takes its clip along, as a moved replay does.
++    pub(crate) clip_stays: bool,
++}
++
++impl GroupMotion {
++    pub(crate) const IDENTITY: Self = Self {
++        scale: 1.0,
++        translation: Point { x: ScaledPixels(0.0), y: ScaledPixels(0.0) },
++        fade: 1.0,
++        clip_stays: false,
++    };
++
++    /// `painted` as it shows under this motion, cut by `outer`. None when the motion scales a
++    /// primitive the scene can only move (a quad, a shadow, an underline, an untransformed sprite or
++    /// a surface): its view then repaints.
++    fn show(&self, painted: &Primitive, outer: Option<Bounds<ScaledPixels>>) -> Option<Primitive> {
++        let mut shown = painted.clone();
++        if self.scale == 1.0 {
++            shown.translate(self.translation);
++            if self.clip_stays {
++                shown.keep_clips_of(painted);
++            }
++        } else if !shown.scale_by(self.scale, self.translation) {
++            return None;
++        }
++        if self.fade != 1.0 {
++            shown.fade(self.fade);
++        }
++        if let Some(clip) = outer {
++            shown.clip_to(&clip);
++        }
++        Some(shown)
++    }
++}
++
+ /// Replaces the primitive of `list` (sorted by draw order) drawn at `order` with `bounds` by
+ /// `next` of it (Riseonly 0084). False when none is.
+ fn shift_live<T>(
+@@ -141,7 +185,7 @@
+             self.shift_groups.push(ShiftGroup {
+                 key,
+                 operations: start..end,
+-                moved: Point::default(),
++                motion: GroupMotion::IDENTITY,
+                 outer: self.clip_stack.last().copied(),
+             });
+         }
+@@ -159,20 +203,43 @@
+         if offset.x.0 == 0.0 && offset.y.0 == 0.0 {
+             return true;
+         }
++        let motion = self.shift_groups[index].motion;
++        self.move_group_at(index, GroupMotion { translation: motion.translation + offset, ..motion })
++    }
++
++    /// Shows every primitive painted under the shift key `key` scaled by `scale`, moved by
++    /// `translation` and faded by `fade` against its paint, clip of the view around it kept
++    /// (Riseonly 0112): a point painted at `p` lands at `p * scale + translation`. The copies kept
++    /// for replay stay as painted, so each call starts from the paint, and a fade back from zero
++    /// still finds its colours. Scaling takes only paths and transformed sprites, what a paint
++    /// under a transformation records. False, changing nothing, when no group carries the key or
++    /// the motion cannot show a primitive of it; false when a primitive was not found on screen.
++    /// The caller then repaints through its view.
++    pub(crate) fn move_group(&mut self, key: u64, motion: GroupMotion) -> bool {
++        match self.shift_groups.iter().rposition(|group| group.key == key) {
++            Some(index) => self.move_group_at(index, motion),
++            None => false,
++        }
++    }
++
++    fn move_group_at(&mut self, index: usize, motion: GroupMotion) -> bool {
+         let group = self.shift_groups[index].clone();
+-        let mut found = true;
++        if group.motion == motion {
++            return true;
++        }
++        let mut moves = Vec::new();
+         for operation in &self.paint_operations[group.operations.clone()] {
+             let PaintOperation::Primitive(painted) = operation else {
+                 continue;
+             };
+-            let mut shown = painted.clone();
+-            shown.translate(group.moved);
+-            let mut next = shown.clone();
+-            next.translate(offset);
+-            // Riseonly 0099: the clip of the cached view around the group stays where it is.
+-            if let Some(clip) = group.outer {
+-                next.clip_to(&clip);
+-            }
++            let (Some(shown), Some(next)) = (group.motion.show(painted, None), motion.show(painted, group.outer))
++            else {
++                return false;
++            };
++            moves.push((shown, next));
++        }
++        let mut found = true;
++        for (shown, next) in moves {
+             found &= match (shown, next) {
+                 (Primitive::Shadow(shown), Primitive::Shadow(next)) => {
+                     shift_live(&mut self.shadows, shown.order, shown.bounds, |item| (item.order, item.bounds), |_| next)
+@@ -229,7 +296,7 @@
+                 _ => false,
+             };
+         }
+-        self.shift_groups[index].moved = group.moved + offset;
++        self.shift_groups[index].motion = motion;
+         found
+     }
+ 
+@@ -353,7 +420,58 @@
+     }
+ 
+     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
+-        self.replay_operations(&prev_scene.paint_operations[range]);
++        // Riseonly 0112: a whole replay of a cached view keeps its shift groups and shows them
++        // where they were moved, so an ancestor redrawing around a row riding a motion neither
++        // snaps it back to its paint nor makes the next move refuse.
++        let groups: Vec<&ShiftGroup> = prev_scene
++            .shift_groups
++            .iter()
++            .filter(|group| range.start <= group.operations.start && group.operations.end <= range.end)
++            .collect();
++        if groups.is_empty() {
++            self.replay_operations(&prev_scene.paint_operations[range]);
++            return;
++        }
++        let mut starts = vec![0; groups.len()];
++        for (at, operation) in prev_scene.paint_operations[range.clone()].iter().enumerate() {
++            let at = range.start + at;
++            for (start, group) in starts.iter_mut().zip(&groups) {
++                if group.operations.start == at {
++                    *start = self.paint_operations.len();
++                }
++            }
++            let moved = groups
++                .iter()
++                .rev()
++                .find(|group| group.operations.contains(&at) && group.motion != GroupMotion::IDENTITY);
++            match (operation, moved) {
++                (PaintOperation::Primitive(painted), Some(group)) => match group.motion.show(painted, group.outer) {
++                    Some(shown) => self.insert_primitive_shown(painted.clone(), shown),
++                    None => self.insert_primitive(painted.clone()),
++                },
++                (operation, _) => self.replay_operations(std::slice::from_ref(operation)),
++            }
++            for (start, group) in starts.iter().zip(&groups) {
++                if group.operations.end == at + 1 && self.paint_operations.len() > *start {
++                    self.shift_groups.push(ShiftGroup {
++                        operations: *start..self.paint_operations.len(),
++                        ..(*group).clone()
++                    });
++                }
++            }
++        }
++    }
++
++    /// Puts `shown`, a moved copy of `painted`, in the lists drawn this frame and keeps `painted`
++    /// for replay (Riseonly 0112), as [`Self::insert_primitive`] keeps a cut one.
++    fn insert_primitive_shown(&mut self, mut painted: Primitive, mut shown: Primitive) {
++        if let Some(clip) = self.clip_stack.last().copied() {
++            shown.clip_to(&clip);
++        }
++        if let Some(shown) = self.insert_shown(shown) {
++            painted.take_slot(&shown);
++        }
++        self.paint_operations.push(PaintOperation::Primitive(painted));
+     }
+ 
+     /// Replays operations kept out of the frames, the paint of a parked cached view (Riseonly 0034).
+@@ -1119,6 +1237,73 @@
+         mask.bounds = mask.bounds.intersect(clip);
+     }
+ 
++    /// Gives the primitive back the clips `painted`, the copy it was moved from, kept (Riseonly
++    /// 0112).
++    fn keep_clips_of(&mut self, painted: &Primitive) {
++        match (self, painted) {
++            (Primitive::Shadow(this), Primitive::Shadow(painted)) => this.content_mask = painted.content_mask.clone(),
++            (Primitive::Quad(this), Primitive::Quad(painted)) => this.content_mask = painted.content_mask.clone(),
++            (Primitive::Path(this), Primitive::Path(painted)) => {
++                this.content_mask = painted.content_mask.clone();
++                for (vertex, kept) in this.vertices.iter_mut().zip(&painted.vertices) {
++                    vertex.content_mask = kept.content_mask.clone();
++                }
++            }
++            (Primitive::Underline(this), Primitive::Underline(painted)) => {
++                this.content_mask = painted.content_mask.clone()
++            }
++            (Primitive::MonochromeSprite(this), Primitive::MonochromeSprite(painted)) => {
++                this.content_mask = painted.content_mask.clone()
++            }
++            (Primitive::SubpixelSprite(this), Primitive::SubpixelSprite(painted)) => {
++                this.content_mask = painted.content_mask.clone()
++            }
++            (Primitive::PolychromeSprite(this), Primitive::PolychromeSprite(painted)) => {
++                this.content_mask = painted.content_mask.clone()
++            }
++            (Primitive::Surface(this), Primitive::Surface(painted)) => this.content_mask = painted.content_mask.clone(),
++            _ => {}
++        }
++    }
++
++    /// Scales the primitive by `scale` and moves it by `translation`, a point at `p` to
++    /// `p * scale + translation` (Riseonly 0112), as a paint under that transformation would:
++    /// paths take their vertices, transformed sprites their matrix; the clip stays. False,
++    /// changing nothing, for what a transformation does not scale on screen.
++    fn scale_by(&mut self, scale: f32, translation: Point<ScaledPixels>) -> bool {
++        let map = |position: Point<ScaledPixels>| {
++            point(
++                ScaledPixels(scale * position.x.0 + translation.x.0),
++                ScaledPixels(scale * position.y.0 + translation.y.0),
++            )
++        };
++        let delta = TransformationMatrix {
++            rotation_scale: [[scale, 0.0], [0.0, scale]],
++            translation: [translation.x.0, translation.y.0],
++        };
++        let scaled = |transformation: &mut TransformationMatrix| {
++            if *transformation == TransformationMatrix::unit() {
++                return false;
++            }
++            *transformation = delta.compose(*transformation);
++            true
++        };
++        match self {
++            Primitive::Path(path) => {
++                path.bounds = Bounds::from_corners(map(path.bounds.origin), map(path.bounds.bottom_right()));
++                for vertex in &mut path.vertices {
++                    vertex.xy_position = map(vertex.xy_position);
++                }
++                true
++            }
++            Primitive::MonochromeSprite(sprite) => scaled(&mut sprite.transformation),
++            Primitive::SubpixelSprite(sprite) => scaled(&mut sprite.transformation),
++            Primitive::PolychromeSprite(sprite) => scaled(&mut sprite.transformation),
++            _ => false,
++        }
++    }
++
++
+     /// Takes the draw order (and path id) the scene gave `shown`, a cut copy of this primitive
+     /// (Riseonly 0099).
+     fn take_slot(&mut self, shown: &Primitive) {
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5753,8 +5753,10 @@
+     }
+ 
+     /// Names everything `f` paints with the shift key `key` (Riseonly 0084), so
+-    /// [`Self::shift_group`] can move it in the frame on screen. Zero names nothing. A cached view
+-    /// replayed whole around the call keeps no group; the shift then refuses.
++    /// [`Self::shift_group`] and [`Self::move_group`] can move it in the frame on screen. Zero names
++    /// nothing. A cached view replayed whole in place around the call keeps the group where it was
++    /// moved (Riseonly 0112); one replayed at another origin or under another opacity keeps none,
++    /// and the shift then refuses.
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+     pub fn with_shift_group<R>(&mut self, key: u64, f: impl FnOnce(&mut Self) -> R) -> R {
+@@ -5781,6 +5783,29 @@
+         shifted
+     }
+ 
++    /// Shows everything painted under the shift key `key` scaled by `scale`, moved by
++    /// `translation` and faded by `fade` against its paint, and presents (Riseonly 0112): a point
++    /// painted at `p` lands at `p * scale + translation`. Each call starts from the paint, not from
++    /// the last call, so a fade to zero comes back. The clips stay where they were painted, as a
++    /// paint offset inside a fixed mask draws. A chat row folding into the forum rail rides
++    /// the open without a render, layout or paint of its view. Scaling takes what a paint under a
++    /// transformation records (paths and transformed sprites); hitboxes stay where they were
++    /// painted, the caller renders once the motion ends. False when the key left the frame or the
++    /// motion cannot show a primitive of it; the caller then repaints through its view.
++    pub fn move_group(&mut self, key: u64, scale: f32, translation: Point<Pixels>, fade: f32) -> bool {
++        let motion = crate::scene::GroupMotion {
++            scale,
++            translation: translation.scale(self.scale_factor()),
++            fade,
++            clip_stays: true,
++        };
++        let moved = self.rendered_frame.scene.move_group(key, motion);
++        if moved {
++            self.needs_present.set(true);
++        }
++        moved
++    }
++
+     /// Marks every image `f` paints with `key` (Riseonly 0057), so [`Self::swap_image`] can give
+     /// it another picture in the frame on screen. Zero names nothing.
+     ///

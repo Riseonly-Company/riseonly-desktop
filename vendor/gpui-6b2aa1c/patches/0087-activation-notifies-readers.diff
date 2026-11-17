@@ -1,0 +1,59 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1378,6 +1378,9 @@
+     /// Riseonly 0069: views that read the input modality while drawing; a modality change
+     /// notifies them instead of refreshing the window.
+     modality_readers: RefCell<FxHashSet<EntityId>>,
++    /// Riseonly 0087: views that read the window active status while drawing; an activation
++    /// change notifies them instead of refreshing the window.
++    activation_readers: RefCell<FxHashSet<EntityId>>,
+     pub(crate) refreshing: bool,
+     /// Number of the frame being drawn, raised at the start of every draw. A cached view replays
+     /// its recorded ranges only when they were recorded in the frame just before this one.
+@@ -1991,14 +1994,20 @@
+                             .retain(&(), |callback| callback(window, cx));
+ 
+                         window.bounds_changed(cx);
+-                        // Riseonly 0066: only a window that becomes active is drawn whole again
+-                        // (animated images ask for frames only while the window is active, so their
+-                        // cached views must paint once more). Losing activation changes nothing on
+-                        // screen that the activation observers do not notify themselves, and the
+-                        // full refresh drew every cached view (X1553: 102 views, 26-44 ms).
+-                        if active {
+-                            window.refresh();
++                        // Riseonly 0087: an activation change notifies only the views that read
++                        // the active status while drawing (animated images ask for frames only
++                        // while the window is active, focus rings, typing dots). The full refresh
++                        // of 0066 drew every cached view whenever the main window came back to
++                        // front, e.g. after a call was accepted in the incoming call window
++                        // (X1848: 196 views, layout 57 ms). One plain draw still runs so focus
++                        // listeners see the new active status.
++                        let readers = std::mem::take(&mut *window.activation_readers.borrow_mut());
++                        for view in readers {
++                            cx.notify(view);
+                         }
++                        if active && window.invalidator.not_drawing() {
++                            window.invalidator.set_dirty(true);
++                        }
+ 
+                         SystemWindowTabController::update_last_active(cx, window.handle.id);
+                     })
+@@ -2154,6 +2163,7 @@
+             input_latency_tracker: InputLatencyTracker::new()?,
+             last_input_modality: InputModality::Mouse,
+             modality_readers: RefCell::new(FxHashSet::default()),
++            activation_readers: RefCell::new(FxHashSet::default()),
+             refreshing: false,
+             draw_count: 0,
+             env_fingerprint: 0,
+@@ -2828,6 +2838,10 @@
+ 
+     /// Returns whether this window is focused by the operating system (receiving key events).
+     pub fn is_window_active(&self) -> bool {
++        // Riseonly 0087: a view that draws by the active status is notified when it changes.
++        if let Some(view) = self.rendered_entity_stack.last() {
++            self.activation_readers.borrow_mut().insert(*view);
++        }
+         self.active.get()
+     }
+ 

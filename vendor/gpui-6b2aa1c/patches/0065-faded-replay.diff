@@ -1,0 +1,128 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -169,6 +169,22 @@
+                     self.insert_primitive(primitive);
+                 }
+                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds + offset),
++                PaintOperation::EndLayer => self.pop_layer(),
++            }
++        }
++    }
++
++    /// Replays a range of the previous scene in place under another element opacity (Riseonly
++    /// 0065): each colour takes `factor`, the new opacity over the one it was painted with.
++    pub(crate) fn replay_faded(&mut self, range: Range<usize>, prev_scene: &Scene, factor: f32) {
++        for operation in &prev_scene.paint_operations[range] {
++            match operation {
++                PaintOperation::Primitive(primitive) => {
++                    let mut primitive = primitive.clone();
++                    primitive.fade(factor);
++                    self.insert_primitive(primitive);
++                }
++                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
+             }
+         }
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -810,13 +810,42 @@
+                                 let now = window.paint_context();
+                                 match element_state.moved_by.take() {
+                                     // Riseonly 0041: the prepaint replayed at a new origin.
+-                                    Some(offset) => window.reuse_moved_paint(range, offset),
+-                                    None if element_state.painted_under.places_alike(&now) => {
++                                    Some(offset) => {
++                                        window.reuse_moved_paint(range, offset);
++                                        // Riseonly 0065: a moved replay keeps the opacity it was
++                                        // painted with, so a view moving inside a fade shows the
++                                        // old opacity once and renders in the next frame.
++                                        if !Window::same_opacity(&element_state.painted_under, &now) {
++                                            cx.notify(entity_id);
++                                        }
++                                    }
++                                    None if element_state.painted_under.places_alike(&now)
++                                        && Window::same_opacity(&element_state.painted_under, &now) =>
++                                    {
+                                         window.reuse_paint(range.clone());
+                                         // Riseonly 0063: the cached views inside replayed with it.
+                                         let replayed = paint_start.clone()..window.paint_index();
+                                         rebase_nested_paints(&range, &replayed, window);
+                                     }
++                                    // Riseonly 0065: same place, another opacity. A view first
++                                    // painted inside a fade-in kept that faint frame forever
++                                    // (X1624: the switches of rows revealed by an opacity
++                                    // transition stayed invisible until some click dirtied them).
++                                    // The replay takes the fade; nested cached views are not
++                                    // rebased, so they render once, as after a moved replay.
++                                    None if element_state.painted_under.places_alike(&now)
++                                        && window.reuse_faded_paint(
++                                            range.clone(),
++                                            &element_state.painted_under,
++                                            &now,
++                                        ) =>
++                                    {
++                                        element_state.painted_under = now;
++                                    }
++                                    None if element_state.painted_under.places_alike(&now) => {
++                                        window.reuse_paint(range);
++                                        cx.notify(entity_id);
++                                    }
+                                     // Riseonly 0053: the transformation around the view moved (a
+                                     // zoom flight): its frame follows the matrix and the clip.
+                                     None if window.reuse_transformed_paint(
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1006,6 +1006,8 @@
+     Moved(Point<ScaledPixels>),
+     /// Under another transformation (Riseonly 0053).
+     Transformed(TransformedReplay),
++    /// In place under another element opacity, colours times the factor (Riseonly 0065).
++    Faded(f32),
+ }
+ 
+ /// A prepaint callback that reads window positions, recorded so a cached view replayed at a new
+@@ -3988,6 +3990,32 @@
+         self.reuse_paint_at(range, PaintReplay::Same);
+     }
+ 
++    /// Replays a paint range of the frame just drawn in place, painted under the opacity of
++    /// `painted`, as the paint under the opacity of `now` (Riseonly 0065): a cached view inside a
++    /// fade keeps its frame and takes the fade. False, replaying nothing, when either opacity is
++    /// zero: a paint at zero opacity dropped its transparent primitives and cannot fade back in.
++    pub(crate) fn reuse_faded_paint(
++        &mut self,
++        range: Range<PaintIndex>,
++        painted: &PaintContext,
++        now: &PaintContext,
++    ) -> bool {
++        if painted.opacity == now.opacity {
++            self.reuse_paint_at(range, PaintReplay::Same);
++            true
++        } else if painted.opacity > 0.0 && now.opacity > 0.0 {
++            self.reuse_paint_at(range, PaintReplay::Faded(now.opacity / painted.opacity));
++            true
++        } else {
++            false
++        }
++    }
++
++    /// Whether a paint under `painted` shows at the opacity a paint under `now` would (Riseonly 0065).
++    pub(crate) fn same_opacity(painted: &PaintContext, now: &PaintContext) -> bool {
++        painted.opacity == now.opacity
++    }
++
+     /// What the paint running now is painted under (Riseonly 0053).
+     pub(crate) fn paint_context(&self) -> PaintContext {
+         PaintContext {
+@@ -4139,6 +4167,11 @@
+                     .scene
+                     .replay_transformed(scene_range, &self.rendered_frame.scene, &replay)
+             }
++            PaintReplay::Faded(factor) => {
++                self.next_frame
++                    .scene
++                    .replay_faded(scene_range, &self.rendered_frame.scene, factor)
++            }
+             PaintReplay::Same => self
+                 .next_frame
+                 .scene

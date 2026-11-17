@@ -1,0 +1,79 @@
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -350,6 +350,55 @@
+         true
+     }
+ 
++    /// Shows the glyphs of the `shown` keys and hides those of the `hidden` keys in the frame on
++    /// screen and in the copies kept for replay (Riseonly 0078): every glyph keeps its colour, a
++    /// hidden one takes alpha zero and a shown one the highest alpha any glyph of these keys was
++    /// painted with, so a label painted as stacked candidates (one digit shown per slot) changes
++    /// with a present. False, with nothing changed, when a key is zero or no glyph carries it.
++    pub fn swap_glyph_visibility(&mut self, shown: &[u32], hidden: &[u32]) -> bool {
++        let carries = |key: u32| {
++            key != 0
++                && (self.monochrome_sprites.iter().any(|sprite| sprite.pad == key)
++                    || self.subpixel_sprites.iter().any(|sprite| sprite.pad == key))
++        };
++        if !shown.iter().chain(hidden.iter()).all(|key| carries(*key)) {
++            return false;
++        }
++        let in_set = |pad: u32| pad != 0 && (shown.contains(&pad) || hidden.contains(&pad));
++        let mut alpha: f32 = 0.0;
++        for sprite in self.monochrome_sprites.iter().filter(|sprite| in_set(sprite.pad)) {
++            alpha = alpha.max(sprite.color.a);
++        }
++        for sprite in self.subpixel_sprites.iter().filter(|sprite| in_set(sprite.pad)) {
++            alpha = alpha.max(sprite.color.a);
++        }
++        let apply = |pad: u32, color: &mut Hsla| {
++            if shown.contains(&pad) {
++                color.a = alpha;
++            } else if hidden.contains(&pad) {
++                color.a = 0.0;
++            }
++        };
++        for sprite in self.monochrome_sprites.iter_mut().filter(|sprite| sprite.pad != 0) {
++            apply(sprite.pad, &mut sprite.color);
++        }
++        for sprite in self.subpixel_sprites.iter_mut().filter(|sprite| sprite.pad != 0) {
++            apply(sprite.pad, &mut sprite.color);
++        }
++        for operation in &mut self.paint_operations {
++            match operation {
++                PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)) if sprite.pad != 0 => {
++                    apply(sprite.pad, &mut sprite.color);
++                }
++                PaintOperation::Primitive(Primitive::SubpixelSprite(sprite)) if sprite.pad != 0 => {
++                    apply(sprite.pad, &mut sprite.color);
++                }
++                _ => {}
++            }
++        }
++        true
++    }
++
+     /// Moves every image sprite carrying `key` in its pad from the atlas tile `previous` to the same
+     /// place in `next` (Riseonly 0057): an animated sticker or GIF shows its next frame with a
+     /// present, without a render, layout or paint of the views around it. A sprite showing a cut
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4472,6 +4472,18 @@
+     /// glyph of the frame carries the key; the caller then repaints through its view.
+     pub fn swap_glyph_colours(&mut self, key: u32, colour: &dyn Fn(f32) -> Hsla) -> bool {
+         let found = self.rendered_frame.scene.swap_glyph_colours(key, colour);
++        if found {
++            self.needs_present.set(true);
++        }
++        found
++    }
++
++    /// Shows the glyphs painted under the `shown` keys and hides those under the `hidden` keys in
++    /// the frame on screen, and presents (Riseonly 0078): a clock painted as stacked digits ticks
++    /// without a render, layout or paint of the views around it. False when a key left the frame;
++    /// the caller then repaints through its view.
++    pub fn swap_glyph_visibility(&mut self, shown: &[u32], hidden: &[u32]) -> bool {
++        let found = self.rendered_frame.scene.swap_glyph_visibility(shown, hidden);
+         if found {
+             self.needs_present.set(true);
+         }

@@ -1,0 +1,491 @@
+Riseonly patch on zed 6b2aa1c (Apache-2.0 crate gpui_windows), applied by scripts/vendor-gpui.py after 0001.
+The DirectX 11 renderer draws the OwnedSurfaceFrame of 0001: per-stream R8 luma and R8G8 chroma textures,
+uploaded with UpdateSubresource when the generation changes, and a new surface shader in shaders.hlsl
+(P42, P27 win).
+
+diff -ruN a/crates/gpui_windows/build.rs b/crates/gpui_windows/build.rs
+--- a/crates/gpui_windows/build.rs	2026-11-03 12:45:20
++++ b/crates/gpui_windows/build.rs	2026-11-03 12:45:34
+@@ -38,6 +38,7 @@
+             "monochrome_sprite",
+             "subpixel_sprite",
+             "polychrome_sprite",
++            "surface",
+         ];
+ 
+         let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
+diff -ruN a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+--- a/crates/gpui_windows/src/directx_renderer.rs	2026-11-03 12:45:20
++++ b/crates/gpui_windows/src/directx_renderer.rs	2026-11-03 12:46:46
+@@ -28,6 +28,10 @@
+ // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
+ const PATH_MULTISAMPLE_COUNT: u32 = 4;
+ const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
++// Largest texture side every Direct3D 11 device takes (feature level 10_0 and up); bigger owned
++// surfaces are skipped with a warning instead of failing the frame.
++// https://learn.microsoft.com/windows/win32/direct3d11/overviews-direct3d-11-devices-downlevel-intro
++const MAX_SURFACE_TEXTURE_DIMENSION: u32 = 8192;
+ 
+ pub(crate) struct FontInfo {
+     pub gamma_ratios: [f32; 4],
+@@ -49,6 +53,10 @@
+     width: u32,
+     height: u32,
+ 
++    /// Textures of the owned video surfaces drawn last frame, keyed by stream id. They belong to
++    /// the current device, so a device loss clears them.
++    owned_surfaces: std::collections::HashMap<u64, OwnedSurfaceTextures>,
++
+     /// Whether we want to skip drwaing due to device lost events.
+     ///
+     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
+@@ -92,12 +100,33 @@
+     mono_sprites: PipelineState<MonochromeSprite>,
+     subpixel_sprites: PipelineState<SubpixelSprite>,
+     poly_sprites: PipelineState<PolychromeSprite>,
++    surfaces: PipelineState<SurfaceSprite>,
+ }
+ 
++/// The luma (R8) and interleaved chroma (R8G8, half size) textures of one owned video stream,
++/// reused while its size holds; uploaded only when the frame generation changes.
++struct OwnedSurfaceTextures {
++    size: Size<DevicePixels>,
++    uploaded_generation: Option<u64>,
++    luma: ID3D11Texture2D,
++    chroma: ID3D11Texture2D,
++    views: [Option<ID3D11ShaderResourceView>; 2],
++}
++
++/// One owned surface in the instance buffer; mirrors `SurfaceSprite` in shaders.hlsl.
++#[derive(Clone, Copy)]
++#[repr(C)]
++struct SurfaceSprite {
++    bounds: Bounds<ScaledPixels>,
++    content_mask: Bounds<ScaledPixels>,
++    ycbcr_to_rgb: [[f32; 4]; 4],
++}
++
+ struct DirectXGlobalElements {
+     global_params_buffer: Option<ID3D11Buffer>,
+     batch_params_buffer: Option<ID3D11Buffer>,
+     sampler: Option<ID3D11SamplerState>,
++    surface_sampler: Option<ID3D11SamplerState>,
+ }
+ 
+ struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
+@@ -193,6 +222,7 @@
+             font_info: Self::get_font_info(),
+             width: 1,
+             height: 1,
++            owned_surfaces: std::collections::HashMap::new(),
+             skip_draws: false,
+         })
+     }
+@@ -272,6 +302,7 @@
+             }
+ 
+             self.resources.take();
++            self.owned_surfaces.clear();
+             if let Some(devices) = &self.devices {
+                 devices.device_context.OMSetRenderTargets(None, None);
+                 devices.device_context.ClearState();
+@@ -371,7 +402,9 @@
+                 PrimitiveBatch::PolychromeSprites { texture_id, range } => {
+                     self.draw_polychrome_sprites(texture_id, range.start, range.len())
+                 }
+-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
++                PrimitiveBatch::Surfaces(range) => {
++                    self.draw_surfaces(range.start, &scene.surfaces[range])
++                }
+             }
+             .with_context(|| {
+                 format!(
+@@ -486,6 +519,92 @@
+             )?;
+         }
+ 
++        if !scene.surfaces.is_empty() {
++            let sprites = scene
++                .surfaces
++                .iter()
++                .map(|surface| SurfaceSprite {
++                    bounds: surface.bounds,
++                    content_mask: surface.content_mask.bounds,
++                    ycbcr_to_rgb: surface.frame.ycbcr_to_rgb(),
++                })
++                .collect::<Vec<_>>();
++            self.pipelines.surfaces.update_buffer(
++                &devices.device,
++                &devices.device_context,
++                &sprites,
++            )?;
++        }
++        self.prepare_owned_surfaces(scene)
++    }
++
++    /// Uploads every owned video frame of the scene whose generation changed into its stream's
++    /// textures and releases the textures of streams absent from this scene.
++    fn prepare_owned_surfaces(&mut self, scene: &Scene) -> Result<()> {
++        let devices = self.devices.as_ref().context("devices missing")?;
++        self.owned_surfaces
++            .retain(|id, _| scene.surfaces.iter().any(|surface| surface.frame.id() == *id));
++
++        for surface in &scene.surfaces {
++            let frame = &surface.frame;
++            let id = frame.id();
++            if frame.width() > MAX_SURFACE_TEXTURE_DIMENSION
++                || frame.height() > MAX_SURFACE_TEXTURE_DIMENSION
++            {
++                log::warn!(
++                    "owned surface {}x{} exceeds the maximum texture size {}",
++                    frame.width(),
++                    frame.height(),
++                    MAX_SURFACE_TEXTURE_DIMENSION
++                );
++                self.owned_surfaces.remove(&id);
++                continue;
++            }
++
++            if self
++                .owned_surfaces
++                .get(&id)
++                .is_some_and(|textures| textures.size != frame.size())
++            {
++                self.owned_surfaces.remove(&id);
++            }
++            if !self.owned_surfaces.contains_key(&id) {
++                match OwnedSurfaceTextures::new(&devices.device, frame.size()) {
++                    Ok(textures) => {
++                        self.owned_surfaces.insert(id, textures);
++                    }
++                    Err(error) => {
++                        log::error!("creating owned surface textures: {error:#}");
++                        continue;
++                    }
++                }
++            }
++            let Some(textures) = self.owned_surfaces.get_mut(&id) else {
++                continue;
++            };
++            if textures.uploaded_generation != Some(frame.generation()) {
++                let (width, height) = (frame.width(), frame.height());
++                let (luma, luma_stride) = frame.luma();
++                let (chroma, chroma_stride) = frame.chroma();
++                upload_surface_plane(
++                    &devices.device_context,
++                    &textures.luma,
++                    luma,
++                    luma_stride,
++                    width,
++                    height,
++                );
++                upload_surface_plane(
++                    &devices.device_context,
++                    &textures.chroma,
++                    chroma,
++                    chroma_stride,
++                    width.div_ceil(2) * 2,
++                    height.div_ceil(2),
++                );
++                textures.uploaded_generation = Some(frame.generation());
++            }
++        }
+         Ok(())
+     }
+ 
+@@ -716,10 +835,52 @@
+         )
+     }
+ 
+-    fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
++    fn draw_surfaces(&mut self, start: usize, surfaces: &[PaintSurface]) -> Result<()> {
+         if surfaces.is_empty() {
+             return Ok(());
+         }
++        let devices = self.devices.as_ref().context("devices missing")?;
++        let batch_params_buffer = self
++            .globals
++            .batch_params_buffer
++            .as_ref()
++            .context("batch params buffer missing")?;
++        let pipeline = &self.pipelines.surfaces;
++        anyhow::ensure!(
++            start + surfaces.len() <= pipeline.buffer_size,
++            "DirectX instance range exceeds the {} buffer",
++            pipeline.label
++        );
++        for (offset, surface) in surfaces.iter().enumerate() {
++            // A frame that could not be uploaded (too large, texture creation failed) is skipped.
++            let Some(textures) = self.owned_surfaces.get(&surface.frame.id()) else {
++                continue;
++            };
++            update_batch_start(
++                &devices.device_context,
++                batch_params_buffer,
++                (start + offset) as u32,
++            )?;
++            set_pipeline_state(
++                &devices.device_context,
++                slice::from_ref(&pipeline.view),
++                D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
++                &pipeline.vertex,
++                &pipeline.fragment,
++                &pipeline.blend_state,
++            );
++            // SAFETY: the sampler and both views were created on this device and stay alive for
++            // the draw; slots s1, t2 and t3 are the ones shaders.hlsl declares for surfaces.
++            unsafe {
++                devices
++                    .device_context
++                    .PSSetSamplers(1, Some(slice::from_ref(&self.globals.surface_sampler)));
++                devices
++                    .device_context
++                    .PSSetShaderResources(2, Some(textures.views.as_slice()));
++                devices.device_context.DrawInstanced(4, 1, 0, 0);
++            }
++        }
+         Ok(())
+     }
+ 
+@@ -900,6 +1061,13 @@
+             16,
+             create_blend_state(device)?,
+         )?;
++        let surfaces = PipelineState::new(
++            device,
++            "surface_pipeline",
++            ShaderModule::Surface,
++            4,
++            create_blend_state(device)?,
++        )?;
+ 
+         Ok(Self {
+             shadow_pipeline,
+@@ -910,6 +1078,7 @@
+             mono_sprites,
+             subpixel_sprites,
+             poly_sprites,
++            surfaces,
+         })
+     }
+ }
+@@ -959,11 +1128,31 @@
+             device.CreateSamplerState(&desc, Some(&mut output))?;
+             output
+         };
++        // Video frames clamp at the edges: wrapping would blend the opposite edge into the
++        // border pixels under linear filtering.
++        let surface_sampler = unsafe {
++            let desc = D3D11_SAMPLER_DESC {
++                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
++                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
++                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
++                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
++                MipLODBias: 0.0,
++                MaxAnisotropy: 1,
++                ComparisonFunc: D3D11_COMPARISON_ALWAYS,
++                BorderColor: [0.0; 4],
++                MinLOD: 0.0,
++                MaxLOD: D3D11_FLOAT32_MAX,
++            };
++            let mut output = None;
++            device.CreateSamplerState(&desc, Some(&mut output))?;
++            output
++        };
+ 
+         Ok(Self {
+             global_params_buffer,
+             batch_params_buffer,
+             sampler,
++            surface_sampler,
+         })
+     }
+ }
+@@ -1169,6 +1358,93 @@
+     }
+ }
+ 
++impl OwnedSurfaceTextures {
++    fn new(device: &ID3D11Device, size: Size<DevicePixels>) -> Result<Self> {
++        let width = size.width.0 as u32;
++        let height = size.height.0 as u32;
++        let luma = create_surface_plane_texture(device, width, height, DXGI_FORMAT_R8_UNORM)?;
++        let chroma = create_surface_plane_texture(
++            device,
++            width.div_ceil(2),
++            height.div_ceil(2),
++            DXGI_FORMAT_R8G8_UNORM,
++        )?;
++        let mut views = [None, None];
++        // SAFETY: both textures were just created on `device` with BIND_SHADER_RESOURCE, and
++        // each out pointer is a live slot of `views`.
++        unsafe {
++            device.CreateShaderResourceView(&luma, None, Some(&mut views[0]))?;
++            device.CreateShaderResourceView(&chroma, None, Some(&mut views[1]))?;
++        }
++        Ok(Self {
++            size,
++            uploaded_generation: None,
++            luma,
++            chroma,
++            views,
++        })
++    }
++}
++
++fn create_surface_plane_texture(
++    device: &ID3D11Device,
++    width: u32,
++    height: u32,
++    format: DXGI_FORMAT,
++) -> Result<ID3D11Texture2D> {
++    let desc = D3D11_TEXTURE2D_DESC {
++        Width: width,
++        Height: height,
++        MipLevels: 1,
++        ArraySize: 1,
++        Format: format,
++        SampleDesc: DXGI_SAMPLE_DESC {
++            Count: 1,
++            Quality: 0,
++        },
++        Usage: D3D11_USAGE_DEFAULT,
++        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
++        CPUAccessFlags: 0,
++        MiscFlags: 0,
++    };
++    let mut texture = None;
++    // SAFETY: `desc` is a fully initialised descriptor without initial data, and the out pointer
++    // is a live local.
++    unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }?;
++    texture.context("CreateTexture2D returned no owned surface texture")
++}
++
++/// Copies `rows` rows of `row_bytes` bytes, `stride` bytes apart, into the whole of `texture`.
++/// UpdateSubresource reads `stride * rows` bytes, so a plane whose last row is shorter than the
++/// stride is first packed tight.
++/// https://learn.microsoft.com/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource
++fn upload_surface_plane(
++    device_context: &ID3D11DeviceContext,
++    texture: &ID3D11Texture2D,
++    plane: &[u8],
++    stride: u32,
++    row_bytes: u32,
++    rows: u32,
++) {
++    let packed: Vec<u8>;
++    let (data, pitch) = if plane.len() >= stride as usize * rows as usize {
++        (plane, stride)
++    } else {
++        packed = plane
++            .chunks(stride as usize)
++            .take(rows as usize)
++            .flat_map(|row| &row[..row_bytes as usize])
++            .copied()
++            .collect();
++        (packed.as_slice(), row_bytes)
++    };
++    // SAFETY: `data` holds `pitch * rows` bytes (checked above or packed tight), which is what
++    // UpdateSubresource reads for the whole subresource of a `row_bytes`-wide, `rows`-high texture.
++    unsafe {
++        device_context.UpdateSubresource(texture, 0, None, data.as_ptr() as _, pitch, 0);
++    }
++}
++
+ #[derive(Clone, Copy)]
+ #[repr(C)]
+ struct PathRasterizationSprite {
+@@ -1619,6 +1895,7 @@
+         MonochromeSprite,
+         SubpixelSprite,
+         PolychromeSprite,
++        Surface,
+         EmojiRasterization,
+     }
+ 
+@@ -1693,6 +1970,10 @@
+                     ShaderTarget::Vertex => POLYCHROME_SPRITE_VERTEX_BYTES,
+                     ShaderTarget::Fragment => POLYCHROME_SPRITE_FRAGMENT_BYTES,
+                 },
++                ShaderModule::Surface => match target {
++                    ShaderTarget::Vertex => SURFACE_VERTEX_BYTES,
++                    ShaderTarget::Fragment => SURFACE_FRAGMENT_BYTES,
++                },
+                 ShaderModule::EmojiRasterization => match target {
+                     ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
+                     ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
+@@ -1783,6 +2064,7 @@
+                 ShaderModule::MonochromeSprite => "monochrome_sprite",
+                 ShaderModule::SubpixelSprite => "subpixel_sprite",
+                 ShaderModule::PolychromeSprite => "polychrome_sprite",
++                ShaderModule::Surface => "surface",
+                 ShaderModule::EmojiRasterization => "emoji_rasterization",
+             }
+         }
+diff -ruN a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
+--- a/crates/gpui_windows/src/shaders.hlsl	2026-11-03 12:45:20
++++ b/crates/gpui_windows/src/shaders.hlsl	2026-11-03 12:45:34
+@@ -1266,3 +1266,63 @@
+     color.a *= sprite.opacity * saturate(0.5 - distance);
+     return color;
+ }
++
++/*
++**
++**              Surfaces
++**
++*/
++
++// An owned NV12 video frame: luma in an R8 texture, interleaved CbCr in an R8G8 texture at half
++// resolution, converted with the frame's own matrix. The matrix travels as its four columns so
++// the result does not depend on HLSL matrix packing.
++struct SurfaceSprite {
++    Bounds bounds;
++    Bounds content_mask;
++    float4 ycbcr_to_rgb_0;
++    float4 ycbcr_to_rgb_1;
++    float4 ycbcr_to_rgb_2;
++    float4 ycbcr_to_rgb_3;
++};
++
++struct SurfaceVertexOutput {
++    nointerpolation uint sprite_id: TEXCOORD0;
++    float4 position: SV_Position;
++    float2 texture_position: POSITION;
++    float4 clip_distance: SV_ClipDistance;
++};
++
++struct SurfaceFragmentInput {
++    nointerpolation uint sprite_id: TEXCOORD0;
++    float4 position: SV_Position;
++    float2 texture_position: POSITION;
++};
++
++StructuredBuffer<SurfaceSprite> surface_sprites: register(t1);
++Texture2D<float> t_surface_luma: register(t2);
++Texture2D<float2> t_surface_chroma: register(t3);
++SamplerState s_surface: register(s1);
++
++SurfaceVertexOutput surface_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
++    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
++    uint sprite_id = batch_start_index + instance_id;
++    SurfaceSprite sprite = surface_sprites[sprite_id];
++
++    SurfaceVertexOutput output;
++    output.position = to_device_position(unit_vertex, sprite.bounds);
++    output.texture_position = unit_vertex;
++    output.sprite_id = sprite_id;
++    output.clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds, sprite.content_mask);
++    return output;
++}
++
++float4 surface_fragment(SurfaceFragmentInput input): SV_Target {
++    SurfaceSprite sprite = surface_sprites[input.sprite_id];
++    float y = t_surface_luma.Sample(s_surface, input.texture_position);
++    float2 cb_cr = t_surface_chroma.Sample(s_surface, input.texture_position);
++    float4 rgb = sprite.ycbcr_to_rgb_0 * y
++        + sprite.ycbcr_to_rgb_1 * cb_cr.x
++        + sprite.ycbcr_to_rgb_2 * cb_cr.y
++        + sprite.ycbcr_to_rgb_3;
++    return float4(saturate(rgb.rgb), 1.0);
++}

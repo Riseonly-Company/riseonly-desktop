@@ -1,0 +1,217 @@
+name: build
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      linux: ${{ steps.plan.outputs.linux }}
+      windows: ${{ steps.plan.outputs.windows }}
+      macos: ${{ steps.plan.outputs.macos }}
+      tests: ${{ steps.plan.outputs.tests }}
+      environment: ${{ steps.plan.outputs.environment }}
+      profile: ${{ steps.plan.outputs.profile }}
+      version: ${{ steps.plan.outputs.version }}
+      build_number: ${{ steps.plan.outputs.build_number }}
+      slug: ${{ steps.plan.outputs.slug }}
+      sha: ${{ steps.plan.outputs.sha }}
+      tools_repo: ${{ steps.plan.outputs.tools_repo }}
+      tools_ref: ${{ steps.plan.outputs.tools_ref }}
+      rust: ${{ steps.plan.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github
+            scripts/ci
+            Cargo.toml
+          sparse-checkout-cone-mode: false
+      - name: Labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          ACTION: ${{ github.event.action }}
+        run: bash scripts/ci/labels.sh
+      - id: plan
+        name: Plan
+        run: python3 scripts/ci/plan.py build | tee -a "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: [self-hosted, linux, x64, riseonly-desktop-linux]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: fmt, boundaries, module tree, canon locales
+        run: bash riseonly-desktop/scripts/ci/in-toolchain.sh target-lint bash scripts/ci/lint.sh
+
+  linux:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true'
+    runs-on: [self-hosted, linux, x64, riseonly-desktop-linux]
+    timeout-minutes: 120
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
+        run: |
+          rm -rf riseonly-desktop/dist
+          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-linux
+          path: riseonly-desktop/dist/linux/
+          retention-days: 7
+          if-no-files-found: error
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
+    runs-on: [self-hosted, linux, x64, riseonly-desktop-windows]
+    timeout-minutes: 120
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
+        run: |
+          rm -rf riseonly-desktop/dist
+          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows
+          path: riseonly-desktop/dist/windows/
+          retention-days: 7
+          if-no-files-found: error
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.macos == 'true'
+    runs-on: ${{ fromJSON(vars.DESKTOP_MACOS_RUNNER || '"macos-15"') }}
+    timeout-minutes: 150
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: ${{ needs.plan.outputs.rust }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: riseonly-desktop -> target
+          key: ${{ needs.plan.outputs.profile }}
+          cache-on-failure: true
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: riseonly-desktop/vendor/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('riseonly-desktop/scripts/build-ffmpeg-lgpl.sh') }}
+      - run: brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
+      - name: build ${{ needs.plan.outputs.environment }} (${{ needs.plan.outputs.profile }})
+        working-directory: riseonly-desktop
+        run: |
+          rm -rf dist
+          bash scripts/ci/build-macos.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-macos
+          path: riseonly-desktop/dist/macos/
+          retention-days: 7
+          if-no-files-found: error
+
+  tests:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.tests == 'true'
+    runs-on: [self-hosted, linux, x64, riseonly-desktop-linux]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: riseonly-desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          token: ${{ secrets.RISEONLY_TOOLS_TOKEN }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: cargo test and clippy
+        run: bash riseonly-desktop/scripts/ci/in-toolchain.sh target-tests bash scripts/ci/test.sh

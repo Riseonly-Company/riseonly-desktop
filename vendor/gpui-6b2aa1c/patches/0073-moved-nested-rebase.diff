@@ -1,0 +1,105 @@
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -548,6 +548,74 @@
+         };
+         state.paint_range = range;
+         state.painted_frame = frame;
++    });
++}
++
++/// Riseonly 0073: a cached view that replays at a new origin (a list cell on a wheel step, 0041)
++/// copies the prepaint of every cached view nested in it, moved by the same offset, but their
++/// states kept the ranges, frame and origin of the render that recorded them. The next frame that
++/// renders the outer view (one notify of a preview in the cell) found each nested view a frame
++/// behind (prepaint_gap) and rendered it too: preview, backdrop and every gift surface of the cell
++/// on each wheel step that touched it (X1343). Each nested view prepainted and painted in the frame
++/// just before now takes the range its prepaint was copied to, this frame, and its old key moved
++/// by the offset, as if it had replayed moved itself; its paint follows in the paint pass (0063).
++/// The new mask of a nested view is known only when the outer mask moved along with the view (the
++/// nested one moved the same) or stayed and was the nested one too; otherwise it renders as before.
++/// A nested view that listens to the mouse keeps the old origin in its element states, so it is
++/// marked moved and renders when the mouse is over it (0044).
++fn rebase_moved_nested_views(
++    old: &Range<PrepaintStateIndex>,
++    replayed: &Range<PrepaintStateIndex>,
++    offset: Point<Pixels>,
++    old_mask: &ContentMask<Pixels>,
++    new_mask: &ContentMask<Pixels>,
++    window: &mut Window,
++) {
++    let frame = window.draw_count;
++    let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.001;
++    let mask_moved_along = near(new_mask.bounds.origin.x, old_mask.bounds.origin.x + offset.x)
++        && near(new_mask.bounds.origin.y, old_mask.bounds.origin.y + offset.y)
++        && new_mask.bounds.size == old_mask.bounds.size;
++    let mask_stayed = new_mask == old_mask;
++    if !mask_moved_along && !mask_stayed {
++        return;
++    }
++    window.update_replayed_states(replayed, view_element_state_type_id(), |state, window| {
++        let Some(Some(state)) = state.downcast_mut::<Option<ViewElementState>>() else {
++            return;
++        };
++        if state.prepainted_frame + 1 != frame
++            || state.painted_frame + 1 != frame
++            || state.dropped_deferred
++            || state.stale_while_hidden
++            || state.parked.is_some()
++            || state.moved_by.is_some()
++        {
++            return;
++        }
++        let content_mask = if mask_moved_along {
++            ContentMask {
++                bounds: Bounds {
++                    origin: state.cache_key.content_mask.bounds.origin + offset,
++                    size: state.cache_key.content_mask.bounds.size,
++                },
++            }
++        } else if state.cache_key.content_mask == *old_mask {
++            new_mask.clone()
++        } else {
++            return;
++        };
++        let Some(range) = PrepaintStateIndex::rebase_within(&state.prepaint_range, old, &replayed.start)
++        else {
++            return;
++        };
++        if window.paint_range_listens(&state.paint_range) {
++            state.positions_moved = true;
++        }
++        state.prepaint_range = range;
++        state.prepainted_frame = frame;
++        state.cache_key.bounds.origin = state.cache_key.bounds.origin + offset;
++        state.cache_key.content_mask = content_mask;
+     });
+ }
+ 
+@@ -688,6 +756,15 @@
+                                 .cached_views
+                                 .push((entity_id, state.accessed_entities.clone()));
+                             let prepaint_end = window.prepaint_index();
++                            // Riseonly 0073: the cached views inside moved with it.
++                            rebase_moved_nested_views(
++                                &state.prepaint_range,
++                                &(prepaint_start.clone()..prepaint_end.clone()),
++                                offset,
++                                &state.cache_key.content_mask,
++                                &content_mask,
++                                window,
++                            );
+                             state.prepaint_range = prepaint_start..prepaint_end;
+                             state.prepainted_frame = window.draw_count;
+                             state.cache_key.bounds = bounds;
+@@ -869,7 +946,10 @@
+                                 match element_state.moved_by.take() {
+                                     // Riseonly 0041: the prepaint replayed at a new origin.
+                                     Some(offset) => {
+-                                        window.reuse_moved_paint(range, offset);
++                                        window.reuse_moved_paint(range.clone(), offset);
++                                        // Riseonly 0073: the cached views inside moved with it.
++                                        let replayed = paint_start.clone()..window.paint_index();
++                                        rebase_nested_paints(&range, &replayed, window);
+                                         // Riseonly 0065: a moved replay keeps the opacity it was
+                                         // painted with, so a view moving inside a fade shows the
+                                         // old opacity once and renders in the next frame.
