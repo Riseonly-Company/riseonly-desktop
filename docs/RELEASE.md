@@ -86,8 +86,9 @@ A failed hook is a warning, the feed is already out.
   idle. Below 25 GB free the other desktop target dirs are dropped before a build.
 - macOS builds on `macos-15` (GitHub hosted, Apple silicon), one job per architecture: `aarch64`
   natively and `x86_64` for Intel Macs cross compiled on the same runner (`MACOS_ARCH=x86_64`: rust
-  target `x86_64-apple-darwin`, FFmpeg built under Rosetta with nasm, the MapLibre core built from
-  source because maplibre-native publishes no prebuilt Intel macOS core, so that job takes longer).
+  target `x86_64-apple-darwin`, FFmpeg built under Rosetta with nasm and found by pkg-config only in
+  `vendor/ffmpeg/macos-x86_64`, the MapLibre core built from source with ninja because
+  maplibre-native publishes no prebuilt Intel macOS core, so that job takes longer).
   A self-hosted mac is used instead when the variable `DESKTOP_MACOS_RUNNER` is set, eg
   `["self-hosted","macOS","ARM64"]`.
 

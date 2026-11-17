@@ -177,7 +177,7 @@ jobs:
           key: ffmpeg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('riseonly-desktop/scripts/build-ffmpeg-lgpl.sh') }}
       - run: brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
       - if: matrix.arch == 'x86_64'
-        run: brew list nasm >/dev/null 2>&1 || brew install nasm
+        run: brew list nasm ninja >/dev/null 2>&1 || brew install nasm ninja
       - name: build, sign and notarize ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
         working-directory: riseonly-desktop
         env:

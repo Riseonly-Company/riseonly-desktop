@@ -22,6 +22,11 @@ case "$arch" in
         ;;
     *) echo "MACOS_ARCH is aarch64 or x86_64, not $arch" >&2; exit 1 ;;
 esac
+export FFMPEG_PKG_CONFIG_PATH="$PWD/vendor/ffmpeg/macos-$ffmpeg_arch/lib/pkgconfig"
+if [ "$arch" = x86_64 ]; then
+    export PKG_CONFIG_ALLOW_CROSS_x86_64_apple_darwin=1
+    export PKG_CONFIG_LIBDIR_x86_64_apple_darwin="$FFMPEG_PKG_CONFIG_PATH"
+fi
 
 ./scripts/vendor-rlottie.sh
 if [ ! -d "vendor/ffmpeg/macos-$ffmpeg_arch/lib" ]; then
