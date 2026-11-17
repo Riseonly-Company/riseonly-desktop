@@ -144,6 +144,12 @@ if [ -n "$(linked_ffmpeg "$EXE")" ]; then
     echo "ffmpeg: $(ls "$FRAMEWORKS" | tr '\n' ' ')"
 fi
 
+# why: an x86_64 binary targets macOS 10.12 and names the Swift runtime by @rpath; the system copy is in /usr/lib/swift
+if [ "$(otool -L "$EXE" | grep -c '@rpath/libswift')" != 0 ] &&
+    [ "$(otool -l "$EXE" | grep -c 'path /usr/lib/swift ')" = 0 ]; then
+    install_name_tool -add_rpath /usr/lib/swift "$EXE"
+fi
+
 for tree in "$ROOT"/vendor/rlottie/rlottie-*/; do
     [ -d "$tree" ] || continue
     tree="${tree%/}"

@@ -63,6 +63,7 @@ ENVIRONMENT="$ENVIRONMENT" SLUG="$SLUG" VERSION="$VERSION" LATEST_URL="$latest_u
     python3 "$here/releases.py" "$work/feed.json" "$work/releases-current.json" \
     "$work/releases.json" "$work/index.html" "$work/latest-copies.tsv"
 purge_urls=("$feed_url" "$feed_url.sig" "${DOWNLOADS_BASE%/}/$ENVIRONMENT/releases.json" "$index_url")
+for file in "${files[@]}"; do purge_urls+=("$base_url/$(basename "$file")"); done
 while IFS=$'\t' read -r name latest; do
     source_file=$(printf '%s\n' "${files[@]}" | awk -F/ -v n="$name" '$NF == n' | head -n 1)
     [ -n "$source_file" ] || { echo "no local file for $name" >&2; exit 1; }
@@ -91,6 +92,7 @@ if [ "$ENVIRONMENT" = production ]; then
     gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
         --title "$SLUG $VERSION" --notes-file "$notes" "${files[@]}"
 else
+    gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
     gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --draft --prerelease \
         --title "$SLUG $VERSION ($BUILD_NUMBER)" --notes-file "$notes" "${files[@]}"
 fi
