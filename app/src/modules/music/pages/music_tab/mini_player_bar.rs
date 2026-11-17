@@ -141,7 +141,7 @@ impl MiniPlayerBar {
 
     /// for the host this ends the session for everyone
     /// so it asks the same confirmation as the session screen
-    pub(crate) fn dismiss(cx: &mut App) {
+    pub fn dismiss(cx: &mut App) {
         let player = MusicPlayerState::shared(cx);
         let needs_confirmation = {
             let player = player.read(cx);

@@ -15,7 +15,7 @@ use crate::core::lib::sai::modules::sai_updater::sai_updater::{SaiUpdater, SaiUp
 use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{SaiWsCachePreferredLayer, SaiWsDiskCachePolicy};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomainRegistry;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::chat_stores_user_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::{ChatActionsStore, effective_user_id_for_wire};
 use crate::modules::chat::stores::chats::chat_actions::chat_folder_types::{
@@ -121,19 +121,15 @@ impl ChatServicesStore {
     pub fn folders_in_order(&self, cx: &App) -> Vec<ChatFolder> {
         let mut ordered = self.folders.clone();
         ordered.sort_by_key(|folder| folder.position);
-        match GuideSandbox::existing(cx) {
-            Some(sandbox) => sandbox.read(cx).overlay_folders(ordered),
-            None => ordered,
-        }
+        (chat_guide_sandbox_hooks().overlay_folders)(ordered, cx)
     }
 
     pub fn folder(&self, id: &str, cx: &App) -> Option<ChatFolder> {
-        self.folders.iter().find(|folder| folder.id == id).cloned().or_else(|| {
-            GuideSandbox::existing(cx).and_then(|sandbox| {
-                let scene = sandbox.read(cx).folder_scene.as_ref()?;
-                scene.invented.iter().find(|folder| folder.id == id).cloned()
-            })
-        })
+        self.folders
+            .iter()
+            .find(|folder| folder.id == id)
+            .cloned()
+            .or_else(|| (chat_guide_sandbox_hooks().invented_folder)(id, cx))
     }
 
     pub fn chats(&self, for_folder: &ChatFolder, source: &[ChatInfo]) -> Vec<ChatInfo> {

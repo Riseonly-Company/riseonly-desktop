@@ -5965,5 +5965,7 @@
   "media_editor_discard_title": "Одбацити измене?",
   "media_editor_discard_confirm": "Одбаци измене",
   "media_editor_discard_keep": "Настави уређивање",
-  "story_canvas_photos_limit_reached": "Можете додати највише %d фотографија"
+  "story_canvas_photos_limit_reached": "Можете додати највише %d фотографија",
+  "error_rtc_overloaded": "Позиви су тренутно под великим оптерећењем. Да би позиви у току остали стабилни, нови су накратко паузирани. Покушајте поново мало касније",
+  "overload_modal_title": "Тренутно је велико оптерећење"
 }

@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::guides::engine::rise_guides_domain::RiseGuidesDomain;
 
-pub(crate) fn install_rise_guides_domain_hooks() {
+pub fn install_rise_guides_domain_hooks() {
     RiseAppEngineGuidesDomainHooks::install(RiseAppEngineGuidesDomainHooks {
         prepare: Box::new(|context| {
             async move {

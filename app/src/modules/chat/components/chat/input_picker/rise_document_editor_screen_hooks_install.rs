@@ -28,6 +28,6 @@ fn chat_input_picker_panel(panel: RiseDocumentEditorPickerPanel, _: &mut Window,
     .into_any_element()
 }
 
-pub(crate) fn install_rise_document_editor_screen_hooks() {
+pub fn install_rise_document_editor_screen_hooks() {
     set_rise_document_editor_hooks(RiseDocumentEditorHooks { chat_input_picker_panel });
 }

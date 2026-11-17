@@ -11,7 +11,7 @@ use crate::modules::chat::stores::message::message_services::message_services::{
     MessageHistoryWarmCacheLimits, MessageHistoryWarmCachePolicy, MessageServicesStore,
 };
 
-pub(crate) fn install_chat_engine_hooks() {
+pub fn install_chat_engine_hooks() {
     set_chat_engine_hooks(ChatEngineHooks {
         get_chat_by_id_action: |chat_id, force, cx| {
             ChatActionsStore::shared(cx).update(cx, |store, cx| store.get_chat_by_id_action(chat_id, force, cx));

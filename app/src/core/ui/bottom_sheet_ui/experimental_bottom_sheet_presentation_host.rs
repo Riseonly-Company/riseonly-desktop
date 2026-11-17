@@ -2,8 +2,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Context, ElementId, Entity, Global, IntoElement, RenderOnce, SharedString,
-    StyleRefinement, Subscription, Task, Window, anchored, deferred, };
+    AnyElement, App, Context, ElementId, Empty, Entity, Global, IntoElement, RenderOnce, SharedString,
+    Subscription, Task, Window, anchored, deferred, };
 use rise_ui::window_cover::WindowCoverFrame;
 use rise_ui::bottom_sheet_ui::bottom_sheet_metrics::BottomSheetMetrics;
 use rise_ui::guide_anchor_ui::guide_anchor_registry::{GuideAnchorCoverKind, GuideAnchorCoverModifiers};
@@ -11,7 +11,7 @@ use rise_ui::swiftui::prelude::*;
 use rise_ui::top_presenter::{InsidePresentedLayerKey, TopPresenter};
 
 use crate::core::lib::sai::sai::Sai;
-use crate::modules::chat::components::chat::input_picker::sticker_hold_overlay::StickerHoldOverlay;
+use crate::core::ui::bottom_sheet_ui::sticker_hold_overlay_hooks::sticker_hold_overlay_hooks;
 
 type HostAction = Rc<dyn Fn(&mut Window, &mut App)>;
 type HostContent = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
@@ -33,7 +33,7 @@ struct SheetLayerRecord {
 /// layers open in the app, lowest first
 /// the presented controller chain
 #[derive(Default)]
-pub(crate) struct SheetLayerStack {
+pub struct SheetLayerStack {
     layers: Vec<SheetLayerRecord>,
     next_id: u64,
 }
@@ -73,14 +73,14 @@ impl SheetLayerStack {
 
     /// true when the presented chain ends at the root
     /// meaning no layer is open or the lowest is already retiring
-    pub(crate) fn top_is_root(cx: &App) -> bool {
+    pub fn top_is_root(cx: &App) -> bool {
         cx.try_global::<Self>()
             .and_then(|stack| stack.layers.first())
             .is_none_or(|layer| layer.is_retiring)
     }
 
     /// true when no sheet layer is up or retiring anywhere in the app
-    pub(crate) fn is_empty(cx: &App) -> bool {
+    pub fn is_empty(cx: &App) -> bool {
         cx.try_global::<Self>().is_none_or(|stack| stack.layers.is_empty())
     }
 
@@ -171,16 +171,9 @@ impl ExperimentalBottomSheetPresentationHost {
     }
 
     fn hosted_overlay(&self, window: &mut Window, cx: &mut App) -> AnyElement {
-        let overlay = window.use_keyed_state((self.id.clone(), "sticker-hold-overlay"), cx, |_, cx| {
-            StickerHoldOverlay::new(cx)
-        });
-        if overlay.read(cx).is_idle(cx) {
-            overlay
-                .cached(StyleRefinement::default().absolute().top_0().left_0().size_full())
-                .replay_when_moved()
-                .into_any_element()
-        } else {
-            div().absolute().inset_0().child(overlay).into_any_element()
+        match sticker_hold_overlay_hooks() {
+            Some(hooks) => (hooks.hosted_overlay)(self.id.clone(), window, cx),
+            None => Empty.into_any_element(),
         }
     }
 }

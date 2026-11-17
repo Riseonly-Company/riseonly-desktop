@@ -35,7 +35,7 @@ use crate::core::stores::http::http_service::HttpService;
 use crate::core::ui::clever_image_disk_cache::CleverImageDiskCache;
 use crate::modules::auth::services::auth_token_refresh::AuthTokenRefresh;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 use crate::modules::media_picker::export::outgoing_media_compressor::OutgoingMediaCompressorResult;
 use crate::modules::media_picker::export::rise_outgoing_media_file::RiseOutgoingMediaFile;
 

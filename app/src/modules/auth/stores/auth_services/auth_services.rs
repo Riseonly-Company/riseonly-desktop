@@ -56,14 +56,12 @@ use crate::modules::auth::stores::auth_actions::auth_wire_types::{
     AuthResetPasswordResponse, AuthSendCodeResponse, AuthSendCodeResponseExt, AuthUserDTO,
     RefreshTokenResponseExt,
 };
+use crate::modules::auth::stores::auth_actions::profile_model_hooks::ProfileModel;
 use crate::modules::auth::stores::auth_services::auth_services_guides_hooks::AuthServicesGuidesHooks;
 use crate::modules::auth::stores::auth_services::auth_services_notify_hooks::AuthServicesNotifyHooks;
+use crate::modules::auth::stores::auth_services::auth_services_share_hooks::auth_services_share_hooks;
 use crate::modules::auth::stores::auth_services::auth_services_user_hooks::AuthServicesUserHooks;
 use crate::modules::onboarding::pages::onboarding::onboarding_progress::OnboardingProgress;
-use crate::modules::share_extension::services::rise_share_app_bridge::RiseShareAppBridge;
-use crate::modules::share_extension::stores::share_targets::share_targets_interactions::ShareTargetsInteractionsStore;
-use crate::modules::share_extension::stores::share_targets::share_targets_services::ShareTargetsServicesStore;
-use crate::modules::user::stores::user::user_actions::user_types::ProfileModel;
 
 const DEFAULT_REGISTRATION_BOT_USERNAME: &str = "riseonly_bot";
 const ACCESS_TOKEN_LEEWAY_SECONDS: f64 = 30.0;
@@ -354,7 +352,9 @@ impl AuthServicesStore {
     pub fn set_tokens_and_other_data(&mut self, data: TokensAndOtherData, cx: &mut Context<Self>) {
         self.tokens_and_other_data = data;
         self.changed(cx);
-        RiseShareAppBridge::synchronize_credential(true);
+        if let Some(hooks) = auth_services_share_hooks() {
+            (hooks.synchronize_credential)(true);
+        }
         self.connect_web_socket_if_has_access_token(cx);
     }
 
@@ -414,9 +414,10 @@ impl AuthServicesStore {
         cx.defer(move |cx| {
             MaintenanceGate::shared(cx).update(cx, |gate, cx| gate.viewer_did_change(true, cx));
             Self::warm_account_avatar(Some(avatar_source), cx);
-            RiseShareAppBridge::synchronize_credential(false);
-            let targets = ShareTargetsServicesStore::shared(cx).read(cx).targets().to_vec();
-            RiseShareAppBridge::write_snapshot_keeping_persisted_targets(&targets, cx);
+            if let Some(hooks) = auth_services_share_hooks() {
+                (hooks.synchronize_credential)(false);
+                (hooks.write_snapshot_keeping_persisted_targets)(cx);
+            }
         });
     }
 
@@ -438,7 +439,9 @@ impl AuthServicesStore {
         refresh_request: Option<AuthTokenRefreshRequest>,
         cx: &mut App,
     ) -> Task<()> {
-        RiseShareAppBridge::reconcile_persisted_credential();
+        if let Some(hooks) = auth_services_share_hooks() {
+            (hooks.reconcile_persisted_credential)();
+        }
         let persisted = AuthLocalStorage::load_accounts();
         this.update(cx, |store, cx| {
             store.accounts = persisted.iter().map(Self::summary).collect();
@@ -637,7 +640,9 @@ impl AuthServicesStore {
                 expires_in(&access),
                 expires_in(&attempt.access_token)
             );
-            RiseShareAppBridge::synchronize_credential(true);
+            if let Some(hooks) = auth_services_share_hooks() {
+                (hooks.synchronize_credential)(true);
+            }
             cx.update(|cx| {
                 SaiWebSocketManager::shared(cx).update(cx, |manager, cx| manager.reconnect_with_access_token(&access, cx));
                 Sai::log("Auth", || "access token refreshed", SaiLogKind::Network, cx);
@@ -1504,7 +1509,9 @@ impl AuthServicesStore {
             account.user.avatar_url.clone().or_else(|| account.user.more.as_ref().and_then(|more| more.logo.clone())),
             cx,
         );
-        RiseShareAppBridge::synchronize_credential(false);
+        if let Some(hooks) = auth_services_share_hooks() {
+            (hooks.synchronize_credential)(false);
+        }
 
         if was_authenticated {
             PushNotificationManagerHooks::prepare_for_account_switch(cx);
@@ -1537,7 +1544,9 @@ impl AuthServicesStore {
             store.changed(cx);
         });
         MaintenanceGate::shared(cx).update(cx, |gate, cx| gate.viewer_did_change(false, cx));
-        ShareTargetsInteractionsStore::shared(cx).update(cx, |share_targets, cx| share_targets.sign_out(cx));
+        if let Some(hooks) = auth_services_share_hooks() {
+            (hooks.sign_out)(cx);
+        }
     }
 
     pub fn mark_account_blocked(&mut self, cx: &mut Context<Self>) -> bool {

@@ -20,7 +20,6 @@ use rise_platform::call_window::{
 use rise_platform::notifications::GpuiNotificationPresenter;
 
 use crate::app::shell::handover;
-use crate::app::shell::window_presenter::WindowPresenter;
 use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, RiseSubscription};
 use crate::core::lib::canon_errors::CanonErrors;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
@@ -40,7 +39,7 @@ use crate::modules::rtc::engine::rise_rtc_connection_wait_policy::{
 };
 use crate::modules::rtc::engine::rise_rtc_engine_models::RiseRTCStateError;
 use crate::modules::rtc::media::rise_rtc_ringback_player::RiseRTCRingbackPlayer;
-use crate::modules::rtc::pages::rise_rtc_room_presentation_host::RiseRTCRoomPresentationHost;
+use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 use crate::modules::rtc::system::rise_rtc_incoming_call_window::RiseRTCIncomingCallWindow;
 use crate::modules::rtc::system::rise_rtc_incoming_ringtone_player::RiseRTCIncomingRingtonePlayer;
 use crate::modules::rtc::system::rise_rtc_system_bridges::{
@@ -419,7 +418,9 @@ impl RiseRTCCallSystemCoordinator {
         };
         if let Some(live_uuid) = self.live_user_call_uuid() {
             Self::log("outgoing call refused: a call is already live, raising its window".to_owned(), cx);
-            cx.defer(RiseRTCRoomPresentationHost::activate_call_window);
+            if let Some(hooks) = rise_rtc_call_window_hooks() {
+                cx.defer(hooks.activate_call_window);
+            }
             return Task::ready(Ok(live_uuid));
         }
         let call_uuid = Uuid::new_v4();
@@ -1374,7 +1375,7 @@ impl RiseRTCCallSystemCoordinator {
         let opened = match cx.primary_display() {
             Some(display) => cx
                 .open_window(gpui::WindowOptions {
-                    app_id: WindowPresenter::app_id(),
+                    app_id: rise_rtc_call_window_hooks().and_then(|hooks| (hooks.app_id)()),
                     ..incoming_window_options(display.visible_bounds(), Some(display.id()))
                 }, move |window, cx| {
                     let _ = keep_call_window_above(window);

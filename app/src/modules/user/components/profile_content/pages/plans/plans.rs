@@ -22,9 +22,9 @@ use crate::core::ui::animated_tabs_ui::animated_tabs_pager::AnimatedTabsPagerLiv
 use crate::core::lib::canon_field_rule::RiseFieldRule;
 use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
-use crate::modules::chat::components::chat_item::chat_item::ChatsListRowActionsSuppressorKey;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui::ChatProfileEmptyState;
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::user::components::profile_content::pages::plans::chats_list_row_actions_suppressor_hooks::ChatsListRowActionsSuppressorKey;
 use crate::modules::user::components::profile_content::pages::profile_item_add_sheet::ProfileItemAddSheet;
 use crate::modules::user::stores::user::user_actions::user_types::{PlanDateFormatting, PlanItem};
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;

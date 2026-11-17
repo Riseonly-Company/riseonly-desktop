@@ -35,13 +35,13 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{
     SaiWsCachePreferredLayer, SaiWsRequestOptions, SaiWsRequestOptionsInit,
 };
 use crate::core::lib::sai::sai::Sai;
-use crate::core::widgets::overlay::premium_upsell_store::PremiumUpsellStore;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::music::engine::rise_music_domain::RiseMusicActionExecutor;
 use crate::modules::music::engine::rise_music_repository::RiseMusicLocalCover;
 use crate::modules::music::shared::utils::music::music_effect_file_player::MusicEffectPlaybackLimits;
 use crate::modules::music::shared::utils::music::music_models::MusicLocalTrackTransferPhase;
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
+use crate::modules::music::stores::music_actions::music_premium_upsell_hooks::music_premium_upsell_hooks;
 use crate::modules::music::stores::music_actions::music_types::{
     MusicLocalPlaylistDestination, MusicLocalTracksDeleteSnapshot, MusicPlaylistInvitePreview, MusicPlaylistJoinRequest, MusicPlaylistMember,
     MusicListeningAudioEffect, MusicListeningParticipantPermissions, MusicListeningSessionCommand,
@@ -872,7 +872,7 @@ impl MusicActionsStore {
             Self::log_network(format!("createPlaylist error: {error}"), cx);
             error_slice.reset_to_idle();
             if CanonErrors::failure(error).is_some_and(|failure| failure.subscription_lifts_limit())
-                && PremiumUpsellStore::shared(cx).read(cx).prompt().is_some()
+                && music_premium_upsell_hooks().is_some_and(|hooks| (hooks.has_prompt)(cx))
             {
                 return;
             }

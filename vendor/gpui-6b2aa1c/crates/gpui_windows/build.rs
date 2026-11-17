@@ -1,11 +1,20 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(gpui_runtime_shaders)");
     #[cfg(target_os = "windows")]
     {
         // Compile HLSL shaders
         #[cfg(not(debug_assertions))]
         compile_shaders();
+    }
+    // A build on another host has no fxc.exe: the renderer compiles the embedded HLSL at
+    // startup with the d3dcompiler_47.dll every Windows 10 and 11 ships.
+    #[cfg(not(target_os = "windows"))]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_none()
+    {
+        println!("cargo::rustc-cfg=gpui_runtime_shaders");
     }
 }
 

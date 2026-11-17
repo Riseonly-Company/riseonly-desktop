@@ -1560,7 +1560,7 @@ impl FormattedTextUi {
     /// same text as the rich one but selectable
     /// link runs keep their look and a tap on them goes to the hit layer since the press surface
     /// owner routes taps through it
-    pub(crate) fn selectable_body(id: ElementId, text: AttributedString, selection: FormattedTextSelection) -> AnyElement {
+    pub fn selectable_body(id: ElementId, text: AttributedString, selection: FormattedTextSelection) -> AnyElement {
         let characters: SharedString = text.characters().to_owned().into();
         let highlights = text.highlights(None);
         let overrides = RichText::new(id.clone(), text).font_family_overrides();

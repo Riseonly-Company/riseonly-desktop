@@ -54,6 +54,7 @@ use rise_widgets::overlay::blocking_loader_store::BlockingLoaderStore;
 
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::core::media::rise_media_transfer_hub::MediaViewerVideoCacheKey;
+use crate::core::media_viewer::media_letterbox_photo_hooks::{MediaAspectFit, MediaLetterboxPhoto};
 use crate::core::media_viewer::media_save_to_library::{MediaSaveToLibrary, MediaSaveToLibraryResult};
 use crate::core::media_viewer::media_viewer_countdown_badge::MediaViewerCountdownBadge;
 use crate::core::media_viewer::media_viewer_filmstrip::MediaViewerFilmstrip;
@@ -87,7 +88,6 @@ use crate::core::widgets::navigations::bottom_chrome_insets::BottomChromeInsetsM
 use crate::core::widgets::notifier::notifier_store::{
     Notifier, NotifierIcon, NotifierPosition, NotifierSendOptions, NotifierStore, NotifierType,
 };
-use crate::modules::chat::components::chat::bubble::media_letterbox_photo::{MediaAspectFit, MediaLetterboxPhoto};
 use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
 use crate::modules::post::components::download::post_download_store::PostDownloadSheetStore;
 use crate::modules::post::stores::post_services::post_services::PostServicesStore;

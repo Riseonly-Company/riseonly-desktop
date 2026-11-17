@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::guides::guide_signal_bus::GuideSignalBus;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::theme::stores::theme_guide_sandbox_hooks::theme_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatWallpaperPlacement;
 use crate::modules::theme::engine::core::rise_theme_wallpaper_wire_models::RiseWallpaperPreferences;
 
@@ -517,7 +517,7 @@ impl ChatWallpaperStore {
     }
 
     pub fn shows_chat_wallpaper(&self, chat_id: &str, cx: &App) -> bool {
-        if let Some(invented) = GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).shows_chat_wallpaper(chat_id)) {
+        if let Some(invented) = (theme_guide_sandbox_hooks().shows_chat_wallpaper)(chat_id, cx) {
             return invented;
         }
         ChatWallpaperResolutionPolicy::shows_chat_wallpaper(
@@ -535,7 +535,7 @@ impl ChatWallpaperStore {
         cx: &App,
     ) -> Option<ChatWallpaperRender> {
         if let Some(chat_id) = chat_id
-            && let Some(invented) = GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).shows_chat_wallpaper(chat_id))
+            && let Some(invented) = (theme_guide_sandbox_hooks().shows_chat_wallpaper)(chat_id, cx)
         {
             let use_own_wallpaper_in: HashSet<String> =
                 if invented { HashSet::new() } else { HashSet::from([chat_id.to_owned()]) };
@@ -578,7 +578,7 @@ impl ChatWallpaperStore {
         if !SaiAccountCacheScope::is_current_account_epoch(Some(account_id), Some(account_epoch)) {
             return;
         }
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_app_wallpaper_scene()) {
+        if (theme_guide_sandbox_hooks().owns_app_wallpaper_scene)(cx) {
             return;
         }
         self.set_image_wallpaper(id, url, look, cx);

@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::sparks::engine::rise_sparks_domain::RiseSparksDomain;
 
-pub(crate) fn install_rise_sparks_domain_hooks() {
+pub fn install_rise_sparks_domain_hooks() {
     RiseAppEngineSparksDomainHooks::install(RiseAppEngineSparksDomainHooks {
         prepare: Box::new(|context| {
             async move {

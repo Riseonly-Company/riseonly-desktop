@@ -19,6 +19,8 @@ use crate::modules::comment::widgets::comments_sheet::DockedCommentsSheetHost;
 use super::aside_memory::AsideMemory;
 use super::aside_registry::{self, AsideSection};
 
+pub use crate::modules::music::shared::utils::music::player_beside_hooks::{player_beside, set_player_beside};
+
 const BACK_SYMBOL: &str = "chevron.backward";
 const OPEN_IN_CENTRE_SYMBOL: &str = "arrow.up.left.and.arrow.down.right";
 const BACK_KEY: &str = "back";
@@ -840,21 +842,6 @@ fn with_frontmost(cx: &mut App, action: impl FnOnce(&mut AsideNavigator, &mut Co
         return;
     };
     navigator.update(cx, action);
-}
-
-struct PlayerBeside(bool);
-
-impl Global for PlayerBeside {}
-
-pub fn set_player_beside(shown: bool, cx: &mut App) {
-    if player_beside(cx) != shown {
-        cx.set_global(PlayerBeside(shown));
-        cx.refresh_windows();
-    }
-}
-
-pub fn player_beside(cx: &App) -> bool {
-    cx.try_global::<PlayerBeside>().is_some_and(|beside| beside.0)
 }
 
 pub fn frontmost_screen(cx: &App) -> Option<SaiActiveScreen> {

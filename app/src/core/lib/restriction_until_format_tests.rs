@@ -134,6 +134,20 @@ fn missing_deadline_means_until_lifted() {
 }
 
 #[test]
+fn overload_category_reaches_the_modal_with_the_phrase_of_the_code() {
+    let failure = failure(ErrorCode::RtcOverloaded.wire(), &[(ErrorParam::RetryAfterS, "5")]);
+    let refusal = RestrictionRefusal::new(&failure);
+    assert!(matches!(refusal, Some(RestrictionRefusal::Overload { text: Some(_) })));
+    assert!(!failure.is_restriction());
+}
+
+#[test]
+fn full_lane_is_not_a_modal() {
+    let failure = failure(ErrorCode::CommonCapacityExhausted.wire(), &[(ErrorParam::RetryAfterS, "2")]);
+    assert_eq!(RestrictionRefusal::new(&failure), None);
+}
+
+#[test]
 fn content_rejection_carries_violations_left() {
     let counted = failure(ErrorCode::ModerationContentRejected.wire(), &[(ErrorParam::ViolationsLeft, "2")]);
     let bare = failure(ErrorCode::ModerationContentRejected.wire(), &[]);

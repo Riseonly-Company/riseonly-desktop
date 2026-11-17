@@ -8,7 +8,7 @@ use crate::modules::story::shared::story_poster_cache::StoryPosterCache;
 use crate::modules::story::stores::story::story_interactions::story_interactions::StoryInteractionsStore;
 use crate::modules::story::stores::story::story_services::story_services::StoryServicesStore;
 
-pub(crate) fn install_account_state_reset_story_hooks() {
+pub fn install_account_state_reset_story_hooks() {
     set_account_state_reset_story_hooks(AccountStateResetStoryHooks {
         hard_reset_media_caches: |_: &mut App| {
             StoryMediaPrefetcher::reset_account_state();

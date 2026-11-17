@@ -32,7 +32,7 @@ use crate::modules::notify::engine::rise_notifications_presentation::{
 use crate::modules::notify::stores::notify_actions::notify_types::{NotificationItem, NotificationKind};
 use crate::modules::notify::stores::notify_interactions::notify_interactions::NotifyInteractionsStore;
 use crate::modules::notify::stores::notify_services::notify_services::NotifyServicesStore;
-use crate::modules::post::pages::posts::post_detail::profile_post_list_body::splice_list_rows;
+use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 
 #[derive(IntoElement)]
 pub struct AllNotifications {

@@ -298,6 +298,8 @@ fn panel_height_clamps_and_expands_to_available_space() {
             0,
             0,
             &[],
+            0,
+            0,
         ),
         48.0
     );
@@ -312,6 +314,8 @@ fn panel_height_clamps_and_expands_to_available_space() {
             0,
             1,
             &[],
+            0,
+            0,
         ),
         52.0
     );

@@ -3,7 +3,7 @@ use rise_widgets::wrappers::list_shell_header_collapse_hooks::ListShellHeaderCol
 
 use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_view::RiseManualListView;
 
-pub(crate) fn install_rise_manual_list_list_shell_hooks() {
+pub fn install_rise_manual_list_list_shell_hooks() {
     ListShellHeaderCollapseHooks {
         integration_scroll_view,
         content_top_offset_y,

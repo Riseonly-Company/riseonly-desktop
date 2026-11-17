@@ -25,7 +25,7 @@ fn route_link(url: &Url, _window: &mut Window, cx: &mut App) {
     InAppLinkBrowser::route(url, cx);
 }
 
-pub(crate) fn install_expandable_text_ui_hooks() {
+pub fn install_expandable_text_ui_hooks() {
     set_expandable_text_ui_hooks(ExpandableTextUiHooks {
         caption_link_tokens,
         hashtag_url: FormattedText::hashtag_url,

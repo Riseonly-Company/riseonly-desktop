@@ -7,7 +7,7 @@ use rise_i18n::{FormatArg, format_printf, tr};
 
 use crate::core::lib::canon_errors::RiseFailure;
 use crate::modules::chat::stores::message::message_actions::message_wire_types::{
-    FanoutRefusalDetailsWireDTO, MessageWireDTO,
+    FanoutRefusalDetailsWireDTO, MessageWireDTO, RiseFailureFanout,
 };
 
 #[derive(Clone, Debug, PartialEq)]

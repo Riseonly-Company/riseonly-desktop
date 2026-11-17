@@ -99,7 +99,7 @@ impl RiseonlyApp {
         let log_file = RiseLogFile::start();
         Self::install_tracing(log_file.clone());
 
-        let environment = AppEnvironment::compiled();
+        let environment = AppEnvironment::current();
         tracing::warn!(
             target: "riseonly::launch",
             version = %RiseReleaseNotesDeviceContext::app_version(),

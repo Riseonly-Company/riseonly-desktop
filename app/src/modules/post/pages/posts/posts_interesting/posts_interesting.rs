@@ -27,7 +27,7 @@ use crate::modules::post::components::post::post::Post;
 use crate::modules::post::components::post::post_skeleton::PostFeedSkeleton;
 use crate::modules::post::components::post_feed_media_prefetch::PostFeedMediaPrefetchController;
 use crate::modules::post::components::post_feed_column::PostFeedColumn;
-use crate::modules::post::pages::posts::post_detail::profile_post_list_body::splice_list_rows;
+use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
 use crate::modules::post::stores::post_services::post_services::PostServicesStore;

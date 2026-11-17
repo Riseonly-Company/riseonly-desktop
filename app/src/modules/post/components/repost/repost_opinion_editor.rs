@@ -31,10 +31,10 @@ use crate::modules::chat::components::chat::composer::chat_composer_types::{
     ChatBottomBarMetrics, ChatComposerCaretEdit, ChatComposerCaretEditResult, ChatComposerCustomEmojiRun,
     ChatComposerInputChromeModifiers, ChatDraftCustomEmoji, resign_chat_keyboard,
 };
-use crate::modules::chat::components::chat::input_picker::chat_input_emoji_tab::ChatInputEmojiTab;
 use crate::modules::chat::shared::config::message_sizes::MessageSizes;
 use crate::modules::chat::stores::message::message_actions::message_types::{MessageCustomEmojiEntity, RemoteMediaURL};
 use crate::modules::chat::stores::message::message_actions::message_wire_types::{CustomEmojiEntityWire, MessageEntitiesCodec};
+use crate::modules::post::components::repost::repost_opinion_editor_hooks::repost_opinion_editor_emoji_tab;
 use crate::modules::post::components::repost::repost_overlay::{
     RepostMatchedGeometry, RepostSticker, RepostStickerStyle, RepostTransitionNamespace, RepostTransitionNamespaceKey,
 };
@@ -828,7 +828,7 @@ impl RepostOpinionEditor {
         let (emoji_presenter, emoji_state) = (presenter.clone(), state.clone());
         let (custom_presenter, custom_state) = (presenter.clone(), state.clone());
         let (backspace_presenter, backspace_state) = (presenter.clone(), state.clone());
-        let tab = ChatInputEmojiTab::new(
+        let tab = repost_opinion_editor_emoji_tab(
             self.child_id("emoji-tab"),
             move |emoji: String, _: &mut Window, cx: &mut App| {
                 let caret = Self::caret(&emoji_state, &emoji_presenter, cx);
@@ -845,12 +845,9 @@ impl RepostOpinionEditor {
                 let placed = backspace_presenter.update(cx, |presenter, cx| presenter.delete_backward(caret, cx));
                 Self::place_caret(&backspace_state, &backspace_presenter, placed, cx);
             },
-        )
-        .safe_area_bottom(0.0)
-        .is_active(is_active)
-        .reserves_picker_bottom_bar(false)
-        .uses_flat_chrome(flat_chrome)
-        .shows_backspace(false);
+            is_active,
+            flat_chrome,
+        );
 
         let background = if flat_chrome {
             div().absolute().inset_0().bg(bg_100).into_any_element()
@@ -873,7 +870,7 @@ impl RepostOpinionEditor {
             .border_1()
             .border_color(stroke)
             .child(background)
-            .child(tab)
+            .children(tab)
             .keyboard_dismiss_excluded()
     }
 

@@ -1,13 +1,12 @@
 use std::cell::Cell;
-use std::f32::consts::PI;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AppContext as _, Bounds, Context, DispatchPhase, Entity, FontFeatures, FontWeight, InteractiveElement, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Path, PathBuilder, Pixels, Point, Render,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, black, canvas, div, point, px, white,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Path, Pixels, Point, Render,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, black, canvas, div, px, white,
 };
 use rise_core::foundation::foundation_date::{RiseClock, TimeInterval};
 use rise_i18n::tr;
@@ -19,6 +18,7 @@ use rise_ui::swiftui::motion::{ease_out, linear};
 use crate::core::lib::canon_format::RiseFormat;
 use crate::core::media_viewer::media_viewer_types::MediaViewerVideoTiming;
 use crate::core::media_viewer::media_viewer_video_player::MediaViewerVideoController;
+pub use crate::core::ui::animated_tabs_ui::rounded_rect_path_hooks::rounded_rect_path;
 
 /// seek bar under a video in the viewer, its own view like the rail
 /// drag with left button, hover shows the time above the track
@@ -46,7 +46,6 @@ impl MediaViewerVideoScrubberMetrics {
     const THUMB_SHADOW_OPACITY: f32 = 0.2;
     const THUMB_SHADOW_SPREAD: f32 = 1.5;
     const THUMB_SHADOW_OFFSET_Y: f32 = 1.0;
-    const CORNER_STEPS: usize = 8;
 }
 
 /// moving geometry of the track and the pointer state of one scrubber
@@ -225,34 +224,6 @@ impl MediaViewerVideoScrubber {
         let travel = (width - MediaViewerVideoScrubberMetrics::THUMB_DIAMETER).max(1.0);
         f64::from((at_x - MediaViewerVideoScrubberMetrics::THUMB_DIAMETER / 2.0) / travel).clamp(0.0, 1.0)
     }
-}
-
-/// filled rect with fully rounded corners as one outline so a path swap can move it
-pub(crate) fn rounded_rect_path(x: f32, y: f32, width: f32, height: f32, origin: Point<Pixels>) -> Option<Path<Pixels>> {
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    let radius = width.min(height) / 2.0;
-    let steps = MediaViewerVideoScrubberMetrics::CORNER_STEPS;
-    let corners = [
-        (x + width - radius, y + radius, -PI / 2.0),
-        (x + width - radius, y + height - radius, 0.0),
-        (x + radius, y + height - radius, PI / 2.0),
-        (x + radius, y + radius, PI),
-    ];
-    let mut points = Vec::with_capacity(corners.len() * (steps + 1));
-    for (center_x, center_y, start) in corners {
-        for step in 0..=steps {
-            let angle = start + (PI / 2.0) * step as f32 / steps as f32;
-            points.push(point(
-                origin.x + px(center_x + radius * angle.cos()),
-                origin.y + px(center_y + radius * angle.sin()),
-            ));
-        }
-    }
-    let mut builder = PathBuilder::fill();
-    builder.add_polygon(&points, true);
-    builder.build().ok()
 }
 
 impl Render for MediaViewerVideoScrubber {

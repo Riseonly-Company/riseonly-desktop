@@ -208,7 +208,7 @@ fn feed_url() -> Option<String> {
     if let Some(url) = option_env!("RISE_UPDATE_FEED_URL").filter(|url| !url.trim().is_empty()) {
         return Some(url.to_owned());
     }
-    let environment = AppEnvironment::compiled().as_str();
+    let environment = AppEnvironment::current().as_str();
     matches!(environment, "staging" | "production")
         .then(|| format!("{FEED_BASE}/{environment}/feed.json"))
 }
@@ -218,7 +218,7 @@ fn public_key() -> Option<&'static str> {
 }
 
 fn staging_dir() -> Option<PathBuf> {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().join("updates"))
 }

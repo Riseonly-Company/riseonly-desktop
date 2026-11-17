@@ -8,10 +8,10 @@ use crate::modules::chat::shared::chat_message_jump_presenter::ChatMessageJumpPr
 
 /// go to message from any chat profile tab
 /// profile sits on top of the chat so popping back keeps the loaded window and scroll
-pub(crate) enum ChatProfileMessageJump {}
+pub enum ChatProfileMessageJump {}
 
 impl ChatProfileMessageJump {
-    pub(crate) fn open(
+    pub fn open(
         chat_id: &str,
         topic_id: Option<&str>,
         message_id: &str,

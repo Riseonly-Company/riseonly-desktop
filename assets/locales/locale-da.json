@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Kassér ændringer?",
   "media_editor_discard_confirm": "Kassér ændringer",
   "media_editor_discard_keep": "Fortsæt redigering",
-  "story_canvas_photos_limit_reached": "Du kan tilføje op til %d billeder"
+  "story_canvas_photos_limit_reached": "Du kan tilføje op til %d billeder",
+  "error_rtc_overloaded": "Opkald er under stor belastning lige nu. For at holde igangværende opkald stabile er nye sat på pause et øjeblik. Prøv igen om lidt",
+  "overload_modal_title": "Stor belastning lige nu"
 }

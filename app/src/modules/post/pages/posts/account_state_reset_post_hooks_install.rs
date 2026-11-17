@@ -16,7 +16,7 @@ impl AccountResettable for PostServicesStore {
     }
 }
 
-pub(crate) fn install_account_state_reset_post_hooks() {
+pub fn install_account_state_reset_post_hooks() {
     set_account_state_reset_post_hooks(AccountStateResetPostHooks {
         fence_account_transition: |cx| {
             RisePostContentPresentation::shared(cx).update(cx, |presentation, cx| {

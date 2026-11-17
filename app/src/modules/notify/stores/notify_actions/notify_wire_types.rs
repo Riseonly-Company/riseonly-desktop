@@ -15,7 +15,7 @@ impl RiseAPNSRegistrationTarget {
     /// info.plist on macos, desktop app id on linux
     /// aUMID on windows
     pub fn bundle_id() -> String {
-        AppInfo::current(AppEnvironment::compiled().as_str())
+        AppInfo::current(AppEnvironment::current().as_str())
             .map(|info| trimming_whitespaces_and_newlines(&info.bundle_identifier).to_owned())
             .unwrap_or_default()
     }

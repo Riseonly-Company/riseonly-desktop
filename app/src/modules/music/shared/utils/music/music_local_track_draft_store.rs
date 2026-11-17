@@ -91,7 +91,7 @@ pub type MusicLocalTrackDraftCreationObserver = Box<dyn FnOnce(RiseStoredMusicTr
 pub type MusicLocalTrackDraftErrorHandler = Rc<dyn Fn(String, &mut App)>;
 
 static DATA_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    let paths = AppPaths::resolve(AppEnvironment::compiled().canon()).ok()?;
+    let paths = AppPaths::resolve(AppEnvironment::current().canon()).ok()?;
     paths.create_all().ok()?;
     Some(paths.data_dir().to_path_buf())
 });

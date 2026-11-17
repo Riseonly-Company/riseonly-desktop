@@ -28,8 +28,8 @@ use crate::core::ui::animated_media_playback_coordinator::{
 };
 use crate::core::ui::clever_image_disk_cache::{CleverImage, CleverImageBitmapLoader, CleverImageWorkLane};
 use crate::core::ui::clever_image_ui::CleverImageCachePolicy;
-use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_view::RiseManualListMountEnvelopePolicy;
 use crate::modules::gifts::components::gift_cosmetic_files::GiftCosmeticFiles;
+use crate::modules::gifts::components::rise_manual_list_mount_envelope_hooks::RiseManualListMountEnvelopePolicy;
 
 /// rectangle in unit coordinates of the whole media
 #[derive(Clone, Copy, Debug, PartialEq)]

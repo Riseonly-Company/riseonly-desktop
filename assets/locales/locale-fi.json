@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Hylätäänkö muutokset?",
   "media_editor_discard_confirm": "Hylkää muutokset",
   "media_editor_discard_keep": "Jatka muokkausta",
-  "story_canvas_photos_limit_reached": "Voit lisätä enintään %d kuvaa"
+  "story_canvas_photos_limit_reached": "Voit lisätä enintään %d kuvaa",
+  "error_rtc_overloaded": "Puhelut ovat juuri nyt ruuhkautuneet. Jotta käynnissä olevat puhelut pysyvät vakaina, uudet ovat hetken tauolla. Yritä hetken päästä uudelleen",
+  "overload_modal_title": "Juuri nyt on ruuhkaa"
 }

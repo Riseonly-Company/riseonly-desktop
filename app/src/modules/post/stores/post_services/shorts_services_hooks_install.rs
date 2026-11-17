@@ -5,7 +5,7 @@ use crate::modules::shorts::stores::shorts::shorts_services::shorts_services_hoo
     ShortsServicesHooks, ShortsServicesPostHooks,
 };
 
-pub(crate) fn install_shorts_services_hooks() {
+pub fn install_shorts_services_hooks() {
     ShortsServicesHooks::install_post(ShortsServicesPostHooks {
         cached_feed_page: Box::new(|key, disk_cache_policy, cx: &mut App| {
             PostServicesStore::observed_cached_feed_page(key, disk_cache_policy, cx)

@@ -35,6 +35,7 @@ use crate::modules::map::engine::rise_map_presentation::RiseMapPresentation;
 use crate::modules::map::engine::rise_map_privacy_repository::RiseMapPrivacySnapshot;
 use crate::modules::map::pages::map_settings::map_merge_settings_page::MapMergeSettingsSection;
 use crate::modules::map::shared::map_settings_section::MapSettingsSection;
+use crate::modules::map::shared::map_settings_section::MapSettingsSectionPrivacy;
 use crate::modules::map::stores::map_actions::map_privacy_types::{
     MapPrivacyAction, MapPrivacyKind, MapPrivacyListTarget, MapPrivacyRule,
 };
@@ -66,7 +67,12 @@ fn push_section(nav_store: &Option<Entity<NavigationStore>>, section: MapSetting
     }
 }
 
-impl MapSettingsSection {
+trait MapSettingsSectionGlyph {
+    fn icon(self) -> &'static str;
+    fn color(self) -> Hsla;
+}
+
+impl MapSettingsSectionGlyph for MapSettingsSection {
     fn icon(self) -> &'static str {
         match self {
             MapSettingsSection::Location | MapSettingsSection::PresencePrivacy => "location.fill",
@@ -94,8 +100,15 @@ impl MapSettingsSection {
             MapSettingsSection::FriendsPrivacy => SettingsIconPalette::privacy_birthday(),
         }
     }
+}
 
-    pub fn row(self, on_press: impl Fn(&mut Window, &mut App) + 'static) -> GroupedBtn {
+/// the settings row of a section, a trait since the section type lives below the page
+pub trait MapSettingsSectionRow {
+    fn row(self, on_press: impl Fn(&mut Window, &mut App) + 'static) -> GroupedBtn;
+}
+
+impl MapSettingsSectionRow for MapSettingsSection {
+    fn row(self, on_press: impl Fn(&mut Window, &mut App) + 'static) -> GroupedBtn {
         GroupedBtn::new(self.raw_value(), tr(self.title_key()))
             .icon(self.icon())
             .icon_background(self.color())

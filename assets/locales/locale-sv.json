@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Släng ändringarna?",
   "media_editor_discard_confirm": "Släng ändringar",
   "media_editor_discard_keep": "Fortsätt redigera",
-  "story_canvas_photos_limit_reached": "Du kan lägga till upp till %d foton"
+  "story_canvas_photos_limit_reached": "Du kan lägga till upp till %d foton",
+  "error_rtc_overloaded": "Samtal har hög belastning just nu. För att hålla pågående samtal stabila är nya pausade en stund. Försök igen om en stund",
+  "overload_modal_title": "Hög belastning just nu"
 }

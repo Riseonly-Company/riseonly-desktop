@@ -92,7 +92,7 @@ impl RiseReleaseNotesDeviceContext {
 
     /// app version string through the app_info seam
     pub fn app_version() -> String {
-        let value = AppInfo::current(AppEnvironment::compiled().as_str())
+        let value = AppInfo::current(AppEnvironment::current().as_str())
             .map(|info| trimming_whitespaces_and_newlines(&info.short_version).to_owned())
             .unwrap_or_default();
         if value.is_empty() { "0.0.0".to_owned() } else { value }
@@ -102,7 +102,7 @@ impl RiseReleaseNotesDeviceContext {
     /// two builds of 1.1.2 are two binaries so the version alone doesnt identify it
     /// read here since it was read ad hoc in three debug tracers
     pub fn build_number() -> String {
-        let value = AppInfo::current(AppEnvironment::compiled().as_str())
+        let value = AppInfo::current(AppEnvironment::current().as_str())
             .map(|info| trimming_whitespaces_and_newlines(&info.build).to_owned())
             .unwrap_or_default();
         if value.is_empty() { "0".to_owned() } else { value }

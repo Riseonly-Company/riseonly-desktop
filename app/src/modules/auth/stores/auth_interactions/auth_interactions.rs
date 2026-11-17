@@ -32,7 +32,6 @@ use crate::modules::auth::stores::auth_actions::auth_wire_types::{
 };
 use crate::modules::auth::stores::auth_interactions::auth_interactions_moderation_hooks::AuthInteractionsModerationHooks;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::moderation::stores::moderation_actions::moderation_types::UserBlockType;
 
 struct LogoutCompletionGate {
     continuation: RefCell<Option<oneshot::Sender<()>>>,
@@ -231,8 +230,7 @@ impl AuthInteractionsStore {
             }
             let now = Date::now().ms();
             let full_block_in_force = blocks.iter().any(|block| {
-                block.resolved_type() == UserBlockType::Full
-                    && (block.block_end_timestamp == 0 || block.block_end_timestamp > now)
+                block.is_full && (block.block_end_timestamp == 0 || block.block_end_timestamp > now)
             });
             if !full_block_in_force {
                 let _ = this.update(cx, |store, cx| store.account_block_lifted(cx));

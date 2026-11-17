@@ -33,7 +33,7 @@ use crate::modules::bot::components::bot_ui_components::BotStateView;
 use crate::modules::bot::pages::bot_mini_app_screen::BotMiniAppWebView;
 use crate::modules::bot::shared::bot_ui_validation::{BotMiniAppInitData, BotMiniAppURLPolicy};
 use crate::modules::bot::stores::bot::bot_services::bot_services::BotServicesStore;
-use crate::modules::chat::pages::chats::chat::chat_profile::chat_profile_components::ChatProfileReportTarget;
+use crate::modules::chat::shared::chat_profile_report_hooks::ChatProfileReportTarget;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::chat::stores::message::message_interactions::message_interactions::MessageInteractionsStore;
 use crate::modules::moderation::stores::moderation_actions::moderation_types::ReportTarget;

@@ -5,7 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use gpui::{App, AsyncApp, Context, Entity, Task};
 use rise_canon::RiseLimits;
-use rise_core::foundation::foundation_character::{Character, characters, scalar_is_control_character};
+use rise_core::foundation::foundation_character::{Character, characters};
 use rise_core::foundation::foundation_date::{Date, RiseClock};
 use rise_core::foundation::foundation_file_name::{file_name_length, host_file_name};
 use rise_core::foundation::foundation_file_url::{PathFlavor, file_path_string, is_local_absolute_path};
@@ -35,6 +35,7 @@ use crate::core::widgets::notifier::notifier_store::{
     Notifier, NotifierIcon, NotifierPosition, NotifierSendOptions, NotifierType,
 };
 use crate::core::widgets::sheets::share_sheet::{SharePayload, SystemShare};
+use crate::modules::chat::shared::utils::share_file_stem_hooks::ShareFileStem;
 use crate::modules::chat::shared::utils::voice::voice_message_disk_cache::VoiceMessageDiskCache;
 use crate::modules::chat::stores::message::message_actions::message_types::{
     GetMessageMessage, MessageMediaItem, MessageMediaKind, RemoteMediaURL,
@@ -147,10 +148,9 @@ impl MessageExternalShareMaterializer {
     const DOWNLOAD_PREFIX: &'static str = "riseonly-message-share-download-";
     const DOWNLOAD_EXTENSION: &'static str = "download";
     const STALE_DIRECTORY_SECONDS: f64 = 24.0 * 60.0 * 60.0;
-    const STEM_CHARACTER_LIMIT: usize = 96;
     const EXTENSION_CHARACTER_LIMIT: usize = 12;
     const FILE_NAME_LENGTH_LIMIT: usize = 255;
-    const FALLBACK_STEM: &'static str = "Riseonly";
+    const FALLBACK_STEM: &'static str = ShareFileStem::FALLBACK;
     const CHAT_AUDIO_TRACK_PREFIX: &'static str = "chat-audio:";
     const UNCACHED_TIMEOUT_SECONDS: u64 = 120;
     const ACCEPT_ANY: &'static str = "*/*";
@@ -734,21 +734,7 @@ impl MessageExternalShareMaterializer {
     }
 
     pub fn sanitize_file_stem(raw: &str) -> String {
-        let replaced: String = raw
-            .chars()
-            .map(|scalar| if Self::is_disallowed(scalar) { '_' } else { scalar })
-            .collect();
-        let value = trimming_whitespaces_and_newlines(&replaced);
-        let resolved = if value.is_empty() || value == "." || value == ".." {
-            Self::FALLBACK_STEM
-        } else {
-            value
-        };
-        character_prefix(resolved, Self::STEM_CHARACTER_LIMIT).to_owned()
-    }
-
-    fn is_disallowed(scalar: char) -> bool {
-        matches!(scalar, '/' | '\\' | ':') || scalar_is_control_character(scalar)
+        ShareFileStem::sanitize(raw)
     }
 
     fn normalized_extension(raw: Option<&str>) -> Option<String> {

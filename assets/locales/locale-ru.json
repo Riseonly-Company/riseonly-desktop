@@ -5983,5 +5983,7 @@
   "media_editor_discard_title": "Отменить изменения?",
   "media_editor_discard_confirm": "Отменить изменения",
   "media_editor_discard_keep": "Продолжить правку",
-  "story_canvas_photos_limit_reached": "Можно добавить не больше %d фото"
+  "story_canvas_photos_limit_reached": "Можно добавить не больше %d фото",
+  "error_rtc_overloaded": "Звонки сейчас под большой нагрузкой. Чтобы текущие звонки оставались стабильными, новые ненадолго приостановлены. Попробуйте чуть позже",
+  "overload_modal_title": "Сейчас большая нагрузка"
 }

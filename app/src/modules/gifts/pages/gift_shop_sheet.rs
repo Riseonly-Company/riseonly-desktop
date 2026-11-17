@@ -62,6 +62,9 @@ use crate::modules::gifts::engine::rise_gifts_engine_models::{
     RiseGiftCatalogItemResponseExt, RiseGiftInstanceDTO, RiseGiftInstanceExt, RiseGiftItemKind, RiseGiftRarityClass,
 };
 use crate::modules::gifts::shared::gift_market_kinds::GiftMarketKinds;
+use crate::modules::gifts::stores::gifts::gifts_interactions::gift_shop_footer_hooks::{
+    GIFT_SHOP_FOOTER_WINDOW_LIFT, gift_shop_footer_window_lift,
+};
 use crate::modules::gifts::stores::gifts::gifts_interactions::gifts_interactions::{
     GIFT_SHOP_SHEET_FOOTER_VERTICAL_PADDING, GiftRecipient, GiftShopFilter, GiftsInteractionsStore, RiseGiftsLimits,
 };
@@ -93,24 +96,24 @@ fn is_current_user(id: &str, cx: &mut App) -> bool {
 
 /// scroll reader of a sheet page, scrolls over the page scroll handle
 /// gpui has no anchors inside a scroll so the caller measures the target window bounds
-pub(crate) struct GiftSheetScrollReader {
+pub struct GiftSheetScrollReader {
     handle: ScrollHandle,
     motion: Animated<f32>,
     is_moving: bool,
 }
 
 impl GiftSheetScrollReader {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { handle: ScrollHandle::new(), motion: Animated::new(0.0), is_moving: false }
     }
 
-    pub(crate) fn handle(&self) -> ScrollHandle {
+    pub fn handle(&self) -> ScrollHandle {
         self.handle.clone()
     }
 
     /// writes the running animation into the scroll, called from render before prepaint reads
     /// the offset
-    pub(crate) fn frame(&mut self, window: &Window) {
+    pub fn frame(&mut self, window: &Window) {
         if !self.is_moving {
             return;
         }
@@ -130,7 +133,7 @@ impl GiftSheetScrollReader {
     /// puts the point anchor_y of item on the same point of the viewport, 0 top and 1 bottom
     /// clamped to the content
     /// duration is the call site ease out
-    pub(crate) fn scroll_to(&mut self, item: Bounds<Pixels>, anchor_y: f32, duration: f64, cx: &mut Context<Self>) {
+    pub fn scroll_to(&mut self, item: Bounds<Pixels>, anchor_y: f32, duration: f64, cx: &mut Context<Self>) {
         let viewport = self.handle.bounds();
         let offset = self.handle.offset();
         let top = -f32::from(offset.y);
@@ -144,7 +147,7 @@ impl GiftSheetScrollReader {
     }
 
     /// scrolls item into the viewport moving as little as it takes, duration is the call site ease out
-    pub(crate) fn reveal(&mut self, item: Bounds<Pixels>, animated: bool, duration: f64, cx: &mut Context<Self>) {
+    pub fn reveal(&mut self, item: Bounds<Pixels>, animated: bool, duration: f64, cx: &mut Context<Self>) {
         let viewport = self.handle.bounds();
         let below = f32::from(item.bottom() - viewport.bottom());
         let above = f32::from(viewport.top() - item.top());
@@ -2006,7 +2009,7 @@ impl GiftShopSheetFooter {
     }
 
     pub fn window_lift() -> Option<f32> {
-        GIFT_SHOP_FOOTER_WINDOW_LIFT.with(Cell::get)
+        gift_shop_footer_window_lift()
     }
 
     fn pads(content: impl IntoElement) -> Div {
@@ -2021,10 +2024,6 @@ impl GiftShopSheetFooter {
                 GIFT_SHOP_FOOTER_WINDOW_LIFT.with(|cell| cell.set(Some(lift)));
             }))
     }
-}
-
-thread_local! {
-    static GIFT_SHOP_FOOTER_WINDOW_LIFT: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
 impl Default for GiftShopSheetFooter {

@@ -123,12 +123,7 @@ use crate::modules::music::widgets::bottomsheets::track_picker::editor_track_pic
 use crate::modules::music::widgets::track_trim_overlay::{TrackTrimOverlay, TrackTrimPlateChoice};
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::StickerItem;
 
-#[derive(Clone)]
-pub struct MediaEditorOutcome {
-    pub edit: MediaSelectionEdit,
-    pub immediate_send: bool,
-    pub selects_asset: bool,
-}
+pub use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorOutcome;
 
 pub type MediaEditorScreenCancel = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type MediaEditorScreenDone = Rc<dyn Fn(MediaEditorOutcome, &mut Window, &mut App)>;

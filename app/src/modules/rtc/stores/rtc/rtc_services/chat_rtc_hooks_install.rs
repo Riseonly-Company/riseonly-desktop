@@ -17,7 +17,7 @@ fn group_voice_settings_load(chat_id: &str, cx: &mut App) -> Task<bool> {
     RTCGroupVoiceSettingsInteractionsStore::shared(cx).update(cx, |interactions, cx| interactions.load(chat_id, cx))
 }
 
-pub(crate) fn install_chat_rtc_hooks() {
+pub fn install_chat_rtc_hooks() {
     set_chat_engine_rtc_hooks(ChatEngineRtcHooks { active_room_config, group_voice_settings_load });
     set_chat_stores_rtc_hooks(ChatStoresRtcHooks {
         active_room_config,

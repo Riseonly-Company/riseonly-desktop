@@ -16,7 +16,7 @@ use rise_ui::swiftui::measure::measure;
 use rise_ui::swiftui::motion::{MotionSpec, spring};
 use rise_ui::swiftui::stacks::Alignment;
 
-use crate::app::router::main_tab_chrome::MainTabChrome;
+use crate::core::widgets::navigations::main_tab_chrome_metrics_hooks::MainTabChrome;
 
 /// what occupies the bottom of the window right now, one owner per place
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

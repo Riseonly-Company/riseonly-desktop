@@ -4,7 +4,7 @@ use crate::modules::auth::services::account_state_reset_hooks::{
 use crate::modules::vacancy::shared::vacancy_mocks::VacancyLocalState;
 use crate::modules::vacancy::stores::vacancy_services::vacancy_services::VacancyServicesStore;
 
-pub(crate) fn install_account_state_reset_vacancy_hooks() {
+pub fn install_account_state_reset_vacancy_hooks() {
     set_account_state_reset_vacancy_hooks(AccountStateResetVacancyHooks {
         activate_account_state: |cx| {
             VacancyLocalState::shared(cx).update(cx, |state, cx| state.activate_account_state(cx));

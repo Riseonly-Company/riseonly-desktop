@@ -9,9 +9,9 @@ use crate::modules::media_picker::api::media_picker_configuration::MediaPickerCo
 use crate::modules::media_picker::api::media_picker_result::MediaPickerResult;
 
 /// complete callback of the media picker sheet
-pub(crate) type MusicCoverPickerComplete = Rc<dyn Fn(MediaPickerResult, &mut Window, &mut App)>;
+pub type MusicCoverPickerComplete = Rc<dyn Fn(MediaPickerResult, &mut Window, &mut App)>;
 
-pub(crate) struct MusicCoverPickerHooks {
+pub struct MusicCoverPickerHooks {
     pub render_media_picker_sheet: fn(
         id: ElementId,
         is_presented: Binding<bool>,
@@ -24,7 +24,7 @@ pub(crate) struct MusicCoverPickerHooks {
 pub(crate) static MUSIC_COVER_PICKER_HOOKS: FeatureHookSlot<MusicCoverPickerHooks> = FeatureHookSlot::new("MUSIC_COVER_PICKER_HOOKS");
 
 /// installs the hooks once, a second call keeps the first ones
-pub(crate) fn set_music_cover_picker_hooks(hooks: MusicCoverPickerHooks) {
+pub fn set_music_cover_picker_hooks(hooks: MusicCoverPickerHooks) {
     let _ = MUSIC_COVER_PICKER_HOOKS.set(hooks);
 }
 

@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Discard changes?",
   "media_editor_discard_confirm": "Discard changes",
   "media_editor_discard_keep": "Keep editing",
-  "story_canvas_photos_limit_reached": "You can add up to %d photos"
+  "story_canvas_photos_limit_reached": "You can add up to %d photos",
+  "error_rtc_overloaded": "Calls are under heavy load right now. To keep ongoing calls stable, new ones are on hold for a moment. Try again a little later",
+  "overload_modal_title": "Heavy load right now"
 }

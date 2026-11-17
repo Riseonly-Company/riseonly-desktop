@@ -200,7 +200,7 @@ fn push_route(nav_store: &Option<Entity<crate::app::router::navigation_store::Na
 }
 
 fn reveal_cache_folder(cx: &mut App) {
-    let Ok(paths) = AppPaths::resolve(AppEnvironment::compiled().canon()) else {
+    let Ok(paths) = AppPaths::resolve(AppEnvironment::current().canon()) else {
         return;
     };
     if paths.create_all().is_err() {

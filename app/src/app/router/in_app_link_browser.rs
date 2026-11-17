@@ -8,7 +8,7 @@ use rise_platform::open_url::open_url;
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::push_notifications::push_deep_link_store::PushDeepLinkStore;
 use crate::core::push_notifications::universal_link_parser::UniversalLinkParser;
-use crate::modules::bot::shared::bot_ui_validation::BotMiniAppURLPolicy;
+use crate::modules::media_picker::editor::bot_mini_app_url_policy_hooks::BotMiniAppURLPolicy;
 
 const HTTPS_SCHEME: &str = "https";
 

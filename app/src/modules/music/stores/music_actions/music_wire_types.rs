@@ -20,7 +20,7 @@ use super::music_types::{
 };
 use crate::core::lib::rise_local_key::RiseLocalKey;
 use crate::core::lib::rise_wire_key_camel::RiseWireKeyCamel;
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 use crate::modules::music::shared::utils::music::music_audio_effect_settings::{
     MusicAudioEffectKind, MusicAudioEffectKindExt,
 };

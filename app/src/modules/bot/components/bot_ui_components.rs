@@ -57,7 +57,7 @@ fn child_id(id: &ElementId, name: &'static str) -> ElementId {
 
 /// lucide shapes with something inside turn into a blob when filled
 /// so only plain silhouettes of the fill symbols get the filled form
-pub(crate) fn bot_symbol_is_solid(system_image: &str) -> bool {
+pub fn bot_symbol_is_solid(system_image: &str) -> bool {
     system_image.ends_with(".fill")
         && ![".circle.fill", ".triangle.fill", "photo.fill", "tray.", "eye.", "lock."]
             .iter()

@@ -93,7 +93,7 @@ impl ShareExtensionConfiguration {
     /// loads config from the compiled environment, no app group on desktop
     /// container is the apps own data dir
     pub fn load() -> Result<Self, ShareExtensionError> {
-        let environment = AppEnvironment::compiled();
+        let environment = AppEnvironment::current();
         let Some(app_group_identifier) = Self::resolved_value(Some(environment.as_str())) else {
             return Err(ShareExtensionError::ConfigurationMissing);
         };
@@ -104,7 +104,7 @@ impl ShareExtensionConfiguration {
     }
 
     pub fn shared_container_url(&self) -> Result<PathBuf, ShareExtensionError> {
-        let environment = AppEnvironment::compiled();
+        let environment = AppEnvironment::current();
         if environment.as_str() != self.app_group_identifier {
             return Err(ShareExtensionError::AppGroupUnavailable);
         }

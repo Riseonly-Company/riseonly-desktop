@@ -36,10 +36,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::config::app_environment::AppEnvironment;
 use crate::core::lib::canon_rules::{RiseLimitsCanonRules, RiseValidationCanonRules};
 use crate::core::media::remote_media_disk_cache::{RemoteMediaDiskCache, RemoteMediaDiskCacheMaterializeOptions};
-use crate::modules::bot::shared::bot_ui_validation::BotMiniAppURLPolicy;
-use crate::modules::chat::components::chat::backdrop::chat_decorative_backdrop::ChatDecorativeBackdrop;
-use crate::modules::chat::components::chat::backdrop::chat_wallpaper_store::ChatWallpaperPreset;
+use crate::modules::media_picker::editor::bot_mini_app_url_policy_hooks::BotMiniAppURLPolicy;
 use crate::modules::media_picker::editor::editor_entity_snapping::{EditorEntitySnap, EditorEntitySnapFeedback};
+use crate::modules::media_picker::editor::editor_link_backdrop_hooks::editor_link_backdrop_hooks;
 use crate::modules::media_picker::editor::editor_two_finger_transform::EditorTwoFingerTransformable;
 use crate::modules::media_picker::editor::story_canvas_model::StoryCanvasGeometry;
 
@@ -1015,7 +1014,7 @@ struct EditorEntityPress {
 }
 
 /// dashed selection outline, rect is in window pixels
-pub(crate) fn paint_dashed_selection(origin: Point<Pixels>, frame: Size<f32>, radius: f32, line: f32, window: &mut Window) {
+pub fn paint_dashed_selection(origin: Point<Pixels>, frame: Size<f32>, radius: f32, line: f32, window: &mut Window) {
     let radius = px(radius.max(0.0).min(frame.width / 2.0).min(frame.height / 2.0));
     let left = origin.x;
     let top = origin.y;
@@ -1560,12 +1559,10 @@ impl RenderOnce for EditorLinkLiveSample {
             .rounded(px(16.0))
             .overflow_hidden()
             .child(
-                div().absolute().inset_0().child(
-                    ChatDecorativeBackdrop::new()
-                        .ignores_safe_area(false)
-                        .preview_preset(Some(ChatWallpaperPreset::default_preset().clone()))
-                        .animates(false),
-                ),
+                div()
+                    .absolute()
+                    .inset_0()
+                    .children(editor_link_backdrop_hooks().map(|hooks| (hooks.default_wallpaper_preview)())),
             )
             .child(sample_layer)
     }

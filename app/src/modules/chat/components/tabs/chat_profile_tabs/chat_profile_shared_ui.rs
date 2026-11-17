@@ -22,7 +22,7 @@ use crate::core::lib::sai::modules::sai_data_render::sai_data_render::SaiDataRen
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui_hooks::ChatProfileSharedUiHooks;
 
 /// key that says the tab sits inside the profile page scroll
-pub(crate) struct ChatProfileUsesParentScrollKey;
+pub struct ChatProfileUsesParentScrollKey;
 
 impl EnvKey for ChatProfileUsesParentScrollKey {
     type Value = bool;
@@ -33,12 +33,12 @@ impl EnvKey for ChatProfileUsesParentScrollKey {
 }
 
 /// true when the tab is inside the profile page own scroll
-pub(crate) fn chat_profile_uses_parent_scroll(cx: &App) -> bool {
+pub fn chat_profile_uses_parent_scroll(cx: &App) -> bool {
     env::<ChatProfileUsesParentScrollKey>(cx)
 }
 
 /// the profile page scroll a tab sits in, so pinned rows find its real top
-pub(crate) struct ChatProfilePageScrollKey;
+pub struct ChatProfilePageScrollKey;
 
 impl EnvKey for ChatProfilePageScrollKey {
     type Value = Option<ScrollHandle>;
@@ -48,15 +48,15 @@ impl EnvKey for ChatProfilePageScrollKey {
     }
 }
 
-pub(crate) fn chat_profile_page_scroll(cx: &App) -> Option<ScrollHandle> {
+pub fn chat_profile_page_scroll(cx: &App) -> Option<ScrollHandle> {
     env::<ChatProfilePageScrollKey>(cx)
 }
 
 /// window y of the pinned tab bar bottom edge
 /// tabs container writes it before its pages prepaint so headers sit right under the bar
-pub(crate) type ChatProfilePinnedTabsBottom = Rc<Cell<Option<f32>>>;
+pub type ChatProfilePinnedTabsBottom = Rc<Cell<Option<f32>>>;
 
-pub(crate) struct ChatProfilePinnedTabsBottomKey;
+pub struct ChatProfilePinnedTabsBottomKey;
 
 impl EnvKey for ChatProfilePinnedTabsBottomKey {
     type Value = Option<ChatProfilePinnedTabsBottom>;
@@ -66,7 +66,7 @@ impl EnvKey for ChatProfilePinnedTabsBottomKey {
     }
 }
 
-pub(crate) fn chat_profile_pinned_tabs_bottom(cx: &App) -> Option<ChatProfilePinnedTabsBottom> {
+pub fn chat_profile_pinned_tabs_bottom(cx: &App) -> Option<ChatProfilePinnedTabsBottom> {
     env::<ChatProfilePinnedTabsBottomKey>(cx)
 }
 
@@ -78,7 +78,7 @@ pub(crate) type ChatProfileTabRefresh = Rc<dyn Fn(&mut Window, &mut App) -> Task
 pub(crate) type ChatProfileTabRetry = Rc<dyn Fn(&mut Window, &mut App)>;
 
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileTabScrollContainer {
+pub struct ChatProfileTabScrollContainer {
     id: ElementId,
     scroll_enabled: bool,
     shows_indicators: bool,
@@ -88,7 +88,7 @@ pub(crate) struct ChatProfileTabScrollContainer {
 
 impl ChatProfileTabScrollContainer {
     /// id keys the scroll position
-    pub(crate) fn new<E: IntoElement>(
+    pub fn new<E: IntoElement>(
         id: impl Into<ElementId>,
         content: impl FnOnce(&mut Window, &mut App) -> E + 'static,
     ) -> Self {
@@ -101,17 +101,17 @@ impl ChatProfileTabScrollContainer {
         }
     }
 
-    pub(crate) fn scroll_enabled(mut self, scroll_enabled: bool) -> Self {
+    pub fn scroll_enabled(mut self, scroll_enabled: bool) -> Self {
         self.scroll_enabled = scroll_enabled;
         self
     }
 
-    pub(crate) fn shows_indicators(mut self, shows_indicators: bool) -> Self {
+    pub fn shows_indicators(mut self, shows_indicators: bool) -> Self {
         self.shows_indicators = shows_indicators;
         self
     }
 
-    pub(crate) fn on_refresh(mut self, on_refresh: impl Fn(&mut Window, &mut App) -> Task<()> + 'static) -> Self {
+    pub fn on_refresh(mut self, on_refresh: impl Fn(&mut Window, &mut App) -> Task<()> + 'static) -> Self {
         self.on_refresh = Some(Rc::new(on_refresh));
         self
     }
@@ -140,7 +140,7 @@ impl RenderOnce for ChatProfileTabScrollContainer {
 }
 
 #[derive(IntoElement, Default)]
-pub(crate) struct ChatProfileTabBottomSpacer;
+pub struct ChatProfileTabBottomSpacer;
 
 impl ChatProfileTabBottomSpacer {
     pub(crate) const HEIGHT: f32 = 80.0;
@@ -157,7 +157,7 @@ type ChatProfileTabStateBuilder = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement
 
 /// data render over one message tab slice of the chat
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileTabDataRender {
+pub struct ChatProfileTabDataRender {
     cache_id: String,
     scope: String,
     is_empty: bool,
@@ -175,7 +175,7 @@ impl ChatProfileTabDataRender {
     pub(crate) const DEFAULT_NO_DATA_HEIGHT_PERCENT: f32 = 20.0;
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new<C: IntoElement, L: IntoElement>(
+    pub fn new<C: IntoElement, L: IntoElement>(
         cache_id: impl Into<String>,
         scope: impl Into<String>,
         is_empty: bool,
@@ -243,13 +243,13 @@ impl RenderOnce for ChatProfileTabDataRender {
 }
 
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileTabErrorState {
+pub struct ChatProfileTabErrorState {
     text: String,
     retry: ChatProfileTabRetry,
 }
 
 impl ChatProfileTabErrorState {
-    pub(crate) fn new(text: impl Into<String>, retry: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+    pub fn new(text: impl Into<String>, retry: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         Self { text: text.into(), retry: Rc::new(retry) }
     }
 }
@@ -292,12 +292,12 @@ impl RenderOnce for ChatProfileTabErrorState {
 }
 
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileSectionHeader {
+pub struct ChatProfileSectionHeader {
     title: String,
 }
 
 impl ChatProfileSectionHeader {
-    pub(crate) fn new(title: impl Into<String>) -> Self {
+    pub fn new(title: impl Into<String>) -> Self {
         Self { title: title.into() }
     }
 }
@@ -324,7 +324,7 @@ impl RenderOnce for ChatProfileSectionHeader {
 }
 
 #[derive(IntoElement)]
-pub(crate) struct ChatProfileEmptyState {
+pub struct ChatProfileEmptyState {
     icon: String,
     text: String,
     vertical_padding: f32,
@@ -336,12 +336,12 @@ impl ChatProfileEmptyState {
     const TEXT_MAX_WIDTH: f32 = 260.0;
     const VERTICAL_PADDING: f32 = 60.0;
 
-    pub(crate) fn new(icon: impl Into<String>, text: impl Into<String>) -> Self {
+    pub fn new(icon: impl Into<String>, text: impl Into<String>) -> Self {
         Self { icon: icon.into(), text: text.into(), vertical_padding: Self::VERTICAL_PADDING }
     }
 
     /// a page under a tall pinned header has little room above the mini player
-    pub(crate) fn vertical_padding(mut self, padding: f32) -> Self {
+    pub fn vertical_padding(mut self, padding: f32) -> Self {
         self.vertical_padding = padding;
         self
     }
@@ -370,18 +370,18 @@ impl RenderOnce for ChatProfileEmptyState {
     }
 }
 
-pub(crate) enum ChatProfileFormatter {}
+pub enum ChatProfileFormatter {}
 
 impl ChatProfileFormatter {
-    pub(crate) fn bytes(b: i64) -> String {
+    pub fn bytes(b: i64) -> String {
         RiseFormat::file_size(b)
     }
 
-    pub(crate) fn duration(d: TimeInterval) -> String {
+    pub fn duration(d: TimeInterval) -> String {
         RiseFormat::duration_time_interval(d)
     }
 
-    pub(crate) fn relative_date(ts: TimeInterval) -> String {
+    pub fn relative_date(ts: TimeInterval) -> String {
         let date = Date::from_time_interval_since_1970(ts);
         let now = Date::now();
         let calendar = Calendar::current();

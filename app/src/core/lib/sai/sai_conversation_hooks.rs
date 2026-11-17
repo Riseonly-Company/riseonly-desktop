@@ -17,13 +17,13 @@ pub(crate) type SaiConversationHandle = Box<
         + Sync,
 >;
 
-pub(crate) struct SaiConversationHooks {
+pub struct SaiConversationHooks {
     pub handle: SaiConversationHandle,
 }
 
 pub(crate) static SAI_CONVERSATION_HOOKS: FeatureHookSlot<SaiConversationHooks> = FeatureHookSlot::new("SAI_CONVERSATION_HOOKS");
 
-pub(crate) fn set_sai_conversation_hooks(hooks: SaiConversationHooks) {
+pub fn set_sai_conversation_hooks(hooks: SaiConversationHooks) {
     let _ = SAI_CONVERSATION_HOOKS.set(hooks);
 }
 

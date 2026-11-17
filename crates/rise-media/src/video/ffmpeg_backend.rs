@@ -34,7 +34,7 @@ pub fn open(
 /// a software plan decodes in the shipped libavcodec itself where the host can reach it apart
 /// from the ffmpeg copy linked into libwebrtc, which only knows h264
 fn open_software_plan(plan: DecoderPlan, request: &DecoderRequest) -> Result<Box<dyn VideoDecoder>, DecoderError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(decoder) = isolated::IsolatedDecoder::open(plan.clone(), request) {
         return decoder.map(|decoder| Box::new(decoder) as Box<dyn VideoDecoder>);
     }
@@ -562,10 +562,10 @@ mod tests {
     }
 }
 
-/// software decoding through the libavcodec dylib the app ships, called by address
+/// software decoding through the libavcodec library the app ships, called by address
 /// invariant: every call of one decoder goes to that one image, libwebrtc links its own
 /// h264 only ffmpeg under the same symbol names and static linking binds rsmpeg to it
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod isolated {
     use std::ffi::{CStr, c_char, c_int, c_void};
     use std::sync::OnceLock;
@@ -579,17 +579,88 @@ mod isolated {
         DecodedFrame, DecoderError, DecoderPlan, DecoderRequest, FrameHandle, HostI420Planes, VideoDecoder,
     };
 
-    const RTLD_LAZY: c_int = 0x1;
-    const RTLD_LOCAL: c_int = 0x4;
-    const RTLD_FIRST: c_int = 0x100;
+    #[cfg(target_os = "macos")]
     const AVERROR_EAGAIN: c_int = -35;
+    #[cfg(target_os = "windows")]
+    const AVERROR_EAGAIN: c_int = -11;
     const AVERROR_EOF: c_int = -0x2046_4F45;
 
-    unsafe extern "C" {
-        fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
-        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-        fn _dyld_image_count() -> u32;
-        fn _dyld_get_image_name(index: u32) -> *const c_char;
+    #[cfg(target_os = "macos")]
+    mod image {
+        use std::ffi::{CStr, c_char, c_int, c_void};
+
+        const RTLD_LAZY: c_int = 0x1;
+        const RTLD_LOCAL: c_int = 0x4;
+        const RTLD_FIRST: c_int = 0x100;
+
+        unsafe extern "C" {
+            fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
+            fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+            fn _dyld_image_count() -> u32;
+            fn _dyld_get_image_name(index: u32) -> *const c_char;
+        }
+
+        pub(super) fn codec() -> Option<*mut c_void> {
+            loaded("libavcodec.")
+        }
+
+        pub(super) fn util() -> Option<*mut c_void> {
+            loaded("libavutil.")
+        }
+
+        /// handle of a loaded image whose file name starts with prefix, opened only for its own symbols
+        fn loaded(prefix: &str) -> Option<*mut c_void> {
+            let count = unsafe { _dyld_image_count() };
+            (0..count).find_map(|index| {
+                let name = unsafe { _dyld_get_image_name(index) };
+                if name.is_null() {
+                    return None;
+                }
+                let path = unsafe { CStr::from_ptr(name) };
+                let file = path.to_str().ok()?.rsplit('/').next()?;
+                if !file.starts_with(prefix) || !file.ends_with(".dylib") {
+                    return None;
+                }
+                let handle = unsafe { dlopen(path.as_ptr(), RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST) };
+                (!handle.is_null()).then_some(handle)
+            })
+        }
+
+        pub(super) fn address(handle: *mut c_void, name: &CStr) -> *mut c_void {
+            unsafe { dlsym(handle, name.as_ptr()) }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    mod image {
+        use std::ffi::{CStr, c_void};
+        use std::os::windows::ffi::OsStrExt;
+
+        use rsmpeg::ffi;
+        use windows::Win32::Foundation::HMODULE;
+        use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_WITH_ALTERED_SEARCH_PATH, LoadLibraryExW};
+        use windows::core::{PCSTR, PCWSTR};
+
+        pub(super) fn codec() -> Option<*mut c_void> {
+            beside_exe(&format!("avcodec-{}.dll", ffi::LIBAVCODEC_VERSION_MAJOR))
+        }
+
+        pub(super) fn util() -> Option<*mut c_void> {
+            beside_exe(&format!("avutil-{}.dll", ffi::LIBAVUTIL_VERSION_MAJOR))
+        }
+
+        /// the shipped dll next to riseonly.exe, its own imports resolved from the same folder
+        fn beside_exe(file: &str) -> Option<*mut c_void> {
+            let path = std::env::current_exe().ok()?.parent()?.join(file);
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let module = unsafe { LoadLibraryExW(PCWSTR(wide.as_ptr()), None, LOAD_WITH_ALTERED_SEARCH_PATH) }.ok()?;
+            Some(module.0)
+        }
+
+        pub(super) fn address(handle: *mut c_void, name: &CStr) -> *mut c_void {
+            let found = unsafe { GetProcAddress(HMODULE(handle), PCSTR(name.as_ptr().cast())) };
+            found.map_or(std::ptr::null_mut(), |function| function as *mut c_void)
+        }
     }
 
     struct Api {
@@ -608,26 +679,8 @@ mod isolated {
 
     static API: OnceLock<Option<Api>> = OnceLock::new();
 
-    /// handle of a loaded image whose file name starts with prefix, opened only for its own symbols
-    fn loaded_image(prefix: &str) -> Option<*mut c_void> {
-        let count = unsafe { _dyld_image_count() };
-        (0..count).find_map(|index| {
-            let name = unsafe { _dyld_get_image_name(index) };
-            if name.is_null() {
-                return None;
-            }
-            let path = unsafe { CStr::from_ptr(name) };
-            let file = path.to_str().ok()?.rsplit('/').next()?;
-            if !file.starts_with(prefix) || !file.ends_with(".dylib") {
-                return None;
-            }
-            let handle = unsafe { dlopen(path.as_ptr(), RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST) };
-            (!handle.is_null()).then_some(handle)
-        })
-    }
-
     fn symbol<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
-        let address = unsafe { dlsym(handle, name.as_ptr()) };
+        let address = image::address(handle, name);
         if address.is_null() {
             return None;
         }
@@ -636,8 +689,8 @@ mod isolated {
 
     fn api() -> Option<&'static Api> {
         API.get_or_init(|| {
-            let codec = loaded_image("libavcodec.")?;
-            let util = loaded_image("libavutil.")?;
+            let codec = image::codec()?;
+            let util = image::util()?;
             Some(Api {
                 find_decoder_by_name: symbol(codec, c"avcodec_find_decoder_by_name")?,
                 alloc_context3: symbol(codec, c"avcodec_alloc_context3")?,

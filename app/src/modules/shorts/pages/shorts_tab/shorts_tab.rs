@@ -17,7 +17,6 @@ use rise_ui::swiftui::prelude::*;
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_ui::{IconUi, MainText, TextAlignT};
 
-use crate::app::aside::aside_navigator;
 use crate::app::router::main_tab_chrome::main_tab_bar_underlap;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::{CreatePostIntent, MainTab, RootRoute};
@@ -31,6 +30,7 @@ use crate::core::widgets::wrappers::list_shell_ui::{ListShellFloatingTopInsetKey
 use crate::modules::analytics::stores::engagement::engagement_actions::engagement_types::EngagementSurface;
 use crate::modules::analytics::stores::engagement::engagement_interactions::engagement_interactions::EngagementInteractionsStore;
 use crate::modules::comment::stores::comment_interactions::comment_interactions::CommentInteractionsStore;
+use crate::modules::comment::widgets::comments_sheet_aside_hooks::comments_sheet_aside_hooks;
 use crate::modules::comment::widgets::comments_sheet_progress_fade::CommentsSheetProgressFade;
 use crate::modules::post::engine::rise_post_content_presentation::RisePostContentPresentation;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
@@ -39,6 +39,7 @@ use crate::modules::post::stores::post_services::post_services::PostServicesStor
 use crate::modules::post::pages::posts::post_detail::native_list::behaviour::post_list_refresh_control::PostListRefreshControl;
 use crate::modules::shorts::components::shorts_feed_cell::{ShortsFeedCell, ShortsReturnRewind};
 use crate::modules::shorts::components::shorts_media_prefetch::ShortsMediaPrefetchController;
+use crate::modules::shorts::pages::shorts_tab::shorts_tab_aside_hooks::shorts_tab_aside_hooks;
 use crate::modules::shorts::pages::shorts_vertical_pager::{ShortsVerticalPager, ShortsVerticalPagerController};
 use crate::modules::shorts::stores::shorts::shorts_actions::shorts_actions::ShortsActionsStore;
 use crate::modules::shorts::stores::shorts::shorts_interactions::shorts_interactions::ShortsInteractionsStore;
@@ -301,7 +302,7 @@ impl ShortsTabState {
     fn disappeared(&mut self, cx: &mut Context<Self>) {
         let comments = CommentInteractionsStore::shared(cx);
         let docked_here = comments.read(cx).comments_sheet_visible
-            && aside_navigator::docks_comments(cx)
+            && comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.docks_comments)(cx))
             && PostServicesStore::shared(cx)
                 .read(cx)
                 .selected_post
@@ -515,12 +516,14 @@ impl ShortsTab {
                 on_aligned.update(cx, |state, cx| state.page_aligned(aligned, cx));
             }
         });
-        let docked_post_id =
-            (visible && aside_navigator::docks_comments(cx)).then(|| state.read(cx).active_post_id.clone()).flatten();
+        let docked_post_id = (visible && comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.docks_comments)(cx)))
+            .then(|| state.read(cx).active_post_id.clone())
+            .flatten();
         let docked_temp = docked_post_id.as_deref().is_some_and(|post_id| {
             state.read(cx).items.iter().any(|post| post.id == post_id && post.is_temp)
         });
-        let docked = (docked_post_id, aside_navigator::section_visits(cx), docked_temp);
+        let section_visits = shorts_tab_aside_hooks().map_or(0, |hooks| (hooks.section_visits)(cx));
+        let docked = (docked_post_id, section_visits, docked_temp);
         let on_docked = state.clone();
         on_change("shorts-tab-docked-comments", docked, true, window, cx, move |was, now, _, cx| {
             let post_id = &now.0;

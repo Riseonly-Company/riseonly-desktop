@@ -19,14 +19,14 @@ use crate::core::rise_engine_bridge::rise_transport_status::RiseTransportStatus;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::core::widgets::overlay::premium_upsell_store::PremiumUpsellStore;
-use crate::core::widgets::sheets::share_sheet::ShareForwardIdentity;
+use crate::modules::chat::stores::message::message_interactions::share_destination_hooks::ShareForwardIdentity;
 use crate::modules::chat::engine::core::rise_conversation_repository_facade::RiseConversationActionExecutor;
 use crate::modules::chat::engine::messages::rise_message_contracts::RiseMessageRepositoryError;
 use crate::modules::chat::engine::messages::rise_message_repository::RiseMessageRepository;
 use crate::modules::chat::engine::messages::rise_message_scope::RiseMessageScope;
 use crate::modules::chat::engine::messages::rise_message_upload_retry::RiseMessageUploadResend;
 use crate::modules::chat::engine::rise_conversation_domain::{RiseConversationDomain, RiseConversationDomainRegistry};
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatInfo;
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
@@ -73,8 +73,8 @@ impl MessageInteractionsStore {
         thread_root_id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_message_id(message_id)) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.replace_photo(item, cx));
+        if (chat_guide_sandbox_hooks().owns_message_id)(message_id, cx) {
+            (chat_guide_sandbox_hooks().replace_photo)(item, cx);
             return;
         }
         let Some(resolved) = self.resolved_wire_chat_id(chat_id, cx) else {

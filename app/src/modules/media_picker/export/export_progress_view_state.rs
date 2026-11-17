@@ -6,22 +6,22 @@ pub(crate) type ExportProgressCancelAction = Rc<dyn Fn(&mut App)>;
 
 /// one entity per export made by its owner, the overlay observes it
 #[derive(Default)]
-pub(crate) struct ExportProgressViewState {
-    pub(crate) fraction_completed: f64,
-    pub(crate) current_label: String,
+pub struct ExportProgressViewState {
+    pub fraction_completed: f64,
+    pub current_label: String,
     pub(crate) total_items: i64,
-    pub(crate) processed_items: i64,
-    pub(crate) is_cancelled: bool,
-    pub(crate) failure_description: Option<String>,
-    pub(crate) on_cancel: Option<ExportProgressCancelAction>,
+    pub processed_items: i64,
+    pub is_cancelled: bool,
+    pub failure_description: Option<String>,
+    pub on_cancel: Option<ExportProgressCancelAction>,
 }
 
 impl ExportProgressViewState {
-    pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(_cx: &mut Context<Self>) -> Self {
         Self::default()
     }
 
-    pub(crate) fn reset(&mut self, total: i64, cx: &mut Context<Self>) {
+    pub fn reset(&mut self, total: i64, cx: &mut Context<Self>) {
         self.fraction_completed = 0.0;
         self.current_label = String::new();
         self.total_items = total;

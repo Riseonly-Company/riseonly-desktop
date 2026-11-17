@@ -361,7 +361,7 @@ impl SparksPurchaseSheetContent {
 
     /// what the phone handoff modal of a sparks purchase says
     /// the root purchase continue host takes it once when the handoff opens
-    pub(crate) fn continue_on_phone_content(service: &Entity<SparksServicesStore>, cx: &App) -> RisePurchaseContinue {
+    pub fn continue_on_phone_content(service: &Entity<SparksServicesStore>, cx: &App) -> RisePurchaseContinue {
         RisePurchaseContinue::purchase("sparks-purchase-on-phone", tr("sparks_purchase_on_phone"))
             .link(service.read(cx).phone_link())
     }

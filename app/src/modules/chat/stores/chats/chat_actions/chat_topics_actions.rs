@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::chat_actions::ChatActionsStore;
 use super::chat_types::{ChatMuteScopes, ChatTopic, VoiceChannelParticipant, VoiceChannelState};
 use super::chat_wire_types::{CreateTopicResultDTO, RiseStoredChatTopic};
+use super::forum_voice_roster_hooks::forum_voice_roster_hooks;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::core::utilities::sai_payload_path::SaiJSONCodec;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiWireEmptyDTO;
@@ -29,7 +30,6 @@ use crate::modules::chat::engine::forum::forum_voice_subscription_registry::Foru
 use crate::modules::chat::engine::forum::rise_forum_voice_realtime::RiseForumVoiceRealtime;
 use crate::modules::chat::engine::rise_conversation_domain::{RiseConversationDomain, RiseConversationDomainRegistry};
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
-use crate::modules::rtc::engine::rise_rtc_domain::RiseRTCActionExecutor;
 use crate::modules::rtc::engine::rise_rtc_engine_models::RiseRTCParticipantRole;
 
 pub type ChatTopicSuccess = Rc<dyn Fn(RiseStoredChatTopic, &mut App)>;
@@ -243,16 +243,21 @@ impl ChatActionsStore {
                     .flatten()
             };
             let Some(request) = request else { return };
-            let rtc = cx.update(RiseRTCActionExecutor::require_domain).await.ok();
+            let rtc = match forum_voice_roster_hooks() {
+                Some(hooks) => cx.update(hooks.require_source).await,
+                None => None,
+            };
             drop(runtime.spawn(async move {
                 let Some(rtc) = rtc.filter(|rtc| rtc.account_id == request.account_id) else {
                     domain.forum_voice.fail_expanded_roster(&chat_id, &topic_id).await;
                     return;
                 };
-                match rtc
-                    .repository
-                    .list_channel_participants(&request.room_id, request.cursor.clone(), request.page_limit)
-                    .await
+                match (rtc.list_channel_participants)(
+                    request.room_id.clone(),
+                    request.cursor.clone(),
+                    request.page_limit,
+                )
+                .await
                 {
                     Ok((participants, has_more)) => {
                         domain

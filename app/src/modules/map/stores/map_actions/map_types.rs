@@ -867,3 +867,22 @@ impl MapInviteSheetState {
         Self { token, phase, is_submitting: false, submission_error: None }
     }
 }
+
+impl MapSettingsPatch {
+    /// later patch wins field by field, like two real saves in a row
+    pub fn merged(&self, later: &MapSettingsPatch) -> MapSettingsPatch {
+        MapSettingsPatch {
+            sharing_enabled: later.sharing_enabled.or(self.sharing_enabled),
+            tracks_enabled: later.tracks_enabled.or(self.tracks_enabled),
+            battery_visible: later.battery_visible.or(self.battery_visible),
+            frozen_until: later.frozen_until.or(self.frozen_until),
+            track_cooling_days: later.track_cooling_days.or(self.track_cooling_days),
+            track_heat_walks: later.track_heat_walks.or(self.track_heat_walks),
+            home_track_exclusion_radius_m: later.home_track_exclusion_radius_m.or(self.home_track_exclusion_radius_m),
+            track_merge_enabled: later.track_merge_enabled.or(self.track_merge_enabled),
+            track_merge_radius_m: later.track_merge_radius_m.or(self.track_merge_radius_m),
+            track_merge_lanes: later.track_merge_lanes.or(self.track_merge_lanes),
+            track_precise_recording: later.track_precise_recording.or(self.track_precise_recording),
+        }
+    }
+}

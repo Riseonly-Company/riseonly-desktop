@@ -8,7 +8,7 @@ use rise_ui::native_confirm_alert::NativeConfirmAlert;
 use super::chat_interactions::ChatInteractionsStore;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::{SaiSliceState, SaiWsSliceStatus};
 use crate::modules::chat::engine::core::rise_conversation_presentation::RiseConversationPresentation;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_folder_types::ChatFolder;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
@@ -47,8 +47,8 @@ impl ChatInteractionsStore {
     }
 
     pub fn create_folder(&self, folder: ChatFolder, on_result: ChatFolderOnResult, cx: &mut Context<Self>) {
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_folders()) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.create_folder(folder, cx));
+        if (chat_guide_sandbox_hooks().owns_folders)(cx) {
+            (chat_guide_sandbox_hooks().create_folder)(folder, cx);
             cx.defer(move |cx| on_result(true, cx));
             return;
         }
@@ -95,8 +95,8 @@ impl ChatInteractionsStore {
 
     pub fn update_folder(&self, folder: ChatFolder, on_result: ChatFolderOnResult, cx: &mut Context<Self>) {
         let folder_id = folder.id.clone();
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_folder(&folder_id)) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.update_folder(folder, cx));
+        if (chat_guide_sandbox_hooks().owns_folder)(&folder_id, cx) {
+            (chat_guide_sandbox_hooks().update_folder)(folder, cx);
             cx.defer(move |cx| on_result(true, cx));
             return;
         }
@@ -144,8 +144,8 @@ impl ChatInteractionsStore {
     }
 
     pub fn delete_folder(&self, folder_id: &str, cx: &mut Context<Self>) {
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_folder(folder_id)) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.delete_folder(folder_id, cx));
+        if (chat_guide_sandbox_hooks().owns_folder)(folder_id, cx) {
+            (chat_guide_sandbox_hooks().delete_folder)(folder_id, cx);
             return;
         }
         if !with_services(|services, cx| services.begin_folder_mutation(cx), cx) {
@@ -177,8 +177,8 @@ impl ChatInteractionsStore {
             return;
         }
         let folder_ids: Vec<String> = ordered.iter().map(|folder| folder.id.clone()).collect();
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_folders()) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.reorder_folders(folder_ids, cx));
+        if (chat_guide_sandbox_hooks().owns_folders)(cx) {
+            (chat_guide_sandbox_hooks().reorder_folders)(folder_ids, cx);
             return;
         }
         if !with_services(|services, cx| services.begin_folder_mutation(cx), cx) {

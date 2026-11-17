@@ -3,7 +3,7 @@ use crate::modules::stickers::components::sticker_pack_add_cell::StickerAssetCom
 use crate::modules::stickers::stores::stickers::stickers_interactions::stickers_interactions::StickersInteractionsStore;
 use crate::modules::stickers::stores::stickers::stickers_services::stickers_services::StickersServicesStore;
 
-pub(crate) fn install_chat_input_picker_kit_hooks() {
+pub fn install_chat_input_picker_kit_hooks() {
     ChatInputPickerKitHooks::install(ChatInputPickerKitHooks {
         sticker_upload: |local_sticker_id, cx| {
             rise_ui::shared::try_read::<StickersServicesStore>(cx)

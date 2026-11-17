@@ -24,7 +24,7 @@ use crate::modules::music::shared::utils::music::music_track_file_export::{
 };
 
 pub struct MusicTrackBatchExport {
-    pub(crate) progress: Entity<ExportProgressViewState>,
+    pub progress: Entity<ExportProgressViewState>,
     is_running: bool,
     task: Option<Task<()>>,
     cancel_signal: Option<oneshot::Sender<()>>,

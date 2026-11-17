@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::moderation::engine::rise_moderation_domain::RiseModerationDomain;
 
-pub(crate) fn install_rise_moderation_domain_hooks() {
+pub fn install_rise_moderation_domain_hooks() {
     RiseAppEngineModerationDomainHooks::install(RiseAppEngineModerationDomainHooks {
         prepare: Box::new(|context| {
             async move {

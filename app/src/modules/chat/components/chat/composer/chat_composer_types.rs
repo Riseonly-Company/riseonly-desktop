@@ -4,6 +4,7 @@ use gpui::{AnyElement, App, IntoElement, RenderOnce, Window};
 use image::RgbaImage;
 use rise_core::foundation::ns_range::{self, NSRange};
 use rise_core::foundation::foundation_compare::{CompareOptions, ns_range_of};
+use rise_ui::animated_tabs_ui::animated_tabs_types::TabHeaderCustomEmoji;
 use rise_ui::keyboard_dismiss::ScreenFocus;
 use rise_ui::input_ui::text_boundaries::{next_grapheme_boundary, previous_grapheme_boundary};
 use rise_ui::liquid_chrome::LiquidChromeModifiers;
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::ui::clever_image_disk_cache::{CleverImage, CleverImageBitmapDecoder};
 use crate::core::widgets::wrappers::list_shell_ui::{list_shell_floating_top_inset, list_shell_safe_area_insets};
-use crate::modules::chat::stores::message::message_actions::message_types::{MessageCustomEmojiEntity, RemoteMediaURL};
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::{
     StickerAssetType, StickerAssetTypeInfer, StickerItem,
 };
@@ -370,3 +371,45 @@ pub trait ChatComposerInputChromeModifiers: IntoElement + Sized {
 }
 
 impl<E: IntoElement> ChatComposerInputChromeModifiers for E {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct MessageCustomEmojiEntity {
+    pub offset: i64,
+    pub length: i64,
+    pub custom_emoji_id: String,
+    pub file_url: String,
+    pub asset_type: String,
+    pub width: i64,
+    pub height: i64,
+    pub pack_id: String,
+}
+
+impl From<&MessageCustomEmojiEntity> for TabHeaderCustomEmoji {
+    fn from(entity: &MessageCustomEmojiEntity) -> Self {
+        Self {
+            offset: entity.offset,
+            length: entity.length,
+            custom_emoji_id: entity.custom_emoji_id.clone(),
+            file_url: entity.file_url.clone(),
+            asset_type: entity.asset_type.clone(),
+            width: entity.width,
+            height: entity.height,
+            pack_id: entity.pack_id.clone(),
+        }
+    }
+}
+
+impl From<&TabHeaderCustomEmoji> for MessageCustomEmojiEntity {
+    fn from(emoji: &TabHeaderCustomEmoji) -> Self {
+        Self {
+            offset: emoji.offset,
+            length: emoji.length,
+            custom_emoji_id: emoji.custom_emoji_id.clone(),
+            file_url: emoji.file_url.clone(),
+            asset_type: emoji.asset_type.clone(),
+            width: emoji.width,
+            height: emoji.height,
+            pack_id: emoji.pack_id.clone(),
+        }
+    }
+}

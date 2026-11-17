@@ -10,14 +10,13 @@ use crate::core::widgets::navigations::main_tab_scroll_to_top::MainTabScrollToTo
 
 pub use rise_widgets::side_panel::side_panel_ui::ToggleSidePanel;
 
-pub const KEY_CONTEXT: &str = "Shell";
+pub use crate::modules::rtc::pages::shell_window_actions_hooks::{CloseWindow, KEY_CONTEXT};
 
 pub const PALETTE_KEY_CONTEXT: &str = "CommandPalette";
 
 actions!(
     rise_shell,
     [
-        CloseWindow,
         ConfirmSelection,
         GoBack,
         GoForward,

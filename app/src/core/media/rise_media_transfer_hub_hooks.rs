@@ -2,14 +2,14 @@ use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 
 use crate::core::feature_hooks::FeatureHookSlot;
 
-pub(crate) struct RiseMediaTransferHubHooks {
+pub struct RiseMediaTransferHubHooks {
     pub optional_normalized: fn(Option<&str>) -> Option<String>,
 }
 
 pub(crate) static RISE_MEDIA_TRANSFER_HUB_HOOKS: FeatureHookSlot<RiseMediaTransferHubHooks> = FeatureHookSlot::new("RISE_MEDIA_TRANSFER_HUB_HOOKS");
 
 impl RiseMediaTransferHubHooks {
-    pub(crate) fn install(hooks: Self) {
+    pub fn install(hooks: Self) {
         let _ = RISE_MEDIA_TRANSFER_HUB_HOOKS.set(hooks);
     }
 

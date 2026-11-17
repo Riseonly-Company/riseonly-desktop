@@ -45,13 +45,13 @@ impl DroppedVideoProbe {
 
     /// duration_ms is 0 on an unreadable length
     /// reading that as a short clip would let any video past the ceiling
-    pub(crate) fn readable_seconds(video: &VideoProbe) -> Option<f64> {
+    pub fn readable_seconds(video: &VideoProbe) -> Option<f64> {
         (video.duration_ms() > 0).then_some(video.duration_seconds)
     }
 
     /// untrimmed payload duration_ms comes from, the whole file
     /// so it doesnt count as trimmed to the ceiling
-    pub(crate) fn apply_duration(item: &mut MediaPickerItem, seconds: f64) {
+    pub fn apply_duration(item: &mut MediaPickerItem, seconds: f64) {
         item.video_payload = Some(MediaPickerEditedVideo::new(
             item.url.clone(),
             0.0,

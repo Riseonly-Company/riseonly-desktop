@@ -12,11 +12,10 @@ use rise_core::foundation::foundation_url::Url;
 use rise_platform::single_instance::PrimaryInstance;
 use rise_platform::system_share::{self, IncomingShare};
 
-use crate::app::root_view::RootView;
-use crate::app::shell::window_presenter::WindowPresenter;
-use crate::modules::system_share::desktop_share_intake::{
-    self, DesktopShareArguments, split_launch_arguments, split_opened_urls,
+use crate::app::shell::desktop_share_arguments_hooks::{
+    DesktopShareArguments, split_launch_arguments, split_opened_urls,
 };
+use crate::app::shell::handover_hooks::handover_hooks;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
 
@@ -108,12 +107,16 @@ pub fn deliver_arguments(arguments: DesktopShareArguments, cx: &mut App) {
     if !arguments.links.is_empty() || !arguments.has_shared_content() {
         deliver(&arguments.links, cx);
     }
-    desktop_share_intake::deliver_shared(&arguments.files, &arguments.texts, cx);
+    if let Some(hooks) = handover_hooks() {
+        (hooks.deliver_shared)(&arguments.files, &arguments.texts, cx);
+    }
 }
 
 /// a service call comes from another app so the app comes forward even if the share is refused
 pub fn deliver_incoming_share(incoming: IncomingShare, cx: &mut App) {
-    desktop_share_intake::deliver_shared(&incoming.files, &incoming.texts, cx);
+    if let Some(hooks) = handover_hooks() {
+        (hooks.deliver_shared)(&incoming.files, &incoming.texts, cx);
+    }
     raise_app(cx);
 }
 
@@ -171,22 +174,19 @@ pub fn deliver(urls: &[Url], cx: &mut App) {
         return;
     };
 
-    let _ = handle.update(cx, |view, window, cx| {
-        for url in urls {
-            view.on_open_url(url.clone(), cx);
-        }
-        window.activate_window();
-    });
+    if let Some(hooks) = handover_hooks() {
+        (hooks.open_urls)(handle, urls, cx);
+    }
 }
 
 /// the front shell or a new one, closing the last window on macos leaves the app running
-pub(crate) fn answering_shell(cx: &mut App) -> Option<gpui::WindowHandle<RootView>> {
-    frontmost_shell(cx).or_else(|| WindowPresenter::open_handle(cx, RootView::new))
+pub fn answering_shell(cx: &mut App) -> Option<gpui::AnyWindowHandle> {
+    frontmost_shell(cx).or_else(|| handover_hooks().and_then(|hooks| (hooks.open_shell)(cx)))
 }
 
 /// a notification tap always brings the app to the screen
 /// activate alone only works on macos, windows and linux raise a window and not an app
-pub(crate) fn raise_app(cx: &mut App) {
+pub fn raise_app(cx: &mut App) {
     cx.activate(true);
     let Some(handle) = answering_shell(cx) else {
         return;
@@ -203,7 +203,8 @@ pub(crate) fn raise_app(cx: &mut App) {
 
 /// the one window that answers for the process
 /// system stack top or the focused window or the first open one
-pub(crate) fn frontmost_shell(cx: &App) -> Option<gpui::WindowHandle<RootView>> {
+pub fn frontmost_shell(cx: &App) -> Option<gpui::AnyWindowHandle> {
+    let hooks = handover_hooks()?;
     let open = cx.windows();
     cx.window_stack()
         .unwrap_or_default()
@@ -211,103 +212,13 @@ pub(crate) fn frontmost_shell(cx: &App) -> Option<gpui::WindowHandle<RootView>> 
         .chain(cx.active_window())
         .chain(open.iter().copied())
         .filter(|window| open.contains(window))
-        .find_map(|window| window.downcast::<RootView>())
+        .find(|window| (hooks.is_shell)(*window))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rise_core::foundation::foundation_file_url::PathFlavor;
-    use gpui::TestAppContext;
-    use rise_theme::AppTheme;
-
-    #[gpui::test]
-    fn raising_the_app_with_no_window_open_opens_one(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            if !cx.has_global::<AppTheme>() {
-                rise_ui::install_theme(AppTheme::dark(), cx);
-            }
-        });
-
-        cx.update(|cx| {
-            assert!(frontmost_shell(cx).is_none(), "the test starts windowless");
-            raise_app(cx);
-            assert!(frontmost_shell(cx).is_some());
-        });
-    }
-
-    #[gpui::test]
-    fn a_link_that_arrives_with_no_window_open_still_opens_a_window(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            if !cx.has_global::<AppTheme>() {
-                rise_ui::install_theme(AppTheme::dark(), cx);
-            }
-        });
-
-        let links = urls(&["riseonly", "riseonly://chat/42"]);
-        cx.update(|cx| {
-            assert!(frontmost_shell(cx).is_none(), "the test starts windowless");
-            deliver(&links, cx);
-        });
-
-        assert!(
-            cx.update(|cx| frontmost_shell(cx).is_some()),
-            "closing the last window on macOS leaves the app running; a link that \
-             arrives then must open a window for the queue's consumer"
-        );
-    }
-
-    #[gpui::test]
-    fn a_service_share_with_no_window_open_still_opens_a_window(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            if !cx.has_global::<AppTheme>() {
-                rise_ui::install_theme(AppTheme::dark(), cx);
-            }
-        });
-
-        let incoming = IncomingShare { files: Vec::new(), texts: vec!["shared text".to_owned()] };
-        cx.update(|cx| {
-            assert!(frontmost_shell(cx).is_none(), "the test starts windowless");
-            deliver_incoming_share(incoming, cx);
-            assert!(frontmost_shell(cx).is_some());
-        });
-    }
-
-    fn open_shell(cx: &mut TestAppContext) -> gpui::WindowHandle<RootView> {
-        cx.update(|cx| WindowPresenter::open_handle(cx, RootView::new)).expect("the shell window opens")
-    }
-
-    fn activate(shell: gpui::WindowHandle<RootView>, cx: &mut TestAppContext) {
-        cx.update(|cx| shell.update(cx, |_, window, _| window.activate_window())).expect("the window is open");
-        cx.run_until_parked();
-    }
-
-    fn answers_for_the_process(shell: gpui::WindowHandle<RootView>, cx: &mut TestAppContext) -> bool {
-        cx.update(|cx| shell.update(cx, |view, _, cx| view.is_frontmost_shell(cx))).expect("the window is open")
-    }
-
-    #[gpui::test]
-    fn exactly_the_front_window_takes_the_queue_and_the_next_one_when_it_closes(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            if !cx.has_global::<AppTheme>() {
-                rise_ui::install_theme(AppTheme::dark(), cx);
-            }
-        });
-        let first = open_shell(cx);
-        let second = open_shell(cx);
-
-        activate(second, cx);
-        assert!(answers_for_the_process(second, cx), "the link is raised in the front window");
-        assert!(!answers_for_the_process(first, cx), "the older window must not win by subscribing first");
-
-        activate(first, cx);
-        assert!(answers_for_the_process(first, cx));
-        assert!(!answers_for_the_process(second, cx));
-
-        cx.update(|cx| first.update(cx, |_, window, _| window.remove_window())).expect("the window is open");
-        cx.run_until_parked();
-        assert!(answers_for_the_process(second, cx), "a closed consumer hands the queue on");
-    }
 
     fn urls(arguments: &[&str]) -> Vec<Url> {
         let owned: Vec<String> = arguments.iter().map(|a| (*a).to_owned()).collect();

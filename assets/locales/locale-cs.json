@@ -5966,5 +5966,7 @@
   "media_editor_discard_title": "Zahodit změny?",
   "media_editor_discard_confirm": "Zahodit změny",
   "media_editor_discard_keep": "Pokračovat v úpravách",
-  "story_canvas_photos_limit_reached": "Můžete přidat nejvýše %d fotek"
+  "story_canvas_photos_limit_reached": "Můžete přidat nejvýše %d fotek",
+  "error_rtc_overloaded": "Hovory jsou teď hodně vytížené. Aby probíhající hovory zůstaly stabilní, nové jsme na chvíli pozastavili. Zkuste to za chvíli",
+  "overload_modal_title": "Právě je velká zátěž"
 }

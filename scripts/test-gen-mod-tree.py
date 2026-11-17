@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -161,10 +162,191 @@ def test_files_exceptions() -> None:
         check("rise_ui" not in only, "directory the kit lacks gets no glob to a missing kit module")
 
 
+VIEWS = {
+    "version": 1,
+    "top": "riseonly",
+    "crates": {
+        "app-base": {"dir": "crates/app-base", "deps": []},
+        "app-data": {"dir": "crates/app-data", "deps": ["app-base"]},
+        "app-pages": {"dir": "crates/app-pages", "deps": ["app-data"]},
+        "riseonly": {"dir": "app", "deps": ["app-pages"]},
+    },
+    "rules": [
+        {"prefix": "core", "view": "app-base"},
+        {"prefix": "modules/*/pages", "view": "app-pages"},
+        {"prefix": "modules", "view": "app-data"},
+    ],
+    "files": {
+        "modules/chat/stores/chat_store_page_glue.rs": "app-pages",
+        "modules/chat/stores/chat_flow_tests.rs": "app-pages",
+    },
+}
+
+VIEW_FILES = {
+    "Cargo.toml": '[workspace]\nresolver = "3"\nmembers = ["crates/*", "app"]\n\n[workspace.package]\n'
+                  'version = "0.1.0"\nedition = "2024"\nrust-version = "1.85"\nlicense = "UNLICENSED"\npublish = false\n',
+    "app/Cargo.toml": '[package]\nname = "riseonly"\nversion.workspace = true\nedition.workspace = true\n\n'
+                      '[lib]\nname = "riseonly"\npath = "src/lib.rs"\n\n[[bin]]\nname = "riseonly"\npath = "src/main.rs"\n\n'
+                      '[features]\ndefault = ["extra"]\nextra = []\ndev-drive = []\n\n[dependencies]\n',
+    "app/src/main.rs": "fn main() {\n    riseonly::install_feature_hooks();\n"
+                       "    println!(\"{}\", riseonly::modules::chat::pages::chat_page::render());\n}\n",
+    "app/src/riseonly_app.rs": "pub fn start() -> u64 {\n    crate::modules::chat::pages::chat_page::render()\n}\n",
+    "app/src/core/lib/clock.rs": "pub fn now_ms() -> u64 {\n    42\n}\n",
+    "app/src/core/lib/clock_hooks.rs":
+        "use crate::core::feature_hooks::feature_hooks::FeatureHookSlot;\n\n"
+        "pub(crate) static EXTRA: FeatureHookSlot<fn() -> u64> = FeatureHookSlot::new(\"EXTRA\");\n\n"
+        "pub fn set_extra(extra: fn() -> u64) {\n    let _ = EXTRA.set(extra);\n}\n",
+    "app/src/core/feature_hooks/feature_hooks.rs":
+        "use std::sync::OnceLock;\n\npub struct FeatureHookSlot<T> {\n    cell: OnceLock<T>,\n    name: &'static str,\n}\n\n"
+        "impl<T> FeatureHookSlot<T> {\n    pub const fn new(name: &'static str) -> Self {\n"
+        "        Self { cell: OnceLock::new(), name }\n    }\n\n"
+        "    pub fn set(&self, hooks: T) -> Result<(), T> {\n        self.cell.set(hooks)\n    }\n\n"
+        "    pub fn is_installed(&self) -> bool {\n        self.cell.get().is_some()\n    }\n\n"
+        "    pub fn name(&self) -> &'static str {\n        self.name\n    }\n}\n",
+    "app/src/modules/user/stores/user_store.rs":
+        "use crate::core::lib::clock::now_ms;\n\npub struct UserStore {\n    pub seen: u64,\n}\n\n"
+        "impl UserStore {\n    pub fn new() -> Self {\n        Self { seen: now_ms() }\n    }\n}\n",
+    "app/src/modules/chat/stores/stores.rs": "pub const HUB: u64 = 1;\n",
+    "app/src/modules/chat/stores/chat_store.rs":
+        "use crate::modules::user::stores::user_store::UserStore;\n\npub struct ChatStore {\n    pub owner: UserStore,\n}\n\n"
+        "impl ChatStore {\n    pub fn new() -> Self {\n        Self { owner: UserStore::new() }\n    }\n}\n\n"
+        "#[cfg(test)]\n#[path = \"chat_store_tests.rs\"]\nmod tests;\n",
+    "app/src/modules/chat/stores/chat_store_tests.rs":
+        "use super::*;\n\n#[test]\nfn owner_seen() {\n    assert_eq!(ChatStore::new().owner.seen, 42);\n}\n",
+    "app/src/modules/chat/stores/chat_flow_tests.rs":
+        "use crate::modules::chat::pages::chat_page::render;\n\n#[test]\nfn page_sums() {\n    assert_eq!(render(), 127);\n}\n",
+    "app/src/modules/chat/stores/chat_store_page_glue.rs":
+        "use super::chat_store::ChatStore;\nuse crate::modules::chat::stores::HUB;\n\n"
+        "pub fn glue() -> u64 {\n    ChatStore::new().owner.seen + HUB\n}\n",
+    "app/src/modules/chat/pages/chat_page.rs":
+        "use crate::core::lib::clock::now_ms;\nuse crate::modules::chat::stores::chat_store::ChatStore;\n"
+        "use crate::modules::chat::stores::chat_store_page_glue::glue;\n\n"
+        "pub fn render() -> u64 {\n    ChatStore::new().owner.seen + now_ms() + glue()\n}\n",
+    "app/src/modules/chat/pages/clock_hooks_install.rs":
+        "pub fn install_clock_hooks() {\n    crate::core::lib::clock_hooks::set_extra(|| 7);\n}\n",
+}
+
+
+def view_tree(root: Path, views: dict) -> None:
+    for rel, text in VIEW_FILES.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    (root / "app/src/modules/chat/stores/mod.rs").write_text(HEADER + " old layout\n\npub mod chat_store;\n")
+    (root / "map.json").write_text(json.dumps(dict(MAP, crates={"riseonly": MAP["crates"]["riseonly"]})))
+    (root / "views.json").write_text(json.dumps(views))
+
+
+def run_views(root: Path, mode: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-I", str(GEN), "--ws", str(root), "--map", str(root / "map.json"),
+                           "--views", str(root / "views.json"), mode], capture_output=True, text=True)
+
+
+def test_views() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        view_tree(root, VIEWS)
+        w = run_views(root, "--write")
+        check(w.returncode == 0, f"views --write rc 0 (got {w.returncode}: {w.stderr.strip()})")
+        c = run_views(root, "--check")
+        check(c.returncode == 0, f"views --check after --write rc 0 (got {c.returncode}: {c.stdout.strip()})")
+        check(not list((root / "app/src").rglob("mod.rs")), "views leave no mod.rs in the tree")
+
+        base = (root / "crates/app-base/src/lib.rs").read_text()
+        check(has_block(base, ['#[path = "../../../app/src/core"]', "pub mod core {", "    pub mod feature_hooks {"])
+              and has_block(base, ["    pub mod lib {", "        pub mod clock;", "        pub mod clock_hooks;", "    }", "}"]),
+              "the lowest crate names its files through one path attribute")
+        data = (root / "crates/app-data/src/lib.rs").read_text()
+        check(has_block(data, ["    pub mod lib {", "        #[allow(unused_imports)]",
+                               "        pub use app_base::core::lib::*;", "    }"]),
+              "a crate re-exports a directory of the crate below at the same path")
+        check('#[path = "../../../app/src/core"]' not in data, "a pure re-export module takes no path attribute")
+        check(has_block(data, ["        pub mod stores {", "            pub mod chat_store;", "            pub mod stores;",
+                               "            pub use self::stores::*;", "        }"]),
+              "the hub file is re-exported by the crate that holds it")
+        check("chat_store_tests" not in data, "a test the subject includes by path is not declared")
+        pages = (root / "crates/app-pages/src/lib.rs").read_text()
+        check(has_block(pages, ["        pub mod stores {", "            #[cfg(test)]", "            mod chat_flow_tests;",
+                                "            pub mod chat_store_page_glue;",
+                                "            #[allow(unused_imports)]",
+                                "            pub use app_data::modules::chat::stores::*;", "        }"]),
+              "a directory split between crates: own files, a moved test, then the glob of the crate below")
+        check("pub mod user {" in pages, "a directory only lower crates hold is still declared explicitly")
+        top = (root / "app/src/lib.rs").read_text()
+        check("pub mod riseonly_app;" in top.splitlines(), "the top crate declares the tree root file")
+        check("    crate::modules::chat::pages::clock_hooks_install::install_clock_hooks();" in top.splitlines(),
+              "the top crate indexes an install file another crate holds")
+        check("#[path" not in top, "the top crate sits on the tree and needs no path attribute")
+        check("    slots.push(state(&crate::core::lib::clock_hooks::EXTRA));" in base.splitlines(),
+              "a crate lists the slots its files declare")
+        check("    slots.extend(app_pages::feature_hook_slots());" in top.splitlines()
+              and "    fn install_feature_hooks_fills_every_slot() {" in top.splitlines(),
+              "the top crate gathers every slot and tests that the installs fill them")
+
+        manifest = (root / "crates/app-data/Cargo.toml").read_text().splitlines()
+        check('name = "app-data"' in manifest, "view manifest carries the crate name")
+        check('app-base = { path = "../app-base", default-features = false }' in manifest,
+              "view manifest depends on the crate below without default features")
+        check('extra = ["app-base/extra"]' in manifest and 'default = ["extra"]' in manifest,
+              "features forward to the crates below, default stays as written")
+        app = (root / "app/Cargo.toml").read_text().splitlines()
+        check('app-pages = { path = "../crates/app-pages", default-features = false }' in app,
+              "top manifest lists its direct view crates in the marked block")
+        check('dev-drive = ["app-pages/dev-drive"]' in app, "top manifest forwards features")
+
+        if shutil.which("cargo"):
+            for args in (["run", "-q", "--offline"], ["test", "-q", "--offline", "--workspace"]):
+                r = subprocess.run(["cargo"] + args, cwd=root, capture_output=True, text=True,
+                                   env=dict(__import__("os").environ, CARGO_TARGET_DIR=str(root / "target")))
+                check(r.returncode == 0, f"cargo {args[0]} of the split tree (got {r.returncode}: {r.stderr.strip()[-400:]})")
+                if args[0] == "run":
+                    check(r.stdout.strip() == "127", f"the split binary prints the same sum (got {r.stdout.strip()!r})")
+        else:
+            print("skip cargo run of the split tree: no cargo")
+
+        merged = json.loads(json.dumps(VIEWS))
+        del merged["crates"]["app-pages"]
+        merged["crates"]["riseonly"]["deps"] = ["app-data"]
+        merged["rules"] = [r for r in merged["rules"] if r["view"] != "app-pages"]
+        merged["files"] = {}
+        (root / "views.json").write_text(json.dumps(merged))
+        c = run_views(root, "--check")
+        check("crates/app-pages:1: stale" in c.stdout, "--check names a view crate the map dropped")
+        w = run_views(root, "--write")
+        check(w.returncode == 0 and not (root / "crates/app-pages").exists(), "--write removes the dropped view crate")
+        gone = (root / "app/Cargo.toml").read_text() + (root / "crates/app-data/Cargo.toml").read_text()
+        check("app-pages" not in gone, "feature forwards to the dropped crate leave every manifest")
+        check(run_views(root, "--check").returncode == 0, "--check is clean after the crate is merged up")
+
+
+def test_views_problems() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bad = json.loads(json.dumps(VIEWS))
+        bad["files"]["riseonly_app.rs"] = "app-data"
+        bad["files"]["modules/chat/stores/gone.rs"] = "app-pages"
+        view_tree(root, bad)
+        c = run_views(root, "--check")
+        check(c.returncode == 1, "--check fails on a bad view map")
+        check("a file at the tree root belongs to the top crate" in c.stdout, "a root file outside the top crate is named")
+        check("stale entry: modules/chat/stores/gone.rs" in c.stdout, "a files entry without a file is named")
+        hooks = root / "app/src/core/lib/clock_hooks.rs"
+        hooks.write_text(hooks.read_text().replace("pub(crate) static EXTRA", "static EXTRA"))
+        c = run_views(root, "--check")
+        check("slot EXTRA is private" in c.stdout, "a private slot static is named")
+        cyc = json.loads(json.dumps(VIEWS))
+        cyc["crates"]["app-base"]["deps"] = ["app-pages"]
+        (root / "views.json").write_text(json.dumps(cyc))
+        c = run_views(root, "--check")
+        check(c.returncode != 0 and "dependency cycle" in (c.stdout + c.stderr), "a dependency cycle between crates is refused")
+
+
 def main() -> int:
     test_clean_tree()
     test_hand_mod_rs()
     test_files_exceptions()
+    test_views()
+    test_views_problems()
     print(f"test-gen-mod-tree: {len(failures)} failures")
     return 1 if failures else 0
 

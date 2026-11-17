@@ -35,6 +35,7 @@ use crate::core::media_viewer::media_viewer_types::{
     MediaViewerChrome, MediaViewerFrameKeys, MediaViewerGalleryItem, MediaViewerGalleryItemKind, MediaViewerHeroSkin,
 };
 use crate::core::ui::animated_gif_view::{AnimatedGifContentMode, AnimatedGifView};
+use crate::core::ui::animated_tabs_ui::inline_custom_emoji_text_hooks::inline_custom_emoji_text_element;
 use crate::core::ui::clever_image_ui::{CleverImageCachePolicy, CleverImageUi, ContentMode};
 use crate::core::ui::formatted_text_ui::{FormattedTextOptions, FormattedTextStyle};
 use crate::core::ui::premium_badge::PremiumBadge;
@@ -42,7 +43,6 @@ use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::core::ui::rich_text::rich_text_view::{RichTextTap, RichTextView};
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::modules::chat::components::chat::bubble::bubble_tap_router::BubbleTapRouterModifiers;
-use crate::modules::chat::components::chat::bubble::inline_custom_emoji_text::InlineCustomEmojiText;
 use crate::modules::chat::components::chat::bubble::message_media_upload_overlay::MessageMediaUploadOverlay;
 use crate::modules::chat::components::chat::input_picker::chat_input_picker_kit::ChatInputStickerAsset;
 use crate::modules::chat::stores::message::message_actions::message_types::{MessageCustomEmojiEntity, RemoteMediaURL};
@@ -225,11 +225,15 @@ impl CommentRow {
             }
             view.into_any_element()
         } else {
-            InlineCustomEmojiText::new(id, text, style, emojis)
-                .options(Self::text_options())
-                .on_mention_tap(self.on_mention_tap.clone())
-                .on_link_tap(self.on_link_tap.clone())
-                .into_any_element()
+            inline_custom_emoji_text_element(
+                id,
+                text,
+                style,
+                emojis,
+                Self::text_options(),
+                self.on_mention_tap.clone(),
+                self.on_link_tap.clone(),
+            )
         }
     }
 

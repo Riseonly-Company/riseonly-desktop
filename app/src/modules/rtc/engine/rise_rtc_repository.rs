@@ -2037,7 +2037,12 @@ impl RiseRTCRepository {
     }
 }
 
-impl RiseRTCDirectCall {
+trait RiseRTCDirectCallCanon {
+    fn keeping_key_halves(&self, stored: &RiseRTCDirectCall) -> RiseRTCDirectCall;
+    fn from_canon(call: &RtcPublicCall) -> RiseRTCDirectCall;
+}
+
+impl RiseRTCDirectCallCanon for RiseRTCDirectCall {
     fn keeping_key_halves(&self, stored: &RiseRTCDirectCall) -> RiseRTCDirectCall {
         let caller = self.caller_e2ee_public_key.clone().or_else(|| stored.caller_e2ee_public_key.clone());
         let callee = self.callee_e2ee_public_key.clone().or_else(|| stored.callee_e2ee_public_key.clone());
@@ -2090,7 +2095,11 @@ impl RiseRTCDirectCall {
     }
 }
 
-impl RiseRTCUserProfile {
+trait RiseRTCUserProfileCanon {
+    fn from_canon(caller: &RtcIncomingCaller) -> RiseRTCUserProfile;
+}
+
+impl RiseRTCUserProfileCanon for RiseRTCUserProfile {
     fn from_canon(caller: &RtcIncomingCaller) -> RiseRTCUserProfile {
         RiseRTCUserProfile {
             id: caller.id.clone(),
@@ -2105,7 +2114,11 @@ impl RiseRTCUserProfile {
     }
 }
 
-impl RiseRTCParticipant {
+trait RiseRTCParticipantCanon {
+    fn from_canon(participant: &rise_room_event::Participant) -> RiseRTCParticipant;
+}
+
+impl RiseRTCParticipantCanon for RiseRTCParticipant {
     fn from_canon(participant: &rise_room_event::Participant) -> RiseRTCParticipant {
         RiseRTCParticipant {
             user_id: participant.user_id.clone(),
@@ -2127,7 +2140,11 @@ impl RiseRTCParticipant {
     }
 }
 
-impl RiseRTCRaisedHand {
+trait RiseRTCRaisedHandCanon {
+    fn from_canon(hand: &rise_room_event::RaisedHand) -> RiseRTCRaisedHand;
+}
+
+impl RiseRTCRaisedHandCanon for RiseRTCRaisedHand {
     fn from_canon(hand: &rise_room_event::RaisedHand) -> RiseRTCRaisedHand {
         RiseRTCRaisedHand {
             user_id: hand.user_id.clone(),

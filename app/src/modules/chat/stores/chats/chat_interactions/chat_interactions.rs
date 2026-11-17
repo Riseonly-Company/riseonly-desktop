@@ -37,7 +37,7 @@ use crate::modules::chat::engine::core::rise_conversation_presentation::{
 use crate::modules::chat::engine::messages::rise_message_repository::RiseMessageRepository;
 use crate::modules::chat::engine::rise_conversation_domain::{RiseConversationDomain, RiseConversationDomainRegistry};
 use crate::modules::chat::shared::chat_notifications_debounce::ChatNotificationsDebounce;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::{chat_stores_components_hooks, chat_stores_user_hooks};
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::{
     ChatActionCallback, ChatActionProgressCallback, ChatActionResultCallback, ChatActionsStore,
@@ -934,8 +934,7 @@ impl ChatInteractionsStore {
     }
 
     fn sandbox_owns_wallpaper(chat_id: &str, topic_id: Option<&str>, cx: &App) -> bool {
-        topic_id.is_none()
-            && GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_wallpaper(Some(chat_id)))
+        topic_id.is_none() && (chat_guide_sandbox_hooks().owns_wallpaper)(chat_id, cx)
     }
 
     pub fn set_chat_wallpaper(
@@ -952,7 +951,7 @@ impl ChatInteractionsStore {
             return;
         }
         if Self::sandbox_owns_wallpaper(chat_id, topic_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.pin_wallpaper(&entry, cx));
+            (chat_guide_sandbox_hooks().pin_wallpaper)(&entry, cx);
             Self::answer(on_result, true, None, cx);
             return;
         }
@@ -1006,7 +1005,7 @@ impl ChatInteractionsStore {
             return;
         }
         if Self::sandbox_owns_wallpaper(chat_id, topic_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.unpin_wallpaper(cx));
+            (chat_guide_sandbox_hooks().unpin_wallpaper)(cx);
             Self::answer(on_result, true, None, cx);
             return;
         }
@@ -1019,8 +1018,7 @@ impl ChatInteractionsStore {
         if chat_id.is_empty() {
             return;
         }
-        let invented =
-            GuideSandbox::existing(cx).and_then(|sandbox| sandbox.read(cx).wallpaper_catalog(chat_id)).is_some();
+        let invented = (chat_guide_sandbox_hooks().wallpaper_catalog)(chat_id, cx).is_some();
         if invented {
             return;
         }
@@ -1043,7 +1041,7 @@ impl ChatInteractionsStore {
             return;
         }
         if Self::sandbox_owns_wallpaper(chat_id, topic_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.adopt_wallpaper(draft, look.clamped(), cx));
+            (chat_guide_sandbox_hooks().adopt_wallpaper)(draft, look.clamped(), cx);
             Self::answer(on_result, true, None, cx);
             return;
         }

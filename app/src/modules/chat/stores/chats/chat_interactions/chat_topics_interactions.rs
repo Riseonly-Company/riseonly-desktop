@@ -32,7 +32,7 @@ use crate::modules::chat::engine::messages::rise_message_unread_marks::RiseUnrea
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomainRegistry;
 use crate::modules::chat::shared::chat_forum_ordering_policy::{ChatForumOrderingPolicy, ChatForumTopicPlacement};
 use crate::modules::chat::shared::chat_notifications_debounce::ChatNotificationsDebounce;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::chat_stores_rtc_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_topics_actions::{ChatTopicCallback, ChatTopicSuccess};
@@ -82,7 +82,7 @@ fn effective_user_id(cx: &mut App) -> Option<String> {
 }
 
 fn guide_owns_forum(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_forum_chat_id(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_forum_chat_id)(chat_id, cx)
 }
 
 fn author_is_premium(cx: &mut App) -> bool {

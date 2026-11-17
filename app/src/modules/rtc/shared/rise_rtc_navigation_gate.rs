@@ -8,8 +8,8 @@ use crate::core::lib::sai::sai::Sai;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatVoiceConnectGateDecision;
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
-use crate::modules::rtc::pages::rise_rtc_room_presentation_host::RiseRTCRoomPresentationHost;
 use crate::modules::rtc::stores::rtc::rtc_interactions::rtc_interactions::RTCInteractionsStore;
+use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 
 pub enum RiseRTCNavigationGate {}
 
@@ -77,7 +77,9 @@ impl RiseRTCNavigationGate {
                         ChatVoiceConnectGateDecision::Allowed => {
                             RTCInteractionsStore::shared(cx)
                                 .update(cx, |interactions, cx| interactions.present_room(target, cx));
-                            cx.defer(RiseRTCRoomPresentationHost::activate_call_window);
+                            if let Some(hooks) = rise_rtc_call_window_hooks() {
+                                cx.defer(hooks.activate_call_window);
+                            }
                         }
                         ChatVoiceConnectGateDecision::Denied => {
                             Self::notify_error(tr("rtc_connect_permission_denied"), cx);

@@ -11,7 +11,7 @@ use rise_core::foundation::foundation_date::RiseClock;
 use rise_theme::theme::theme_store::ThemeStore;
 use rise_theme::{AppTheme, alpha};
 use rise_ui::IconUi;
-use rise_ui::animated_tabs_ui::animated_tabs_types::{AnimatedTabsMetrics, TabHeaderConfig, TabHeaderCustomEmoji};
+use rise_ui::animated_tabs_ui::animated_tabs_types::{AnimatedTabsMetrics, TabHeaderConfig};
 use rise_ui::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::liquid_chrome::{LiquidChrome, chrome_surface_depth};
@@ -20,9 +20,9 @@ use rise_ui::swiftui::prelude::*;
 
 use super::animated_tabs_pager::AnimatedTabsPagerLiveState;
 use super::animated_tabs_pager_gesture_gate::{AnimatedTabsPagerAxisOwner, animated_tabs_pager_axis_owner};
-use crate::core::media_viewer::media_viewer_video_scrubber::rounded_rect_path;
-use crate::core::ui::formatted_text_ui::FormattedTextStyle;
-use crate::modules::chat::components::chat::bubble::inline_custom_emoji_text::InlineCustomEmojiText;
+use super::inline_custom_emoji_text_hooks::inline_custom_emoji_text_element;
+use super::rounded_rect_path_hooks::rounded_rect_path;
+use crate::core::ui::formatted_text_ui::{FormattedTextOptions, FormattedTextStyle};
 use crate::modules::chat::stores::message::message_actions::message_types::MessageCustomEmojiEntity;
 
 const NARROW_STRIP_WIDTH: f32 = 260.0;
@@ -1178,13 +1178,15 @@ impl RenderOnce for AnimatedTabsTabLabel {
         } else {
             let mut style = FormattedTextStyle::new(color, color, self.theme.text.secondary);
             style.font_size = f32::from(AnimatedTabsMetrics::TAB_FONT_SIZE);
-            InlineCustomEmojiText::new(
+            inline_custom_emoji_text_element(
                 SharedString::from(format!("animated-tab-title-{}", self.tab.id)),
                 self.tab.text.to_string(),
                 style,
                 self.tab.custom_emojis.iter().map(MessageCustomEmojiEntity::from).collect(),
+                FormattedTextOptions::default(),
+                None,
+                None,
             )
-            .into_any_element()
         };
         let text = div()
             .swiftui_font(Font::system_weight(f32::from(AnimatedTabsMetrics::TAB_FONT_SIZE), weight))
@@ -1219,35 +1221,5 @@ impl RenderOnce for AnimatedTabsTabLabel {
             .child(measure("animated-tab-width", move |bounds, _window, cx| {
                 on_width(f32::from(bounds.size.width), cx);
             }))
-    }
-}
-
-impl From<&MessageCustomEmojiEntity> for TabHeaderCustomEmoji {
-    fn from(entity: &MessageCustomEmojiEntity) -> Self {
-        Self {
-            offset: entity.offset,
-            length: entity.length,
-            custom_emoji_id: entity.custom_emoji_id.clone(),
-            file_url: entity.file_url.clone(),
-            asset_type: entity.asset_type.clone(),
-            width: entity.width,
-            height: entity.height,
-            pack_id: entity.pack_id.clone(),
-        }
-    }
-}
-
-impl From<&TabHeaderCustomEmoji> for MessageCustomEmojiEntity {
-    fn from(emoji: &TabHeaderCustomEmoji) -> Self {
-        Self {
-            offset: emoji.offset,
-            length: emoji.length,
-            custom_emoji_id: emoji.custom_emoji_id.clone(),
-            file_url: emoji.file_url.clone(),
-            asset_type: emoji.asset_type.clone(),
-            width: emoji.width,
-            height: emoji.height,
-            pack_id: emoji.pack_id.clone(),
-        }
     }
 }

@@ -43,31 +43,44 @@ Note that gpui itself is not uniform: on Windows `hide_other_apps` and
 `unhide_other_apps` are live `unimplemented!()` calls, and `start_external_drag`
 does not exist. Go through `rise_platform::gpui_shim`, never gpui directly.
 
-## 3. Calls between modules follow iOS
+## 3. One tree, several layer crates, calls up only through a slot
 
-The whole application (`modules`, `app`, and every `core` file that references
-a feature) lives in one crate, `riseonly` (`app/`), the way iOS is one target. Inside it modules call each other directly,
-stores included, exactly where iOS does; stores may use `RiseEngine` where the
-iOS store does.
+The whole application (`modules`, `app`, and every `core` file that references a feature) is one tree,
+`app/src`, the way iOS is one target, and every path mirrors iOS. The tree is compiled by several crates
+so that an edit rebuilds a small part of it. The files never move:
 
-A `Hooks` slot exists only in two cases:
+- `scripts/crate-views.json` says which crate compiles each file: rules by directory, then the files that
+  differ from their rule. `riseonly` (`app/`) is the top crate; the others are `crates/riseonly-*`.
+- A view crate is two generated files, `Cargo.toml` and `src/lib.rs`. The `lib.rs` names its files in
+  `app/src` and re-exports the crates below at the same module paths, so `crate::modules::...` and
+  `crate::core::...` are the same path in every crate and no source file knows which crate it is in.
+- `scripts/gen-mod-tree.py --write` regenerates them, `--check` is the gate. There is no `mod.rs` in `app/src`.
 
-- a kit crate calls a feature (`<Lower>Hooks` in the kit crate, installed by
-  `riseonly` at start);
-- an early phase calls a later one (F1-F3 calls a store, engine or page of
-  F4-F5): `<lower>_hooks.rs` next to the caller, installed by the feature's
-  `<topic>_hooks_install.rs`, indexed by the generated
-  `install_feature_hooks()`.
+Direction is the one rule. A file names only items of its own crate and of the crates below it
+(`deps` in the map). Calls down are direct, stores included, exactly where iOS calls them. A call up goes
+through a `Hooks` slot and nothing else:
 
-No slot exists outside these two cases.
+- a kit crate calls a feature (`<Lower>Hooks` in the kit crate, installed by the app at start);
+- a lower crate calls a higher one, or an early phase calls a later one: `<lower>_hooks.rs` next to the
+  caller declares the slot (`FeatureHookSlot`), `<topic>_hooks_install.rs` next to the implementation
+  fills it, and the generated `install_feature_hooks()` calls every install at start. The generated
+  `feature_hook_slots()` lists every slot and a generated test fails when an install leaves one empty.
+
+A type the lower crate needs is not a slot: its definition lives in a lower file and the file that used to
+hold it keeps a `pub use`, so the old path still resolves.
+
+A new file takes the crate of its directory rule. If it names something above that crate, either it
+belongs higher (add it to `files` in the map) or the call needs a slot. An `impl Type { .. }` block lives
+in the crate of `Type`; an extension that needs a higher crate is a trait in the higher file.
 
 ## Where code lives
 
 - Kit crates hold the iOS `Core` files that reference no feature: `core/ui` in
   `rise-ui`, `core/widgets` in `rise-widgets`, `Media` in `rise-media`, `Theme`
   in `rise-theme` and so on, with per-file exceptions from the graph in
-  `scripts/crate-map.json`. `riseonly` re-exports the kit, so the path
-  `crate::core::...` is the same everywhere.
+  `scripts/crate-map.json`. The app crates re-export the kit, so the path
+  `crate::core::...` is the same everywhere. Kit files live in the kit's own
+  directory; app files stay in `app/src` whatever crate compiles them (section 3).
 - Every path mirrors iOS: `modules/chat/engine/messages/rise_message_realtime.rs`
   is the twin of `modules/chat/engine/messages/RiseMessageRealtime.swift`.
 - Account isolation is 1 to 1 with iOS: the members that iOS resets from

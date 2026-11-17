@@ -254,6 +254,19 @@ changes.
 | `rise-otp` | The one-time code vocabulary of riseonly-tools: channels and their wire spellings, read by `AuthCodeChannel`. No dependencies. | Literal channel names, which drift from the canon silently. |
 | `rise-canon` | The generated client facade of riseonly-tools: client serde models with the Swift type names, request bodies, event payloads, HTTP paths, server texts, plus `pub use` of the other riseonly-tools crates. Desktop writes `use rise_canon::...` the way iOS writes `import RiseCanon`. | Ours; the emitter lives in riseonly-tools. |
 
+## App crates (views of `app/src`)
+
+`riseonly` (`app/`) and the `crates/riseonly-*` crates compile one tree, `app/src`. The list of crates, their
+layers and the crate of every file are `scripts/crate-views.json` (`docs/ARCHITECTURE_BOUNDARIES.md` section 3).
+Their manifests are generated from `app/Cargo.toml`, so they bring no dependency of their own: a new external
+crate is still one row in this file and one line in `app/Cargo.toml`.
+
+Shaping the map: after an edit cargo runs again every crate above the edited one, and each of them costs
+about a second even when it is small. Sibling crates under one layer run in parallel, so splitting a layer
+sideways makes an edit inside it cheaper and costs the layers below nothing. One more crate on the chain makes
+every edit below it slower, so a new step is worth it only when the files above it are edited far more often
+than the files below. Measure with `cargo build --timings` after a one-line edit before keeping a new crate.
+
 ## Approved, not yet linked
 
 Each version is pinned when the crate is added

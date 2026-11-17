@@ -90,6 +90,17 @@ end
 RUST_BACKTRACE = "1"
 RUST_LOG = "${RISE_DEV_LOG}"
 
+[tasks.watch]
+description = "Rebuild on every change and restart the windows (macOS). --check, --drive NAME, --headless, --linux, --windows, --env, --help"
+script_runner = "@shell"
+script = '''
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+exec ./scripts/watch-macos.sh "$@"
+'''
+
+[tasks.watch.env]
+RUST_LOG = "${RISE_DEV_LOG}"
+
 # The riseonly binary enables `rlottie` by default (app/Cargo.toml), so every
 # workspace build compiles rise-media against the vendored rlottie source; without
 # it rise-media's build.rs panics. vendor-rlottie is a no-op once the tree exists.

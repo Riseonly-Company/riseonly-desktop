@@ -24,7 +24,7 @@ use rise_ui::view_screen_snapshot::{ViewScreenImage, ViewScreenSource};
 use crate::core::guides::guide_facts::GuideFacts;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::sai::Sai;
-use crate::core::ui::hold_context_menu_ui::hold_context_menu_host::HoldContextMenuWindowPresenter;
+use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter_hooks::hold_context_menu_presenter_hooks;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_scroll_lock::HoldContextMenuScrollLock;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_touch_tracker::HoldContextMenuTouchTracker;
 use crate::modules::chat::components::chat::async_render::chat_performance_trace::ChatPerformanceTrace;
@@ -576,7 +576,9 @@ impl HoldContextMenuPresenter {
         if source_window.is_some() && !keeps_source_editing {
             ScreenFocus::release_text_field(window, cx);
         }
-        HoldContextMenuWindowPresenter::show(source_window, cx);
+        if let Some(hooks) = hold_context_menu_presenter_hooks() {
+            (hooks.show)(source_window, cx);
+        }
     }
 
     pub fn perform_action(
@@ -597,7 +599,9 @@ impl HoldContextMenuPresenter {
             Some(request)
         });
         let Some(request) = request else { return false };
-        HoldContextMenuWindowPresenter::restore_source_key_window(window, cx);
+        if let Some(hooks) = hold_context_menu_presenter_hooks() {
+            (hooks.restore_source_key_window)(window, cx);
+        }
         (request.on_action)(action_id.to_owned(), window, cx);
         true
     }
@@ -641,7 +645,7 @@ impl HoldContextMenuPresenter {
                 (request.on_restore_source)(cx);
             }
         }
-        let source_window = HoldContextMenuWindowPresenter::shared(cx).read(cx).source_window();
+        let source_window = hold_context_menu_presenter_hooks().and_then(|hooks| (hooks.source_window)(cx));
         let on_dismiss = request.map(|request| request.on_dismiss);
         let (touch_block_deadline, after_dismiss_work) = presenter.update(cx, |this, cx| {
             if restored {
@@ -675,7 +679,9 @@ impl HoldContextMenuPresenter {
                 }
             });
         }
-        HoldContextMenuWindowPresenter::hide(touch_block_deadline, cx);
+        if let Some(hooks) = hold_context_menu_presenter_hooks() {
+            (hooks.hide)(touch_block_deadline, cx);
+        }
         if let Some(on_dismiss) = on_dismiss {
             on_dismiss(cx);
         }

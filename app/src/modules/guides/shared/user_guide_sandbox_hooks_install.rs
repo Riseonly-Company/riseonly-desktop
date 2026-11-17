@@ -7,7 +7,7 @@ use crate::modules::user::stores::user::user_services::user_guide_sandbox_hooks:
     UserGuideSandboxHooks, set_user_guide_sandbox_hooks,
 };
 
-pub(crate) fn install_user_guide_sandbox_hooks() {
+pub fn install_user_guide_sandbox_hooks() {
     let _ = set_user_guide_sandbox_hooks(UserGuideSandboxHooks {
         owns_user_id,
         owns_theme_scene,

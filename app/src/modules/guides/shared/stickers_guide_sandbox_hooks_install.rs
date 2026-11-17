@@ -8,7 +8,7 @@ use crate::modules::stickers::stores::stickers::stickers_guide_sandbox_hooks::{
     StickersGuideSandboxHooks, set_stickers_guide_sandbox_hooks,
 };
 
-pub(crate) fn install_stickers_guide_sandbox_hooks() {
+pub fn install_stickers_guide_sandbox_hooks() {
     let _ = set_stickers_guide_sandbox_hooks(StickersGuideSandboxHooks {
         stickers_snapshot,
         owns_sticker_pack,

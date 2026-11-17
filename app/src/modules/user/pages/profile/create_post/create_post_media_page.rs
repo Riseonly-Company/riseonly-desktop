@@ -13,8 +13,9 @@ use crate::modules::camera::capture::rise_camera_presenter::RiseCameraPresenter;
 use crate::modules::camera::components::feed_media_picker_reveal::{CreatePostMediaHostActions, create_post_media_host};
 use crate::modules::media_picker::api::media_picker_configuration::{MediaPickerConfiguration, MediaPickerSourceTab};
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerResult, MediaPickerTrackSelection};
-use crate::modules::media_picker::editor::media_editor_screen::MediaEditorOutcome;
-use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorWindowPresenter;
+use crate::modules::media_picker::editor::media_editor_window_presenter::{
+    MediaEditorOutcome, MediaEditorWindowPresenter,
+};
 use crate::modules::media_picker::library::media_asset::MediaAsset;
 use crate::modules::media_picker::ui::media_picker_grid_view::MEDIA_PICKER_REFRESH_CELL_FRAMES;
 use crate::modules::media_picker::ui::media_picker_screen::{MediaPickerLayout, MediaPickerScreen};

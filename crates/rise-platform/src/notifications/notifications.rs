@@ -791,6 +791,7 @@ mod tests {
         let scopes = MuteScopes {
             messages: true,
             mentions: true,
+            replies: true,
             reactions: false,
             events: false,
         };

@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "تبدیلیاں رد کریں؟",
   "media_editor_discard_confirm": "تبدیلیاں رد کریں",
   "media_editor_discard_keep": "ترمیم جاری رکھیں",
-  "story_canvas_photos_limit_reached": "آپ زیادہ سے زیادہ %d تصاویر شامل کر سکتے ہیں"
+  "story_canvas_photos_limit_reached": "آپ زیادہ سے زیادہ %d تصاویر شامل کر سکتے ہیں",
+  "error_rtc_overloaded": "کالز پر اس وقت بہت زیادہ لوڈ ہے۔ جاری کالز کو مستحکم رکھنے کے لیے نئی کالز تھوڑی دیر کے لیے روک دی گئی ہیں۔ تھوڑی دیر میں دوبارہ کوشش کریں",
+  "overload_modal_title": "اس وقت بہت زیادہ لوڈ ہے"
 }

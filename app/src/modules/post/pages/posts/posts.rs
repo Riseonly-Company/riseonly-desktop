@@ -65,7 +65,7 @@ use crate::modules::post::pages::posts::post_detail::native_list::post_feed_nati
 };
 use crate::modules::post::pages::posts::post_detail::native_list::post_list_configuration::PostListHeader;
 use crate::modules::post::pages::posts::post_detail::native_list::post_list_engine_policy::PostListEnginePolicy;
-use crate::modules::post::pages::posts::post_detail::profile_post_list_body::splice_list_rows;
+use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 use crate::modules::post::shared::post_media_box::PostMediaBox;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;

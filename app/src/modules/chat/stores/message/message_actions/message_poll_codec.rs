@@ -10,27 +10,7 @@ use crate::core::lib::canon_rules::RiseValidationCanonRules;
 use crate::modules::chat::stores::message::message_actions::message_types::{
     GetMessageMessage, MessageContentType, MessagePollInfo, MessagePollOption,
 };
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MessagePollDraft {
-    pub question: String,
-    pub options: Vec<String>,
-    pub is_anonymous: bool,
-    pub allows_multiple: bool,
-    pub quiz_correct_index: Option<usize>,
-}
-
-impl Default for MessagePollDraft {
-    fn default() -> Self {
-        Self {
-            question: String::new(),
-            options: Vec::new(),
-            is_anonymous: true,
-            allows_multiple: false,
-            quiz_correct_index: None,
-        }
-    }
-}
+pub use crate::modules::media_picker::api::message_attachment_types_hooks::MessagePollDraft;
 
 static MESSAGE_POLL_MAX_OPTIONS: LazyLock<usize> =
     LazyLock::new(|| RiseValidation::collection_limit("poll_options").maximum);

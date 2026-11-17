@@ -4,7 +4,7 @@ use crate::modules::rtc::media::rise_rtc_media_presentation::RiseRTCMediaPresent
 use crate::modules::rtc::stores::group_voice::rise_rtc_group_voice_settings_stores::RTCGroupVoiceSettingsServicesStore;
 use crate::modules::rtc::system::rise_rtc_call_system_coordinator::RiseRTCCallSystemCoordinator;
 
-pub(crate) fn install_account_state_reset_rtc_hooks() {
+pub fn install_account_state_reset_rtc_hooks() {
     set_account_state_reset_rtc_hooks(AccountStateResetRtcHooks {
         authenticated_account_did_activate: |user_id, cx| {
             RiseRTCCallSystemCoordinator::shared(cx)

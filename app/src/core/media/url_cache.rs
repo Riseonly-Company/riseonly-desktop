@@ -24,7 +24,7 @@ const PARTIAL_EXTENSION: &str = "partial";
 const MAX_ENTRY_SHARE_DIVISOR: usize = 20;
 
 static CACHE_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    AppPaths::resolve(AppEnvironment::compiled().canon())
+    AppPaths::resolve(AppEnvironment::current().canon())
         .ok()
         .map(|paths| paths.cache_dir().join(DIRECTORY_NAME))
 });

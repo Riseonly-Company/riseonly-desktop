@@ -6,7 +6,7 @@ use super::notify_interactions::NotifyInteractionsStore;
 use crate::core::lib::canon_timing::RiseTimingCanonExt;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiSliceState;
 use crate::core::lib::sai::modules::sai_debouncer::sai_debouncer::SaiDebouncer;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::notify::stores::notify_services::notify_guide_sandbox_hooks::notify_guide_sandbox_hooks;
 use crate::modules::notify::stores::notify_actions::notify_actions::NotifyActionsStore;
 use crate::modules::notify::stores::notify_actions::notify_profile_settings_wire_types::{
     ProfileNotificationScope, ProfileNotificationSettingsDebounce,
@@ -37,7 +37,7 @@ impl ProfileNotificationSettingsDrain {
 
 impl NotifyInteractionsStore {
     fn guide_owns_person_notifications(target_user_id: &str, cx: &mut App) -> bool {
-        GuideSandbox::shared(cx).read(cx).owns_person_notifications(target_user_id)
+        (notify_guide_sandbox_hooks().owns_person_notifications)(target_user_id, cx)
     }
 
     pub fn ensure_profile_notification_settings_loaded(&mut self, target_user_id: &str, cx: &mut Context<Self>) {
@@ -69,7 +69,7 @@ impl NotifyInteractionsStore {
         cx: &mut Context<Self>,
     ) {
         if Self::guide_owns_person_notifications(target_user_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.set_person_notification(scope, enabled, cx));
+            (notify_guide_sandbox_hooks().set_person_notification)(scope, enabled, cx);
             return;
         }
         let patch = Map::from_iter([(scope.wire_key().to_owned(), Value::Bool(enabled))]);
@@ -81,7 +81,7 @@ impl NotifyInteractionsStore {
 
     pub fn set_all_profile_notifications(&mut self, target_user_id: &str, enabled: bool, cx: &mut Context<Self>) {
         if Self::guide_owns_person_notifications(target_user_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| sandbox.set_all_person_notifications(enabled, cx));
+            (notify_guide_sandbox_hooks().set_all_person_notifications)(enabled, cx);
             return;
         }
         let patch: Map<String, Value> = ProfileNotificationScope::ALL_CASES

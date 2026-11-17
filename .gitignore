@@ -4,6 +4,7 @@
 
 /build
 /dist
+/payload
 *.app
 *.dmg
 *.AppImage

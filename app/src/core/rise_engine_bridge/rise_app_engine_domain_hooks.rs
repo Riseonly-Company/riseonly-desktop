@@ -23,7 +23,7 @@ pub type RiseAppEngineSetCallHistorySink = Box<
 macro_rules! rise_app_engine_domain_hooks {
     ($(#[$doc:meta])* $name:ident, $slot:ident) => {
         $(#[$doc])*
-        pub(crate) struct $name {
+        pub struct $name {
             pub prepare: RiseAppEngineDomainPrepare,
         }
 
@@ -97,7 +97,7 @@ rise_app_engine_domain_hooks!(
 /// rtc domain hooks, the lifetime carries the domain
 /// so the bridge can hand it the call history sink
 /// socket connected maps to application did become active
-pub(crate) struct RiseAppEngineRtcDomainHooks {
+pub struct RiseAppEngineRtcDomainHooks {
     pub prepare: RiseAppEngineDomainPrepare,
     pub set_call_history_sink: RiseAppEngineSetCallHistorySink,
 }

@@ -10,7 +10,7 @@ use rise_core::foundation::ns_range::{NSRange, length_utf16};
 use rise_theme::ThemePalette;
 use rise_ui::hold_context_menu_ui::hold_context_menu_metrics::HoldContextMenuMetrics;
 
-use crate::modules::chat::components::chat::bubble::media_letterbox_photo::MediaAspectFit;
+use crate::core::media_viewer::media_letterbox_photo_hooks::MediaAspectFit;
 use crate::modules::comment::stores::comment_actions::comment_types::{
     CommentMedia, CommentMediaType, GetCommentsResponse,
 };

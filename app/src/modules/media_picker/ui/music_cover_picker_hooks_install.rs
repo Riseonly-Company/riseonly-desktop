@@ -22,6 +22,6 @@ fn render_media_picker_sheet(
     .into_any_element()
 }
 
-pub(crate) fn install_music_cover_picker_hooks() {
+pub fn install_music_cover_picker_hooks() {
     set_music_cover_picker_hooks(MusicCoverPickerHooks { render_media_picker_sheet });
 }

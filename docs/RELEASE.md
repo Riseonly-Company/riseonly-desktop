@@ -8,9 +8,17 @@ Branches: `development` -> `staging` -> `main`. Everything goes through pull req
 |---|---|---|
 | `build` | ci, on every pull request into `staging` or `main` | builds the picked platforms and uploads them as workflow artifacts (7 days) |
 | `deploy` | you | after the merge the build is released; without it a merge ships nothing |
-| `macos` `linux` `win` | you | pick platforms; no platform label means all three |
-| `macos-silicon` `macos-intel` | you | pick the Mac architectures; `macos` or both of them means both, with no platform label at all every platform and both Macs build |
+| `linux` `win` `macos` | you | pick a platform with every architecture of it: Linux and Windows x86_64 and arm64, both Macs |
+| `linux-x64` `linux-arm64` | you | pick the Linux architectures (AppImage) |
+| `win-x64` `win-arm64` | you | pick the Windows architectures (zip) |
+| `macos-silicon` `macos-intel` | you | pick the Mac architectures |
+| `env-dev` `env-staging` `env-prod` | you | pull request builds only: the backend the app talks to, instead of the branch default (staging, production into `main`); one at a time |
+| `release-profile` | you | pull request builds only: the `release` profile (lto) instead of `fast` |
 | `tests` | you | also runs `cargo test` and clippy on Linux |
+
+With no platform or architecture label at all, Linux x86_64, Windows x86_64 and both Macs build.
+Labels mix: `linux-arm64` and `macos-intel` build exactly those two. A release (`deploy`) builds
+the same picked architectures, always against its branch environment and with the release profile.
 
 Any other pull request builds only when you add `build` yourself. Removing `build` stops builds on
 later pushes. The labels are created by ci on the first pull request.
@@ -19,15 +27,38 @@ later pushes. The labels are created by ci on the first pull request.
 
 - **pull request** (`build.yml`): lint (fmt, boundaries, module tree, canon locales) and a `fast`
   profile build of each picked platform. Into `main` it is a production app, otherwise a staging app.
-- **development -> staging, merged with `deploy`** (`release.yml`): release profile build of the
-  staging app (`Riseonly Staging`, talks to the staging backend), uploaded to the cdn under
-  `staging/`, the staging feed updated, a draft GitHub release.
+- **development -> staging, merged with `deploy`** (`release.yml`): release profile build, packaged
+  as the staging app (`Riseonly Staging`, talks to the staging backend), uploaded to the cdn under
+  `staging/`, the staging feed updated, a draft GitHub release. The compiled binaries stay as
+  `payload-<key>-b<build>-<platform>-<arch>` artifacts for 90 days.
 - **staging -> main, merged with `deploy`**: the same for production: the production feed, a
   published GitHub release with tag `v<version>`. It fails early when that tag exists, so bump
   `[workspace.package] version` in `Cargo.toml` first. The updater compares versions, so a staging
-  build reaches staging installs only with a higher version too.
+  build reaches staging installs only with a higher version too. When the staging release of the
+  same sources left its binaries, nothing compiles: they are packaged again as the production app
+  under the staging build number, signed and notarized. A platform with no kept binary compiles.
 
 Any other merge into `staging` or `main` (another head branch, no `deploy`) releases nothing.
+
+## One build, two apps
+
+The binary does not carry its environment, the package names it. The file `environment` beside
+`assets` holds the canon name (`Contents/Resources/environment` on macOS, `share/riseonly/environment`
+on Linux, next to `riseonly.exe` on Windows) and the app reads it at start. Without the file the
+build value `RISE_ENV` decides, which is what `cargo run` and the watch loop rely on. ci compiles
+with no `RISE_ENV` and packages for the environment of the pull request or release, so staging and
+production ship one binary. On macOS each package is signed and notarized on its own, the name and
+the bundle id differ. On Windows the product name in the file properties is `Riseonly` in both. On
+Linux and Windows the file is plain and editable; the backend, not the client, decides who gets in.
+
+A kept binary is found by the key of the sources that go into it: every file but `.github/workflows`,
+`docs` and the packaging scripts of `scripts/ci` (`python3 scripts/ci/plan.py key` prints it), so a
+change to those compiles nothing again. A binary compiled on another machine joins a release the
+same way: `scripts/ci/payload.sh <build> macos-aarch64=<riseonly> macos-x86_64=<riseonly>` stores
+them in the prerelease `payload-<key>-b<build>`, and the macOS jobs of the next release of these
+sources package, sign and notarize them instead of compiling. Compile such a binary the way
+`build-macos.sh` does: no `RISE_ENV`, the `RISE_BUILD_NUMBER` of that build, the
+`RISE_UPDATE_FEED_PUBLIC_KEY` of the repository.
 
 ## Where the files go
 
@@ -71,9 +102,13 @@ A failed hook is a warning, the feed is already out.
 
 ## Machines
 
-- Linux and Windows build on the ci builder, in docker (`scripts/ci/toolchain/Dockerfile`, Ubuntu
-  22.04 for the glibc floor, llvm 19, cargo-xwin for msvc). One runner per platform so both build
-  at once:
+- Linux x86_64 and both Windows architectures build on the ci builder, in docker
+  (`scripts/ci/toolchain/Dockerfile`, Ubuntu 22.04 for the glibc floor, llvm 19, cargo-xwin for
+  msvc, mingw-w64 and llvm-mingw for the Windows FFmpeg dlls). Windows arm64 is cross compiled
+  there too (`WIN_ARCH=aarch64`); the two Windows jobs run one after another. Linux arm64 builds
+  on the GitHub hosted `ubuntu-24.04-arm` runner in the same image (override with the
+  `DESKTOP_LINUX_ARM_RUNNER` variable), with a 14 GB container cap. One runner per platform so
+  both build at once:
 
   ```
   sudo bash scripts/ci/install-runner.sh <owner/repo> linux

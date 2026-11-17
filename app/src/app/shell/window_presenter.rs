@@ -97,7 +97,7 @@ impl WindowPresenter {
                     focus: show,
                     show,
                     titlebar: Some(TitlebarOptions {
-                        title: Some(AppEnvironment::compiled().display_name().into()),
+                        title: Some(AppEnvironment::current().display_name().into()),
                         appears_transparent: true,
                         traffic_light_position: Some(metrics.traffic_light_origin()),
                     }),
@@ -156,7 +156,7 @@ impl WindowPresenter {
     /// wayland app_id and x11 wm_class, the shell ties a window to its desktop entry by this
     /// every window of the app carries it
     pub fn app_id() -> Option<String> {
-        identity_for(AppEnvironment::compiled().as_str()).map(|identity| identity.bundle_identifier.to_owned())
+        identity_for(AppEnvironment::current().as_str()).map(|identity| identity.bundle_identifier.to_owned())
     }
 
     pub fn window_count(cx: &App) -> usize {

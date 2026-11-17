@@ -2,7 +2,7 @@ use rise_canon::rise_key::upload;
 use rise_canon::rise_wire_canon::key as wire_key;
 use serde_json::{Map, Value};
 
-use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
+use crate::modules::chat::components::chat::composer::remote_media_url_type_hooks::RemoteMediaURL;
 
 /// stable cover url out of a finished upload
 /// lives with the upload helpers so music, chat

@@ -157,7 +157,7 @@ fn the_friendly_mute_flag_becomes_the_launch_argument() {
     if HostOs::current() == HostOs::Windows {
         return;
     }
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/dev-args.sh");
+    let script = Path::new(env!("RISE_WORKSPACE_DIR")).join("scripts/dev-args.sh");
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(format!(
@@ -404,6 +404,22 @@ fn the_network_switch_parses_both_states() {
     );
     assert!(parse_command(br#"{"cmd":"net","state":"flaky"}"#).is_err());
     assert!(parse_command(br#"{"cmd":"net"}"#).is_err(), "state is required");
+}
+
+#[test]
+fn a_refusal_carries_its_code_and_details() {
+    assert_eq!(
+        command(r#"{"cmd":"refusal","code":"RTC_OVERLOADED","details":{"retry_after_s":"10"}}"#),
+        DriveCommand::Refusal {
+            code: "RTC_OVERLOADED".to_owned(),
+            details: [("retry_after_s".to_owned(), "10".to_owned())].into_iter().collect(),
+        }
+    );
+    assert_eq!(
+        command(r#"{"cmd":"refusal","code":"RTC_OVERLOADED"}"#),
+        DriveCommand::Refusal { code: "RTC_OVERLOADED".to_owned(), details: Default::default() }
+    );
+    assert!(parse_command(br#"{"cmd":"refusal"}"#).is_err(), "code is required");
 }
 
 #[test]

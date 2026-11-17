@@ -13,7 +13,7 @@ fn services(cx: &App) -> Option<&StickersServicesStore> {
     rise_ui::shared::try_read::<StickersServicesStore>(cx)
 }
 
-pub(crate) fn install_message_sticker_view_hooks() {
+pub fn install_message_sticker_view_hooks() {
     set_message_sticker_view_hooks(MessageStickerViewHooks {
         effective_user_id_for_wire: |cx| {
             rise_ui::shared::try_read::<AuthServicesStore>(cx).and_then(|store| store.effective_user_id_for_wire())

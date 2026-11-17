@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Değişiklikler iptal edilsin mi?",
   "media_editor_discard_confirm": "Değişiklikleri iptal et",
   "media_editor_discard_keep": "Düzenlemeye devam et",
-  "story_canvas_photos_limit_reached": "En fazla %d fotoğraf ekleyebilirsiniz"
+  "story_canvas_photos_limit_reached": "En fazla %d fotoğraf ekleyebilirsiniz",
+  "error_rtc_overloaded": "Aramalar şu anda çok yoğun. Devam eden aramaların sorunsuz sürmesi için yeni aramalar kısa süreliğine duraklatıldı. Birazdan tekrar dene",
+  "overload_modal_title": "Şu anda yoğunluk var"
 }

@@ -35,8 +35,8 @@ use crate::core::widgets::wrappers::list_shell_ui::{ListShellScrollUnderChromeMo
 use crate::modules::chat::components::chat::bubble::inline_custom_emoji_text::InlineCustomEmojiText;
 use crate::modules::chat::components::chat::topic_icon_glyph::TopicIconGlyph;
 use crate::modules::chat::pages::chats::chat::chat_profile::chat_tile_color::ChatTileColor;
-use crate::modules::chat::pages::chats::chat::chat_settings::chat_settings_shared::MemberTagChip;
 use crate::modules::chat::pages::chats::chat::chat_topics::channel_kind_editor::ChatChannelKindPresentation;
+use crate::modules::chat::pages::chats::chat::chat_topics::member_tag_chip_hooks::MemberTagChip;
 use crate::modules::chat::pages::chats::chat::chat_topics::topic_editor_sheet::TopicEditorSheet;
 use crate::modules::chat::pages::chats::chat::forum_home::forum_section_name_sheet::{
     ForumSectionNameSheetHost, ForumSectionNameTarget, ForumSectionTitleText,

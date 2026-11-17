@@ -53,7 +53,7 @@ use crate::modules::auth::services::auth_token_refresh::AuthTokenRefresh;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::engine::core::rise_conversation_upload_support::RiseConversationUploadSupport;
 use crate::modules::chat::engine::messages::rise_message_contracts::RiseMessageRepositoryError;
-use crate::modules::chat::pages::chats::chats::ChatsHeaderStatus;
+use crate::modules::story::stores::story::story_services::chats_header_status_hooks::ChatsHeaderStatus;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::User;
 use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;

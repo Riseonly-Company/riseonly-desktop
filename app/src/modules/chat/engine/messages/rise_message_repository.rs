@@ -358,7 +358,7 @@ impl Drop for RiseMessagePrefetchAbortOnDrop {
 pub struct RiseMessageRepository {
     pub(crate) this: Weak<RiseMessageRepository>,
     pub(crate) engine: Arc<RiseEngine>,
-    pub(crate) remote: Arc<dyn RiseMessageRemoteAPI>,
+    pub remote: Arc<dyn RiseMessageRemoteAPI>,
     pub(crate) account_id: String,
     pub(crate) page_limit: i64,
     pub(crate) retention_limit: i64,

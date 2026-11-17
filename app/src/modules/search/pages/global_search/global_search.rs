@@ -27,7 +27,6 @@ use rise_ui::swiftui::linear_gradient::LinearGradient;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::transition::UnitPoint;
 
-use crate::app::aside::aside_navigator;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::config::app_environment::AppEnvironment;
@@ -58,7 +57,7 @@ use crate::modules::post::engine::rise_post_engine_models::{
     RisePostFeedKind, RisePostPagePresentation, RisePostPageScope, RisePostPageStatus, RisePostSearchKind,
     RisePostViewSurface,
 };
-use crate::modules::post::pages::posts::post_detail::profile_post_list_body::splice_list_rows;
+use crate::modules::post::pages::posts::post_detail::list_rows_splice_hooks::splice_list_rows;
 use crate::modules::post::shared::post_media_box::PostMediaBox;
 use crate::modules::post::stores::post_actions::post_types::{AuthorInfo, GetPostFeedResponse};
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
@@ -69,6 +68,7 @@ use crate::modules::search::components::global_search_result_rows::{
 use crate::modules::search::engine::rise_search_engine_models::{
     RiseGlobalSearchCategory, RiseGlobalSearchPagePresentation, RiseGlobalSearchRow, RiseGlobalSearchScope,
 };
+use crate::modules::search::pages::global_search::global_search_aside_hooks::global_search_aside_hooks;
 use crate::modules::search::shared::global_search_route_resolver::GlobalSearchRouteResolver;
 use crate::modules::search::stores::search_actions::search_types::{SearchEntityRow, SearchResultsTab};
 use crate::modules::search::stores::search_interactions::search_interactions::SearchInteractionsStore;
@@ -197,7 +197,14 @@ impl SearchChromeSettle {
     }
 }
 
-impl SearchResultsTab {
+trait SearchResultsTabPage {
+    fn title_key(&self) -> &'static str;
+    fn global_category(&self) -> Option<RiseGlobalSearchCategory>;
+    fn post_kind(&self) -> Option<RisePostSearchKind>;
+    fn is_content(&self) -> bool;
+}
+
+impl SearchResultsTabPage for SearchResultsTab {
     fn title_key(&self) -> &'static str {
         match self {
             SearchResultsTab::Publications => "global_search_tab_publications",
@@ -276,7 +283,9 @@ fn push_route(nav_store: &Option<Entity<NavigationStore>>, route: RootRoute, cx:
 fn preview_route(nav_store: &Option<Entity<NavigationStore>>, route: RootRoute, cx: &mut App) {
     let previews = nav_store.as_ref().is_some_and(|store| store.read(cx).aside_takes_details());
     if previews {
-        aside_navigator::replace(route, cx);
+        if let Some(hooks) = global_search_aside_hooks() {
+            (hooks.replace)(route, cx);
+        }
         return;
     }
     push_route(nav_store, route, cx);

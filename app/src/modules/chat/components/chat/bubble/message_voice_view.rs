@@ -44,7 +44,7 @@ static NEXT_WAVEFORM_SWAP_KEY: AtomicU64 = AtomicU64::new(9 << 60);
 const BAR_CORNER_STEPS: usize = 4;
 
 /// takes count swap keys from the waveform range for another waveform of the voice player
-pub(crate) fn reserve_waveform_swap_keys(count: usize) -> u64 {
+pub fn reserve_waveform_swap_keys(count: usize) -> u64 {
     NEXT_WAVEFORM_SWAP_KEY.fetch_add(count as u64, Ordering::Relaxed)
 }
 
@@ -531,7 +531,7 @@ fn waveform_played_count(display_progress: f64) -> usize {
 }
 
 /// one bar as a capsule (radius half its width) moved by origin
-pub(crate) fn waveform_bar_path(origin: Point<Pixels>, rect: Bounds<Pixels>) -> Option<Path<Pixels>> {
+pub fn waveform_bar_path(origin: Point<Pixels>, rect: Bounds<Pixels>) -> Option<Path<Pixels>> {
     let left = f32::from(origin.x + rect.left());
     let top = f32::from(origin.y + rect.top());
     let width = f32::from(rect.size.width);

@@ -6,7 +6,7 @@ use rise_core::foundation::foundation_character::int_from_string;
 use rise_core::foundation::foundation_date::Date;
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_diagnostics::rise_breadcrumbs::{RiseBreadcrumbs, RiseBreadcrumbsChannel};
-use rise_errors::{ErrorCode, ErrorParam};
+use rise_errors::{ErrorCategory, ErrorCode, ErrorParam};
 use rise_i18n::tr;
 use rise_ui::keyboard_dismiss::KeyboardDismiss;
 
@@ -15,11 +15,12 @@ use crate::core::lib::canon_failure_relay::RiseServerRefusalRelay;
 use crate::core::lib::restriction_until_format::RestrictionUntilFormat;
 use crate::core::widgets::notifier::notifier_store::NotifierStore;
 
-/// a moderation refusal the restriction modal explains
+/// a refusal the restriction modal explains, a moderation one or a feature with no room left
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RestrictionRefusal {
     Restriction { scope: String, until_ms: i64 },
     Rejection { violations_left: Option<i64> },
+    Overload { text: Option<String> },
 }
 
 impl RestrictionRefusal {
@@ -34,9 +35,11 @@ impl RestrictionRefusal {
                 .unwrap_or(0);
             return Some(Self::Restriction { scope: scope.clone(), until_ms: until });
         }
-        if CanonErrors::entry(failure.code.as_deref()).map(|entry| entry.code)
-            != Some(ErrorCode::ModerationContentRejected)
-        {
+        let entry = CanonErrors::entry(failure.code.as_deref());
+        if entry.map(|entry| entry.category) == Some(ErrorCategory::Overload) {
+            return Some(Self::Overload { text: CanonErrors::text_for(failure) });
+        }
+        if entry.map(|entry| entry.code) != Some(ErrorCode::ModerationContentRejected) {
             return None;
         }
         let left = failure
@@ -87,6 +90,12 @@ impl RestrictionPrompt {
                     subtitle: lines.join("\n"),
                 }
             }
+            RestrictionRefusal::Overload { text } => Self {
+                id,
+                animation: "work".to_owned(),
+                title: tr("overload_modal_title"),
+                subtitle: text.clone().unwrap_or_else(|| tr("error_gw_capacity_exhausted")),
+            },
         }
     }
 }
@@ -97,7 +106,7 @@ struct Signature {
     details: HashMap<String, String>,
 }
 
-/// the only road from a moderation refusal to the restriction modal
+/// the only road from a moderation or an overload refusal to the restriction modal
 pub struct RestrictionStore {
     prompt: Option<RestrictionPrompt>,
     last_signature: Option<Signature>,

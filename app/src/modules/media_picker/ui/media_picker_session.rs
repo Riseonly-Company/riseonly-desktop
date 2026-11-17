@@ -39,7 +39,6 @@ use smallvec::SmallVec;
 use crate::core::lib::canon_rules::ValidationSchemaCanonRules;
 use crate::core::ui::clever_image_disk_cache::CleverImage;
 use crate::modules::camera::capture::rise_camera_capture::RiseCameraShot;
-use crate::modules::camera::capture::rise_camera_presenter::RiseCameraPresenter;
 use crate::modules::chat::components::chat::composer::chat_composer_types::ChatDraftCustomEmoji;
 use crate::modules::chat::stores::message::message_actions::message_poll_codec::MessagePollDraft;
 use crate::modules::chat::stores::message::message_actions::message_types::MessageLocationInfo;
@@ -54,8 +53,7 @@ use crate::modules::media_picker::editor::editor_edit_preview_cache::EditorEditP
 use crate::modules::media_picker::editor::editor_image_bake::EditorImageBake;
 use crate::modules::media_picker::editor::editor_state::{EditorImageState, EditorVideoState};
 use crate::modules::media_picker::editor::media_editor_presentation_state::MediaEditorPresentationState;
-use crate::modules::media_picker::editor::media_editor_screen::MediaEditorOutcome;
-use crate::modules::media_picker::editor::media_editor_window_presenter::MediaEditorWindowLog;
+use crate::modules::media_picker::editor::media_editor_window_presenter::{MediaEditorOutcome, MediaEditorWindowLog};
 use crate::modules::media_picker::export::export_progress_view_state::ExportProgressViewState;
 use crate::modules::media_picker::export::media_exporter::MediaExporter;
 use crate::modules::media_picker::export::media_picker_export_progress_overlay::MediaPickerExportProgressOverlay;
@@ -70,6 +68,7 @@ use crate::modules::media_picker::shared::media_picker_recent_files::{
     MediaPickerRecentAccountStamp, MediaPickerRecentFile, MediaPickerRecentFiles, MediaPickerRecentFilesError,
     MediaPickerRecentKind,
 };
+use crate::modules::media_picker::ui::media_picker_camera_hooks::media_picker_camera_hooks;
 use crate::modules::music::shared::utils::music::music_track_file_upload::MusicTrackFileUpload;
 
 const OPTIMISTIC_POSTER_MAX_SIDE: u32 = 1_280;
@@ -100,7 +99,7 @@ pub struct MediaPickerExternalVideoDraft {
 }
 
 /// layer for the export card that the picker screen and the editor layer draw over themselves
-pub(crate) struct MediaPickerExportProgressPresenter {
+pub struct MediaPickerExportProgressPresenter {
     host: Option<(Entity<ExportProgressViewState>, Entity<ThemeStore>)>,
 }
 
@@ -127,7 +126,7 @@ impl MediaPickerExportProgressPresenter {
 
     /// card to draw over the current surface while an export is up
     /// reading it through the shared entity makes the callers view re-render when the card comes and goes
-    pub(crate) fn overlay(cx: &mut App) -> Option<MediaPickerExportProgressOverlay> {
+    pub fn overlay(cx: &mut App) -> Option<MediaPickerExportProgressOverlay> {
         let presenter = Self::shared(cx);
         let host = presenter.read(cx).host.clone()?;
         Some(MediaPickerExportProgressOverlay::new(host.0, host.1))
@@ -897,8 +896,11 @@ impl MediaPickerSession {
         if !self.account_stamp.is_current() || self.did_finish || self.export_task.is_some() {
             return;
         }
+        let Some(hooks) = media_picker_camera_hooks() else {
+            return;
+        };
         let session = cx.weak_entity();
-        RiseCameraPresenter::present_for_capture(
+        (hooks.present_for_capture)(
             self.configuration.clone(),
             Box::new(move |shot: RiseCameraShot, cx: &mut App| {
                 let Some(session) = session.upgrade() else {

@@ -19,7 +19,7 @@ use crate::modules::chat::stores::message::message_interactions::message_interac
 use crate::modules::chat::stores::message::message_services::message_services::MessageServicesStore;
 use crate::modules::chat::widgets::bottomsheets::create_chat_sheet::create_chat_sheet_state::CreateChatSheetState;
 
-pub(crate) fn install_account_state_reset_chat_hooks() {
+pub fn install_account_state_reset_chat_hooks() {
     set_account_state_reset_chat_hooks(AccountStateResetChatHooks {
         activate_account_state: |cx: &mut App| {
             ChatScrollPositionStore::activate_account_state(cx);

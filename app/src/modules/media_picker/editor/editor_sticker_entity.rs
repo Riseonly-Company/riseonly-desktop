@@ -46,7 +46,6 @@ use crate::core::ui::clever_image_disk_cache::CleverImageBitmapDecoder;
 use crate::core::ui::lottie_sticker::lottie_sticker_loader::{
     LottieStickerLoader, LottieStickerPayload,
 };
-use crate::core::ui::lottie_sticker::lottie_sticker_view::LottieStickerView;
 use crate::core::ui::lottie_sticker::rise_lottie_frame_cache::{
     RiseLottieFrameSequence, RiseLottieSequenceKey,
 };
@@ -56,6 +55,7 @@ use crate::modules::chat::components::chat::bubble::web_m_sticker_playback::{
 use crate::modules::media_picker::editor::editor_entity_snapping::{
     EditorEntitySideHandle, EditorEntitySnap, EditorEntitySnapFeedback,
 };
+use crate::modules::media_picker::editor::editor_sticker_lottie_hooks::editor_sticker_lottie_hooks;
 use crate::modules::media_picker::editor::editor_two_finger_transform::EditorTwoFingerTransformable;
 use crate::modules::media_picker::editor::story_canvas_model::StoryCanvasGeometry;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::{
@@ -1383,26 +1383,25 @@ impl EditorStickerEntityView {
         {
             layer = layer.child(img(ImageSource::Render(image)).size_full().object_fit(ObjectFit::Contain));
         }
-        if live {
+        if live && let Some(hooks) = editor_sticker_lottie_hooks() {
             let side = frame.width.min(frame.height);
             let view = cx.weak_entity();
-            let player = LottieStickerView::new(
+            let player = (hooks.live_player)(
                 ElementId::Name(SharedString::from(format!("editor-sticker-live-{:?}", self.entity_id))),
                 entity.file_url.clone(),
-            )
-            .size(side)
-            .r#loop(true)
-            .on_first_frame(move |cx| {
-                let view = view.clone();
-                cx.defer(move |cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        if !view.live_lottie_painted {
-                            view.live_lottie_painted = true;
-                            cx.notify();
-                        }
+                side,
+                Box::new(move |cx: &mut App| {
+                    let view = view.clone();
+                    cx.defer(move |cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            if !view.live_lottie_painted {
+                                view.live_lottie_painted = true;
+                                cx.notify();
+                            }
+                        });
                     });
-                });
-            });
+                }),
+            );
             layer = layer.child(div().absolute().size_full().flex().items_center().justify_center().child(player));
         }
         layer

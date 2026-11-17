@@ -23,7 +23,6 @@ use crate::core::lib::sai::modules::sai_updater::sai_updater::SaiUpdaterWriteSco
 use crate::core::lib::sai::modules::sai_ws::sai_ws_optimistic_update::SaiWsOptimisticSuccessContext;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::SaiWsSendError;
 use crate::core::lib::sai::sai::Sai;
-use crate::core::widgets::sheets::share_sheet::ShareSheetDestination;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::chat::bubble::message_sticker_view::{
     ChatAnimatedMediaPlaybackKind, ChatAnimatedMediaSourcePolicy,
@@ -44,6 +43,7 @@ use crate::modules::chat::stores::message::message_actions::message_wire_types::
     CreateMessageGatewayDTO, ForwardMessagesGatewayDTO, MessageBotReplyMarkupWireDTO, MessageBotWebAppDataWireDTO,
     MessagePayloadCodec, MessageWaveformCodec, MessageWireDTO, RiseStoredOutgoingMedia, RiseStoredOutgoingMessage,
 };
+use crate::modules::chat::stores::message::message_interactions::share_destination_hooks::ShareSheetDestination;
 use crate::modules::chat::stores::message::message_services::message_services::MessageServicesStore;
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerItemKind};
 use crate::modules::media_picker::editor::media_reedit_store::MediaReeditStore;

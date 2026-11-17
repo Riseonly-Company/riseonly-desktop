@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "Elveti a módosításokat?",
   "media_editor_discard_confirm": "Módosítások elvetése",
   "media_editor_discard_keep": "Szerkesztés folytatása",
-  "story_canvas_photos_limit_reached": "Legfeljebb %d fotót adhat hozzá"
+  "story_canvas_photos_limit_reached": "Legfeljebb %d fotót adhat hozzá",
+  "error_rtc_overloaded": "A hívások most nagyon leterheltek. Hogy a folyamatban lévő hívások stabilak maradjanak, az újakat egy pillanatra szüneteltetjük. Próbáld újra egy kicsit később",
+  "overload_modal_title": "Most nagy a terhelés"
 }

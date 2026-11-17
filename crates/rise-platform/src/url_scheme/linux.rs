@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context as _, bail};
-use gpui::{App, Task};
+use gpui::{App, AppContext as _, Task};
 use rise_deeplink::environment_for_url_scheme;
 
 use super::scheme_desktop_entry::*;

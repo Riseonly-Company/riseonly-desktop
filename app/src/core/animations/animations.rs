@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn every_named_animation_has_a_file_in_the_repository() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets");
+        let root = PathBuf::from(env!("RISE_WORKSPACE_DIR")).join("assets");
         if !root.is_dir() {
             return;
         }

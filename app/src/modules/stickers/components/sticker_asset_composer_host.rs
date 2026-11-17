@@ -43,7 +43,6 @@ use crate::core::rise_engine_bridge::rise_engine_main_hop::RiseEngineMainHop;
 use crate::core::ui::bottom_sheet_ui::experimental_bottom_sheet_presentation_host::SheetLayerFloorKey;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierRetryOptions};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::chat::components::chat::input_picker::chat_input_emoji_tab::ChatInputEmojiTab;
 use crate::modules::chat::components::chat::input_picker::chat_input_picker_kit::ChatInputStickerAsset;
 use crate::modules::chat::engine::core::rise_conversation_repository_facade::RiseConversationActionExecutor;
 use crate::modules::chat::engine::messages::rise_message_media_upload_pipeline::{
@@ -55,6 +54,7 @@ use crate::modules::media_picker::api::media_picker_result::{
 };
 use crate::modules::media_picker::export::outgoing_media_compressor::OutgoingMediaCompressor;
 use crate::modules::media_picker::export::rise_outgoing_media_file::RiseOutgoingMediaFile;
+use crate::modules::stickers::components::sticker_asset_composer_emoji_hooks::sticker_asset_composer_system_emoji_tab;
 use crate::modules::stickers::components::sticker_asset_composer_hooks::{
     StickerAssetComposerHooks, StickerAssetPickerComplete, StickerAssetPickerDismissed,
 };
@@ -416,22 +416,16 @@ impl StickerAssetComposerHost {
     fn system_emoji_picker(&self, theme: &AppTheme, chips_height: f32, cx: &App) -> Div {
         let store = self.store.clone();
         let is_active = store.read(cx).shows_system_emoji_picker();
-        div().flex_none().w_full().h(px(EMOJI_EXPANDED_SLOT_HEIGHT - chips_height)).bg(theme.bg._200).child(
-            ChatInputEmojiTab::new(
+        div().flex_none().w_full().h(px(EMOJI_EXPANDED_SLOT_HEIGHT - chips_height)).bg(theme.bg._200).children(
+            sticker_asset_composer_system_emoji_tab(
                 "sticker-composer-emoji-tab",
                 move |emoji: String, _: &mut Window, cx: &mut App| {
                     store.update(cx, |store, cx| store.select_emoji(&emoji, cx));
                 },
                 |_: StickerItem, _: &mut Window, _: &mut App| {},
                 |_: &mut Window, _: &mut App| {},
-            )
-            .safe_area_bottom(0.0)
-            .is_active(is_active)
-            .reserves_picker_bottom_bar(false)
-            .uses_flat_chrome(true)
-            .defers_loading_to_parent(true)
-            .system_emoji_only(true)
-            .shows_backspace(false),
+                is_active,
+            ),
         )
     }
 

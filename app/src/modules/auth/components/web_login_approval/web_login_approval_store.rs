@@ -7,8 +7,8 @@ use crate::core::lib::canon_errors::CanonErrors;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::modules::auth::engine::rise_web_login_approval_rpc::RiseWebLoginApprovalRefusal;
 use crate::modules::auth::stores::auth_actions::auth_actions::AuthActionsStore;
+use crate::modules::auth::stores::auth_actions::profile_model_hooks::ProfileModel;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::user::stores::user::user_actions::user_types::ProfileModel;
 
 pub struct WebLoginApprovalStore {
     is_presented: bool,

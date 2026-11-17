@@ -51,6 +51,7 @@ use crate::modules::chat::components::chat::async_render::list_engine::rise_manu
 };
 use crate::modules::chat::components::chat::async_render::list_engine::rise_vertical_scroll_gesture_gate::cancel_enclosing_scroll_pan_for_current_touch;
 use crate::modules::chat::components::chat::bubble::bubble_tap_router::{BubbleTapRouter, BubbleTapView};
+pub(crate) use crate::modules::chat::components::chat::bubble::message_content::OWN_SELECTION_OPACITY;
 use crate::modules::chat::components::chat::message_read_receipt_menu::MessageReadReceiptMenuAccessory;
 use crate::modules::chat::shared::config::message_sizes::MessageSizes;
 use crate::modules::chat::shared::message_permissions::{ChatMessageAction, MessagePermissions};
@@ -70,7 +71,6 @@ const BUBBLE_SHADOW_OFFSET_Y: f32 = 1.0;
 const OWN_SHADOW_OPACITY: f32 = 0.07;
 const INCOMING_SHADOW_OPACITY: f32 = 0.04;
 const INCOMING_BORDER_WIDTH: f32 = 0.5;
-pub(crate) const OWN_SELECTION_OPACITY: f32 = 0.35;
 
 pub type RiseNativeTextMessageCanDoubleTap = Rc<dyn Fn(&App) -> bool>;
 pub type RiseNativeTextMessageDoubleTap = Rc<dyn Fn(&mut Window, &mut App)>;

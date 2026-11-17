@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::core::feature_hooks::FeatureHookSlot;
 
-pub(crate) struct SaiImageDiskCacheHooks {
+pub struct SaiImageDiskCacheHooks {
     pub invalidation_token: Box<dyn Fn(Option<&str>) -> u64 + Send + Sync>,
     pub store: Box<dyn Fn(Vec<u8>, &str, Option<&str>, Option<u64>) + Send + Sync>,
     pub schedule_prefetch: Box<dyn Fn(&Value, &[String], &mut App) + Send + Sync>,
@@ -12,7 +12,7 @@ pub(crate) struct SaiImageDiskCacheHooks {
 pub(crate) static SAI_IMAGE_DISK_CACHE_HOOKS: FeatureHookSlot<SaiImageDiskCacheHooks> = FeatureHookSlot::new("SAI_IMAGE_DISK_CACHE_HOOKS");
 
 /// installed once, a second install keeps the first
-pub(crate) fn set_sai_image_disk_cache_hooks(hooks: SaiImageDiskCacheHooks) {
+pub fn set_sai_image_disk_cache_hooks(hooks: SaiImageDiskCacheHooks) {
     let _ = SAI_IMAGE_DISK_CACHE_HOOKS.set(hooks);
 }
 

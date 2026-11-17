@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::music::engine::rise_music_domain::RiseMusicDomain;
 
-pub(crate) fn install_rise_music_domain_hooks() {
+pub fn install_rise_music_domain_hooks() {
     RiseAppEngineMusicDomainHooks::install(RiseAppEngineMusicDomainHooks {
         prepare: Box::new(|context| {
             async move {

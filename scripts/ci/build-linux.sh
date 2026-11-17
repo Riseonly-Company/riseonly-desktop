@@ -5,12 +5,22 @@ profile=${PROFILE:-fast}
 slug=${SLUG:-Riseonly}
 version=${VERSION:?VERSION is required}
 target=${CARGO_TARGET_DIR:-target}
+arch=$(uname -m)
 
 export MLN_PRECOMPILE=${MLN_PRECOMPILE:-1}
 
 ./scripts/vendor-rlottie.sh
-cargo build --locked --profile "$profile" -p riseonly
-cargo build --locked --profile "$profile" -p riseonly-web-view-helper --features helper
+if [ -n "${PAYLOAD:-}" ]; then
+    mkdir -p "$target/$profile"
+    cp "$PAYLOAD/riseonly" "$PAYLOAD/riseonly-web-view-helper" "$target/$profile/"
+    chmod +x "$target/$profile/riseonly" "$target/$profile/riseonly-web-view-helper"
+else
+    env -u RISE_ENV cargo build --locked --profile "$profile" -p riseonly
+    env -u RISE_ENV cargo build --locked --profile "$profile" -p riseonly-web-view-helper --features helper
+    rm -rf "payload/linux-$arch"
+    mkdir -p "payload/linux-$arch"
+    cp "$target/$profile/riseonly" "$target/$profile/riseonly-web-view-helper" "payload/linux-$arch/"
+fi
 
 bash scripts/bundle-linux.sh "$profile"
 usr="build/linux/$profile/usr"
@@ -22,7 +32,7 @@ rm -rf "$appdir"
 mkdir -p "$appdir"
 cp -a "$usr" "$appdir/usr"
 
-lib=$(ldconfig -p | awk '/libpipewire-0\.3\.so\.0 / && /x86-64/ { print $NF; exit }')
+lib=$(ldconfig -p | awk '/libpipewire-0\.3\.so\.0 / { print $NF; exit }')
 [ -n "$lib" ] || { echo "libpipewire-0.3.so.0 not found in the toolchain image" >&2; exit 1; }
 mkdir -p "$appdir/usr/lib"
 cp -L "$lib" "$appdir/usr/lib/"
@@ -39,9 +49,9 @@ RUN
 chmod +x "$appdir/AppRun"
 
 mkdir -p dist/linux
-out="dist/linux/$slug-$version-linux-x86_64.AppImage"
+out="dist/linux/$slug-$version-linux-$arch.AppImage"
 rm -f "$out"
-ARCH=x86_64 appimagetool --no-appstream "$appdir" "$out"
+ARCH="$arch" appimagetool --no-appstream "$appdir" "$out"
 chmod +x "$out"
 ls -l "$out"
 echo "target dir: $target"

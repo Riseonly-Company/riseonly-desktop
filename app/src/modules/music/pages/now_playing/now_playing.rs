@@ -40,7 +40,6 @@ use gpui::Pixels;
 use rise_widgets::side_panel::side_panel_preferences::SidePanelPreferences;
 use rise_widgets::side_panel::side_panel_ui::{ToggleSidePanel, install_key_bindings};
 
-use crate::app::aside::aside_navigator;
 use crate::app::aside::aside_registry::AsideSection;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
@@ -60,6 +59,7 @@ use crate::core::widgets::sheets::share_sheet::{MusicTrackSharePolicy, ShareShee
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::moderation::stores::moderation_actions::moderation_types::ReportTarget;
 use crate::modules::music::pages::now_playing::music_live_playback_seek_bar::MusicLivePlaybackSeekBar;
+use crate::modules::music::pages::now_playing::now_playing_aside_hooks::now_playing_aside_hooks;
 use crate::modules::music::pages::playlist_detail::music_playlist_listener_cluster::MusicPlaylistListenerCluster;
 use crate::modules::music::pages::track::track_context_menu_row::{MusicLocalTrackEditPolicy, MusicTrackReportPolicy};
 use crate::modules::music::shared::utils::music::music_models::{
@@ -296,7 +296,11 @@ pub struct NowPlayingHost {
 
 impl NowPlayingHost {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        Self { _frontmost_observation: aside_navigator::observe_frontmost(cx) }
+        let frontmost_observation = match now_playing_aside_hooks() {
+            Some(hooks) => (hooks.observe_frontmost)(cx),
+            None => Subscription::new(|| {}),
+        };
+        Self { _frontmost_observation: frontmost_observation }
     }
 }
 
@@ -1717,12 +1721,15 @@ impl RenderOnce for NowPlaying {
         }
 
         let has_track = player.read(cx).current_track.is_some();
-        let has_aside = aside_navigator::has_frontmost(cx);
+        let has_aside = now_playing_aside_hooks().is_some_and(|hooks| (hooks.has_frontmost)(cx));
         on_change(child_id(&self.id, "aside-default"), (has_track, has_aside), true, window, cx, |_, value, _, cx| {
+            let Some(hooks) = now_playing_aside_hooks() else {
+                return;
+            };
             if value.0 {
-                aside_navigator::set_default(AsideSection::Music, RootRoute::MusicNowPlaying, cx);
+                (hooks.set_default)(AsideSection::Music, RootRoute::MusicNowPlaying, cx);
             } else {
-                aside_navigator::clear_default(AsideSection::Music, cx);
+                (hooks.clear_default)(AsideSection::Music, cx);
             }
         });
 

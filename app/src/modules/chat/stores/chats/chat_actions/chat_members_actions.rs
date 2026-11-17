@@ -32,7 +32,7 @@ use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition,
 use crate::modules::chat::engine::chats::rise_chat_repository_models::RiseChatOptimisticOperation;
 use crate::modules::chat::engine::core::rise_conversation_presentation::RiseConversationPresentation;
 use crate::modules::chat::engine::rise_conversation_domain::RiseConversationDomainRegistry;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 
@@ -131,7 +131,7 @@ fn set_edit_member_rule(body: &mut rise_request::chat::EditMemberRules, rule: &s
 }
 
 fn guide_owns_roles(chat_id: &str, cx: &App) -> bool {
-    GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_roles(Some(chat_id)))
+    (chat_guide_sandbox_hooks().owns_roles)(chat_id, cx)
 }
 
 impl ChatActionsStore {
@@ -438,15 +438,13 @@ impl ChatActionsStore {
         cx: &mut App,
     ) {
         if guide_owns_roles(chat_id, cx) {
-            GuideSandbox::shared(cx).update(cx, |sandbox, cx| {
-                sandbox.edit_member(
-                    participant_id,
-                    role,
-                    custom_title.map(str::to_owned),
-                    custom_color.map(str::to_owned),
-                    cx,
-                )
-            });
+            (chat_guide_sandbox_hooks().edit_member)(
+                participant_id,
+                role,
+                custom_title.map(str::to_owned),
+                custom_color.map(str::to_owned),
+                cx,
+            );
             notify_result(on_result.as_ref(), true, cx);
             return;
         }

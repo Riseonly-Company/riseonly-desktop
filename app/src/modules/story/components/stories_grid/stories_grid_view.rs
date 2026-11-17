@@ -106,12 +106,12 @@ pub(crate) fn remember_container_width(width: f32) {
 
 /// parent width for layout, the column beside the desktop bars not the window
 /// it only changes with the window so it cant feed back into itself
-pub(crate) fn use_container_width(id: ElementId, window: &mut Window, cx: &mut App) -> Entity<f32> {
+pub fn use_container_width(id: ElementId, window: &mut Window, cx: &mut App) -> Entity<f32> {
     let initial = initial_container_width(window, cx);
     window.use_keyed_state(id, cx, move |_, _| initial)
 }
 
-pub(crate) fn container_width_reader(id: ElementId, state: Entity<f32>) -> impl IntoElement {
+pub fn container_width_reader(id: ElementId, state: Entity<f32>) -> impl IntoElement {
     measure(id, move |bounds, _, cx| {
         let width = f32::from(bounds.size.width).max(1.0);
         remember_container_width(width);

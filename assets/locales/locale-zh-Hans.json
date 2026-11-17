@@ -5949,5 +5949,7 @@
   "media_editor_discard_title": "放弃更改？",
   "media_editor_discard_confirm": "放弃更改",
   "media_editor_discard_keep": "继续编辑",
-  "story_canvas_photos_limit_reached": "最多可添加 %d 张照片"
+  "story_canvas_photos_limit_reached": "最多可添加 %d 张照片",
+  "error_rtc_overloaded": "当前通话人数较多。为保证进行中的通话稳定，暂时无法发起新通话，请稍后再试",
+  "overload_modal_title": "当前使用人数较多"
 }

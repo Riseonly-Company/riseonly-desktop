@@ -5,7 +5,7 @@ use crate::modules::chat::components::chat::backdrop::chat_wallpaper_store::Chat
 use crate::modules::theme::engine::rise_theme_wallpaper_upload::RiseChatWallpaperDraft;
 use crate::modules::theme::engine::rise_theme_wallpapers_presentation::RiseThemeWallpapersSnapshot;
 
-pub(crate) struct ThemeGuideSandboxHooks {
+pub struct ThemeGuideSandboxHooks {
     pub owns_app_wallpaper_scene: fn(cx: &App) -> bool,
     pub app_wallpapers_snapshot: fn(real: RiseThemeWallpapersSnapshot, cx: &App) -> RiseThemeWallpapersSnapshot,
     pub adopt_app_wallpaper: fn(draft: RiseChatWallpaperDraft, look: ChatWallpaperLook, cx: &mut App) -> Option<String>,
@@ -29,7 +29,7 @@ static UNINSTALLED: ThemeGuideSandboxHooks = ThemeGuideSandboxHooks {
     set_shows_chat_wallpaper: |_, _| {},
 };
 
-pub(crate) fn set_theme_guide_sandbox_hooks(hooks: ThemeGuideSandboxHooks) -> Result<(), ThemeGuideSandboxHooks> {
+pub fn set_theme_guide_sandbox_hooks(hooks: ThemeGuideSandboxHooks) -> Result<(), ThemeGuideSandboxHooks> {
     HOOKS.set(hooks)
 }
 

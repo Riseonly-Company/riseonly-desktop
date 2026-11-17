@@ -10,7 +10,7 @@ use crate::modules::chat::components::chat::async_render::rise_manual_message_ho
     RiseHostedRowViewportAuditPolicy, RiseManualMessageHostingView,
 };
 
-pub(crate) fn install_rise_manual_list_view_hooks() {
+pub fn install_rise_manual_list_view_hooks() {
     set_rise_manual_list_view_hooks(RiseManualListViewHooks {
         is_message_hosting_view,
         maximum_measurements_per_pass,

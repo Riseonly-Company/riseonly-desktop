@@ -9,7 +9,7 @@ use rise_i18n::tr;
 use super::chat_interactions::ChatInteractionsStore;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
+use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chats::chat_actions::chat_actions::ChatActionsStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatVoiceConnectGateDecision, ChatVoiceConnectGatePolicy};
 use crate::modules::chat::stores::chats::chat_actions::chat_wire_types::{EffectivePermissionsDTO, EffectivePermissionsDTOExt};
@@ -64,9 +64,9 @@ impl ChatInteractionsStore {
         on_result: Option<Rc<dyn Fn(Option<EffectivePermissionsDTO>, &mut App)>>,
         cx: &mut Context<Self>,
     ) {
-        if GuideSandbox::existing(cx).is_some_and(|sandbox| sandbox.read(cx).owns_forum_chat_id(Some(chat_id))) {
+        if (chat_guide_sandbox_hooks().owns_forum_chat_id)(chat_id, cx) {
             if let Some(on_result) = on_result {
-                let permissions = GuideSandbox::shared(cx).read(cx).forum_permissions();
+                let permissions = (chat_guide_sandbox_hooks().forum_permissions)(cx);
                 cx.defer(move |cx| on_result(Some(permissions), cx));
             }
             return;

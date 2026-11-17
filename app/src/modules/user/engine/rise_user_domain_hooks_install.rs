@@ -8,7 +8,7 @@ use crate::core::rise_engine_bridge::rise_app_engine_session::{
 };
 use crate::modules::user::engine::rise_user_domain::RiseUserDomain;
 
-pub(crate) fn install_rise_user_domain_hooks() {
+pub fn install_rise_user_domain_hooks() {
     RiseAppEngineUserDomainHooks::install(RiseAppEngineUserDomainHooks {
         prepare: Box::new(|context| {
             async move {

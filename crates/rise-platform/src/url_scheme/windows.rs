@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gpui::{App, Task};
+use gpui::{App, AppContext as _, Task};
 use windows::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ,
