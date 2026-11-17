@@ -30,12 +30,12 @@ later pushes. The labels are created by ci on the first pull request.
 - **development -> staging, merged with `deploy`** (`release.yml`): release profile build, packaged
   as the staging app (`Riseonly Staging`, talks to the staging backend), uploaded to the cdn under
   `staging/`, the staging feed updated, a draft GitHub release. The compiled binaries stay as
-  `payload-<tree>-b<build>-<platform>-<arch>` artifacts for 90 days.
+  `payload-<key>-b<build>-<platform>-<arch>` artifacts for 90 days.
 - **staging -> main, merged with `deploy`**: the same for production: the production feed, a
   published GitHub release with tag `v<version>`. It fails early when that tag exists, so bump
   `[workspace.package] version` in `Cargo.toml` first. The updater compares versions, so a staging
   build reaches staging installs only with a higher version too. When the staging release of the
-  same tree left its binaries, nothing compiles: they are packaged again as the production app
+  same sources left its binaries, nothing compiles: they are packaged again as the production app
   under the staging build number, signed and notarized. A platform with no kept binary compiles.
 
 Any other merge into `staging` or `main` (another head branch, no `deploy`) releases nothing.
@@ -50,6 +50,15 @@ with no `RISE_ENV` and packages for the environment of the pull request or relea
 production ship one binary. On macOS each package is signed and notarized on its own, the name and
 the bundle id differ. On Windows the product name in the file properties is `Riseonly` in both. On
 Linux and Windows the file is plain and editable; the backend, not the client, decides who gets in.
+
+A kept binary is found by the key of the sources that go into it: every file but `.github/workflows`,
+`docs` and the packaging scripts of `scripts/ci` (`python3 scripts/ci/plan.py key` prints it), so a
+change to those compiles nothing again. A binary compiled on another machine joins a release the
+same way: `scripts/ci/payload.sh <build> macos-aarch64=<riseonly> macos-x86_64=<riseonly>` stores
+them in the prerelease `payload-<key>-b<build>`, and the macOS jobs of the next release of these
+sources package, sign and notarize them instead of compiling. Compile such a binary the way
+`build-macos.sh` does: no `RISE_ENV`, the `RISE_BUILD_NUMBER` of that build, the
+`RISE_UPDATE_FEED_PUBLIC_KEY` of the repository.
 
 ## Where the files go
 

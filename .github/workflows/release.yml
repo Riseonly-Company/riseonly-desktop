@@ -40,6 +40,8 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       tree: ${{ steps.plan.outputs.tree }}
       payloads: ${{ steps.plan.outputs.payloads }}
+      payload_tag: ${{ steps.plan.outputs.payload_tag }}
+      payload_assets: ${{ steps.plan.outputs.payload_assets }}
       tools_repo: ${{ steps.plan.outputs.tools_repo }}
       tools_ref: ${{ steps.plan.outputs.tools_ref }}
       rust: ${{ steps.plan.outputs.rust }}
@@ -224,6 +226,8 @@ jobs:
       MACOS_ARCH: ${{ matrix.arch }}
       PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('macos-{0}', matrix.arch)] }}
       PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-macos-${{ matrix.arch }}
+      PAYLOAD_TAG: ${{ needs.plan.outputs.payload_tag }}
+      PAYLOAD_ASSET: ${{ fromJSON(needs.plan.outputs.payload_assets)[format('macos-{0}', matrix.arch)] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -245,12 +249,20 @@ jobs:
           path: riseonly-desktop/payload
           run-id: ${{ env.PAYLOAD_RUN }}
           github-token: ${{ github.token }}
-      - if: env.PAYLOAD_RUN == ''
+      - if: env.PAYLOAD_ASSET != ''
+        name: the build of this source stored by hand
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PAYLOAD_ASSET" --dir "$RUNNER_TEMP/payload"
+          mkdir -p "riseonly-desktop/payload/macos-$MACOS_ARCH"
+          tar -xzf "$RUNNER_TEMP/payload/$PAYLOAD_ASSET" -C "riseonly-desktop/payload/macos-$MACOS_ARCH"
+      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
           toolchain: ${{ needs.plan.outputs.rust }}
           targets: x86_64-apple-darwin
-      - if: env.PAYLOAD_RUN == ''
+      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == ''
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: riseonly-desktop -> target
@@ -272,7 +284,7 @@ jobs:
           APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/macos-{0}', matrix.arch) || '' }}
+          PAYLOAD: ${{ (env.PAYLOAD_RUN != '' || env.PAYLOAD_ASSET != '') && format('payload/macos-{0}', matrix.arch) || '' }}
         run: |
           rm -rf dist
           bash scripts/ci/build-macos.sh
