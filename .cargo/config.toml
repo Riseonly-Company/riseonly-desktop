@@ -3,3 +3,11 @@
 # enables rise-media/ffmpeg (app/Cargo.toml), so other targets never read it.
 [env]
 FFMPEG_PKG_CONFIG_PATH = { value = "vendor/ffmpeg/macos-arm64/lib/pkgconfig", relative = true }
+
+# why: the prebuilt libwebrtc webrtc-sys links on Windows is built against the static CRT (/MT),
+# so every other object of riseonly.exe has to match or lld-link stops at RuntimeLibrary.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -126,7 +126,8 @@ case "${OS}" in
         COMMON_FLAGS+=(--enable-filter=buffer,abuffer,buffersink,abuffersink,trim,atrim,setpts,asetpts,fps,scale,format,aformat,hflip,vflip,transpose,rotate,overlay,color,amix,adelay,volume,anull,null,hwupload,aresample,atempo,normalize,hue,curves,colortemperature,vignette)
         ;;
     windows)
-        COMMON_FLAGS+=(--enable-d3d11va --enable-hwaccel=h264_d3d11va2,hevc_d3d11va2,vp9_d3d11va2,av1_d3d11va2)
+        COMMON_FLAGS+=(--enable-d3d11va --enable-hwaccel=h264_d3d11va,h264_d3d11va2,hevc_d3d11va,hevc_d3d11va2,vp9_d3d11va,vp9_d3d11va2,av1_d3d11va,av1_d3d11va2)
+        COMMON_FLAGS+=(--disable-zlib --disable-pthreads --enable-w32threads --extra-libs=-Wl,-Bstatic,-lwinpthread,-Bdynamic)
         COMMON_FLAGS+=(--enable-mediafoundation --enable-encoder=aac,h264_mf --enable-muxer=mp4,ipod)
         COMMON_FLAGS+=(--enable-filter=buffer,abuffer,buffersink,abuffersink,trim,atrim,setpts,asetpts,fps,scale,format,aformat,hflip,vflip,transpose,rotate,overlay,color,amix,adelay,volume,anull,null,aresample,normalize,hue,curves,colortemperature,vignette)
         ;;

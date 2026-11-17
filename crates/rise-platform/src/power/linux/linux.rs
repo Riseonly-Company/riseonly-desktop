@@ -105,7 +105,7 @@ fn display_device(connection: &Connection) -> zbus::Result<Option<BatteryReading
 
 /// properties changed of every interface under upower (devices and daemon and new power profiles)
 /// or of the legacy hadess power profiles interface
-fn properties_changed_rules() -> zbus::Result<[zbus::MatchRule<'static>; 2]> {
+pub(super) fn properties_changed_rules() -> zbus::Result<[zbus::MatchRule<'static>; 2]> {
     let base = || -> zbus::Result<zbus::match_rule::Builder<'static>> {
         zbus::MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)

@@ -77,7 +77,7 @@ impl MessageForwardHeader {
             })
             .child(
                 div()
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w_0()
                     .max_w(px(text_width))
                     .text_size(px(14.0))

@@ -5,6 +5,7 @@ profile=${PROFILE:-fast}
 slug=${SLUG:-Riseonly}
 version=${VERSION:?VERSION is required}
 target=${CARGO_TARGET_DIR:-target}
+arch=$(uname -m)
 
 export MLN_PRECOMPILE=${MLN_PRECOMPILE:-1}
 
@@ -22,7 +23,7 @@ rm -rf "$appdir"
 mkdir -p "$appdir"
 cp -a "$usr" "$appdir/usr"
 
-lib=$(ldconfig -p | awk '/libpipewire-0\.3\.so\.0 / && /x86-64/ { print $NF; exit }')
+lib=$(ldconfig -p | awk '/libpipewire-0\.3\.so\.0 / { print $NF; exit }')
 [ -n "$lib" ] || { echo "libpipewire-0.3.so.0 not found in the toolchain image" >&2; exit 1; }
 mkdir -p "$appdir/usr/lib"
 cp -L "$lib" "$appdir/usr/lib/"
@@ -39,9 +40,9 @@ RUN
 chmod +x "$appdir/AppRun"
 
 mkdir -p dist/linux
-out="dist/linux/$slug-$version-linux-x86_64.AppImage"
+out="dist/linux/$slug-$version-linux-$arch.AppImage"
 rm -f "$out"
-ARCH=x86_64 appimagetool --no-appstream "$appdir" "$out"
+ARCH="$arch" appimagetool --no-appstream "$appdir" "$out"
 chmod +x "$out"
 ls -l "$out"
 echo "target dir: $target"

@@ -100,10 +100,14 @@ rust_decimal.workspace = true
 smallvec.workspace = true
 directories.workspace = true
 
-# why: X2337, WebM video stickers decode through libavcodec; the LGPL prefix
-# (scripts/build-ffmpeg-lgpl.sh, vendor/ffmpeg/macos-arm64) exists for macOS only,
-# and bundle-macos.sh copies its dylibs into the app.
+# why: X2337, WebM video stickers decode through libavcodec; the LGPL prefix comes from
+# scripts/build-ffmpeg-lgpl.sh (vendor/ffmpeg/macos-<arch>, windows-x86_64 cross built with
+# mingw-w64), bundle-macos.sh copies its dylibs into the app and the Windows package ships its
+# dlls beside riseonly.exe. Linux has no prefix yet.
 [target.'cfg(target_os = "macos")'.dependencies]
+rise-media = { workspace = true, features = ["rlottie", "ffmpeg"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 rise-media = { workspace = true, features = ["rlottie", "ffmpeg"] }
 
 [build-dependencies]

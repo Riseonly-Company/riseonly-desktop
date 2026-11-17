@@ -224,7 +224,7 @@ impl MusicGlobalPlayerBar {
             .child(MainText::new(track.artist.clone()).px(12.0).color(theme.text.secondary).line_limit(1));
         let titles = vstack(2.0)
             .align(HorizontalAlignment::Leading)
-            .flex_shrink()
+            .flex_shrink_1()
             .min_w_0()
             .child(
                 plain(ElementId::Name(SharedString::new_static("global-player-title")))

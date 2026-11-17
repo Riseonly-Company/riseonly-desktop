@@ -3403,7 +3403,6 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=6b2aa1c90aeb72cadfd30ed12141ed9e2569eded#6b2aa1c90aeb72cadfd30ed12141ed9e2569eded"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -10405,8 +10404,6 @@ dependencies = [
 [[package]]
 name = "webrtc-sys"
 version = "0.3.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d612cde159dea4736ca54e567b0867881d7c181b3a62d239231ea797fa00857"
 dependencies = [
  "cc",
  "cxx",

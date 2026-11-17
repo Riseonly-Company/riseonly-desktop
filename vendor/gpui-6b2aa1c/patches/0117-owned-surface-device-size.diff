@@ -1,0 +1,13 @@
+--- a/crates/gpui/src/elements/surface.rs
++++ b/crates/gpui/src/elements/surface.rs
+@@ -121,8 +121,8 @@
+             #[cfg(not(target_os = "macos"))]
+             SurfaceSource::Owned(frame) => {
+                 let size = crate::size(
+-                    crate::px(frame.width() as f32),
+-                    crate::px(frame.height() as f32),
++                    crate::DevicePixels::from(frame.width()),
++                    crate::DevicePixels::from(frame.height()),
+                 );
+                 let new_bounds = self.object_fit.get_bounds(bounds, size);
+                 window.paint_swappable_owned_surface(new_bounds, frame.clone(), self.swap_key);
