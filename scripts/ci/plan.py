@@ -5,8 +5,9 @@ import re
 import sys
 
 PLATFORMS = ("linux", "windows", "macos")
-LABEL_OF = {"linux": "linux", "windows": "win", "macos": "macos"}
-REBUILD_LABELS = {"build", "linux", "win", "macos", "tests"}
+LABELS_OF = {"linux": {"linux"}, "windows": {"win"}, "macos": {"macos", "macos-silicon", "macos-intel"}}
+MACOS_ARCHS = (("macos-silicon", "aarch64"), ("macos-intel", "x86_64"))
+REBUILD_LABELS = {"build", "linux", "win", "macos", "macos-silicon", "macos-intel", "tests"}
 FLOW = {"staging": "development", "main": "staging"}
 
 
@@ -30,6 +31,13 @@ def ci_env(root):
             key, _, value = line.partition("=")
             values[key.strip()] = value.strip()
     return values
+
+
+def macos_archs(labels):
+    picked = [arch for label, arch in MACOS_ARCHS if label in labels]
+    if "macos" in labels or not picked:
+        return [arch for _, arch in MACOS_ARCHS]
+    return picked
 
 
 def decide(mode, event):
@@ -63,10 +71,10 @@ def main():
     event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
     pr = event["pull_request"]
     kind, reason, labels = decide(mode, event)
-    out = {"run": "false", "reason": reason}
+    out = {"run": "false", "reason": reason, "macos_archs": json.dumps(macos_archs(labels))}
     if kind:
         env = ci_env(root)
-        picked = [p for p in PLATFORMS if LABEL_OF[p] in labels] or list(PLATFORMS)
+        picked = [p for p in PLATFORMS if LABELS_OF[p] & labels] or list(PLATFORMS)
         environment = "production" if pr["base"]["ref"] == "main" else "staging"
         version = workspace_version(root)
         build_number = os.environ.get("GITHUB_RUN_NUMBER", "1")

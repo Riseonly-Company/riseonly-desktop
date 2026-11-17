@@ -4,7 +4,7 @@ set -euo pipefail
 PROFILE="${1:-debug}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RES="$ROOT/app/resources/macos"
-BIN="${CARGO_TARGET_DIR:-$ROOT/target}/$PROFILE/riseonly"
+BIN="${CARGO_TARGET_DIR:-$ROOT/target}/${RISE_MACOS_TARGET:+$RISE_MACOS_TARGET/}$PROFILE/riseonly"
 CANON="${RISE_CANON_DIR:-$ROOT/../riseonly-tools/canon}/deep_links.json"
 
 [ -f "$CANON" ] || { echo "missing canon: $CANON" >&2; exit 1; }

@@ -9,6 +9,7 @@ Branches: `development` -> `staging` -> `main`. Everything goes through pull req
 | `build` | ci, on every pull request into `staging` or `main` | builds the picked platforms and uploads them as workflow artifacts (7 days) |
 | `deploy` | you | after the merge the build is released; without it a merge ships nothing |
 | `macos` `linux` `win` | you | pick platforms; no platform label means all three |
+| `macos-silicon` `macos-intel` | you | pick the Mac architectures; `macos` or both of them means both, with no platform label at all every platform and both Macs build |
 | `tests` | you | also runs `cargo test` and clippy on Linux |
 
 Any other pull request builds only when you add `build` yourself. Removing `build` stops builds on
@@ -33,14 +34,22 @@ Any other merge into `staging` or `main` (another head branch, no `deploy`) rele
 ```
 <DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-macos-aarch64.zip   updater
 <DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-macos-aarch64.dmg   first install
+<DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-macos-x86_64.zip    the same for Intel Macs
+<DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-macos-x86_64.dmg
 <DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-linux-x86_64.AppImage
 <DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-windows-x86_64.zip
 <DESKTOP_DOWNLOADS_BASE>/<environment>/feed.json       the feed rise_platform::updater::UpdateManifest reads
 <DESKTOP_DOWNLOADS_BASE>/<environment>/feed.json.sig   base64 ed25519 signature of feed.json
 <DESKTOP_DOWNLOADS_BASE>/<environment>/latest/<Slug>-macos-aarch64.dmg   always the newest build of that file
+<DESKTOP_DOWNLOADS_BASE>/<environment>/latest/<Slug>-macos-x86_64.dmg
 <DESKTOP_DOWNLOADS_BASE>/<environment>/releases.json   every published version, never trimmed
 <DESKTOP_DOWNLOADS_BASE>/<environment>/index.html      public page with the latest links and all versions
 ```
+
+Each Mac build reaches only installs of its own architecture: the app compiles its feed key
+(`macos-aarch64` or `macos-x86_64`) and never takes the other one, and a release without a build for
+its architecture offers it no update. A release that ships only `macos-silicon` leaves Intel installs
+on the version they have.
 
 `feed.json` keeps the last 12 versions. Each release carries `artifacts` (what the updater installs,
 per target) and `downloads` (every file, the dmg included, for the site). A release with fewer
@@ -75,8 +84,12 @@ A failed hook is a warning, the feed is already out.
   Containers get half the cpu shares of a default container and a 9 GB memory cap, so the backend
   builds on the same machine keep priority under load and the desktop takes every core when it is
   idle. Below 25 GB free the other desktop target dirs are dropped before a build.
-- macOS builds on `macos-15` (GitHub hosted, Apple silicon). A self-hosted mac is used instead when
-  the variable `DESKTOP_MACOS_RUNNER` is set, eg `["self-hosted","macOS","ARM64"]`.
+- macOS builds on `macos-15` (GitHub hosted, Apple silicon), one job per architecture: `aarch64`
+  natively and `x86_64` for Intel Macs cross compiled on the same runner (`MACOS_ARCH=x86_64`: rust
+  target `x86_64-apple-darwin`, FFmpeg built under Rosetta with nasm, the MapLibre core built from
+  source because maplibre-native publishes no prebuilt Intel macOS core, so that job takes longer).
+  A self-hosted mac is used instead when the variable `DESKTOP_MACOS_RUNNER` is set, eg
+  `["self-hosted","macOS","ARM64"]`.
 
 ## Secrets and variables
 
