@@ -37,11 +37,25 @@ Any other merge into `staging` or `main` (another head branch, no `deploy`) rele
 <DESKTOP_DOWNLOADS_BASE>/<environment>/<version>-<build>/<Slug>-<version>-windows-x86_64.zip
 <DESKTOP_DOWNLOADS_BASE>/<environment>/feed.json       the feed rise_platform::updater::UpdateManifest reads
 <DESKTOP_DOWNLOADS_BASE>/<environment>/feed.json.sig   base64 ed25519 signature of feed.json
+<DESKTOP_DOWNLOADS_BASE>/<environment>/latest/<Slug>-macos-aarch64.dmg   always the newest build of that file
+<DESKTOP_DOWNLOADS_BASE>/<environment>/releases.json   every published version, never trimmed
+<DESKTOP_DOWNLOADS_BASE>/<environment>/index.html      public page with the latest links and all versions
 ```
 
 `feed.json` keeps the last 12 versions. Each release carries `artifacts` (what the updater installs,
 per target) and `downloads` (every file, the dmg included, for the site). A release with fewer
 platforms keeps the other targets of the same version.
+
+`latest/` holds a copy of every file of the newest version under a name without the version
+(`Riseonly-macos-aarch64.dmg`, `Riseonly-Staging-macos-aarch64.dmg`), so the site links to one fixed
+url. Publishing an older version again leaves `latest/` alone. Republishing a version replaces its
+build in `releases.json`, the files of the earlier build stay on the cdn under their own folder.
+
+The cdn serves this zone with `cache-control: public, max-age=2592000`, so the files that change in
+place (`feed.json`, `feed.json.sig`, `releases.json`, `index.html`, `latest/*`) need either the
+`BUNNY_API_KEY` secret (the publish step purges them) or an edge rule on the pull zone that sets the
+cache time and the browser cache time to 0 for those paths. Without one of them the app and the site
+can see the previous release for up to 30 days.
 
 The publish step also posts the release as json to `BACKEND_RELEASE_HOOK` when that secret is set.
 A failed hook is a warning, the feed is already out.

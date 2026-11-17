@@ -50,8 +50,30 @@ else
 fi
 upload "$work/feed.json" "$ENVIRONMENT/feed.json" application/json
 
+latest_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/latest"
+index_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/index.html"
+code=$(curl -sS --retry 2 -o "$work/releases-current.json" -w '%{http_code}' -H "AccessKey: $BUNNY_STORAGE_KEY" \
+    "https://$host/$BUNNY_STORAGE_ZONE/$prefix/$ENVIRONMENT/releases.json")
+case "$code" in
+    200) echo "merging into the release history" ;;
+    404) : > "$work/releases-current.json"; echo "no release history yet, starting one" ;;
+    *) echo "reading $ENVIRONMENT/releases.json failed with http $code" >&2; exit 1 ;;
+esac
+ENVIRONMENT="$ENVIRONMENT" SLUG="$SLUG" VERSION="$VERSION" LATEST_URL="$latest_url" \
+    python3 "$here/releases.py" "$work/feed.json" "$work/releases-current.json" \
+    "$work/releases.json" "$work/index.html" "$work/latest-copies.tsv"
+purge_urls=("$feed_url" "$feed_url.sig" "${DOWNLOADS_BASE%/}/$ENVIRONMENT/releases.json" "$index_url")
+while IFS=$'\t' read -r name latest; do
+    source_file=$(printf '%s\n' "${files[@]}" | awk -F/ -v n="$name" '$NF == n' | head -n 1)
+    [ -n "$source_file" ] || { echo "no local file for $name" >&2; exit 1; }
+    upload "$source_file" "$ENVIRONMENT/latest/$latest" application/octet-stream
+    purge_urls+=("$latest_url/$latest")
+done < "$work/latest-copies.tsv"
+upload "$work/releases.json" "$ENVIRONMENT/releases.json" application/json
+upload "$work/index.html" "$ENVIRONMENT/index.html" "text/html; charset=utf-8"
+
 if [ -n "${BUNNY_API_KEY:-}" ]; then
-    for url in "$feed_url" "$feed_url.sig"; do
+    for url in "${purge_urls[@]}"; do
         curl -fsS -X POST -H "AccessKey: $BUNNY_API_KEY" \
             "https://api.bunny.net/purge?async=false&url=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$url")" >/dev/null &&
             echo "purged $url" || echo "::warning::cdn purge failed for $url"
@@ -102,6 +124,7 @@ fi
 {
     echo "### $SLUG $VERSION ($BUILD_NUMBER), $ENVIRONMENT"
     echo
+    echo "all versions: $index_url"
     echo "feed: $feed_url"
     for file in "${files[@]}"; do echo "- $base_url/$(basename "$file")"; done
 } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
