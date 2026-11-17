@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.request
 
@@ -23,6 +25,9 @@ REBUILD_LABELS = (
     | {label for label, _ in ENV_LABELS}
 )
 FLOW = {"staging": "development", "main": "staging"}
+NOT_COMPILED = (".github/workflows/", "docs/", "scripts/ci/")
+COMPILE_SCRIPTS = ("scripts/ci/build-", "scripts/ci/in-toolchain.sh", "scripts/ci/toolchain/")
+PAYLOAD_ASSET = re.compile(r"([a-z]+-[a-z0-9_]+)\.tar\.gz")
 
 
 def workspace_version(root):
@@ -74,16 +79,53 @@ def github(path):
         return json.load(response)
 
 
-def compiled_before(tree, fetch):
-    name = re.compile(rf"payload-{tree}-b(\d+)-([a-z]+-[a-z0-9_]+)")
+def source_key(entries):
+    lines = sorted(
+        f"{sha} {path}"
+        for path, sha in entries
+        if path.startswith(COMPILE_SCRIPTS) or not path.startswith(NOT_COMPILED)
+    )
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:12]
+
+
+def local_entries(commit):
+    listing = subprocess.run(["git", "ls-tree", "-r", "-z", commit], check=True, capture_output=True).stdout
+    for record in listing.split(b"\0"):
+        if record:
+            meta, _, path = record.partition(b"\t")
+            yield path.decode(), meta.split()[2].decode()
+
+
+def stored_by_hand(key, fetch):
+    tag = re.compile(rf"payload-{key}-b(\d+)")
+    builds = {}
+    for release in fetch("releases?per_page=100"):
+        found = tag.fullmatch(release.get("tag_name") or "")
+        if not found or release.get("draft"):
+            continue
+        assets = {}
+        for asset in release.get("assets", []):
+            name = PAYLOAD_ASSET.fullmatch(asset["name"])
+            if name and asset.get("state") == "uploaded":
+                assets[name.group(1)] = asset["name"]
+        if assets:
+            builds[int(found.group(1))] = (release["tag_name"], assets)
+    if not builds:
+        return None, "", {}
+    build = max(builds)
+    return str(build), builds[build][0], builds[build][1]
+
+
+def compiled_before(key, fetch):
+    name = re.compile(rf"payload-{key}-b(\d+)-([a-z]+-[a-z0-9_]+)")
     builds = {}
     for page in range(1, 11):
         batch = fetch(f"actions/artifacts?per_page=100&page={page}")["artifacts"]
         for artifact in batch:
             found = name.fullmatch(artifact["name"])
             if found and not artifact["expired"]:
-                build, key = int(found.group(1)), found.group(2)
-                builds.setdefault(build, {}).setdefault(key, artifact["workflow_run"]["id"])
+                build, target = int(found.group(1)), found.group(2)
+                builds.setdefault(build, {}).setdefault(target, artifact["workflow_run"]["id"])
         if len(batch) < 100:
             break
     if not builds:
@@ -117,8 +159,11 @@ def decide(mode, event):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "key":
+        print(source_key(local_entries(sys.argv[2] if len(sys.argv) > 2 else "HEAD")))
+        return
     if mode not in ("build", "release"):
-        sys.exit("usage: plan.py build|release")
+        sys.exit("usage: plan.py build|release|key [commit]")
     root = os.environ.get("PLAN_ROOT", ".")
     event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
     pr = event["pull_request"]
@@ -137,10 +182,20 @@ def main():
         version = workspace_version(root)
         build_number = os.environ.get("GITHUB_RUN_NUMBER", "1")
         sha = pr.get("merge_commit_sha") if kind == "release" else pr["head"]["sha"]
-        tree, payloads = "", {}
+        tree, payloads, payload_tag, payload_assets = "", {}, "", {}
         if kind == "release" and os.environ.get("GH_TOKEN"):
-            tree = github(f"git/commits/{sha}")["tree"]["sha"][:12]
-            inherited, payloads = compiled_before(tree, github)
+            root = github(f"git/commits/{sha}")["tree"]["sha"]
+            listing = github(f"git/trees/{root}?recursive=1")
+            if listing.get("truncated"):
+                tree = root[:12]
+            else:
+                tree = source_key((e["path"], e["sha"]) for e in listing["tree"] if e["type"] != "tree")
+            inherited, payload_tag, payload_assets = stored_by_hand(tree, github)
+            build, runs = compiled_before(tree, github)
+            if inherited is None:
+                inherited, payloads = build, runs
+            elif build == inherited:
+                payloads = {target: run for target, run in runs.items() if target not in payload_assets}
             build_number = inherited or build_number
         out.update({
             "run": "true",
@@ -158,6 +213,8 @@ def main():
             "sha": sha,
             "tree": tree,
             "payloads": json.dumps(payloads),
+            "payload_tag": payload_tag,
+            "payload_assets": json.dumps(payload_assets),
             "tools_repo": env["TOOLS_REPO"],
             "tools_ref": env["TOOLS_REF"],
             "rust": env["RUST_TOOLCHAIN"],
