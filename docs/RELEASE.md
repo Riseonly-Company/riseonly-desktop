@@ -61,6 +61,15 @@ sources package, sign and notarize them instead of compiling. Compile such a bin
 `build-macos.sh` does: no `RISE_ENV`, the `RISE_BUILD_NUMBER` of that build, the
 `RISE_UPDATE_FEED_PUBLIC_KEY` of the repository.
 
+The label `macos-local` moves the macOS jobs of a pull request or a release from GitHub machines to
+the runner `riseonly-desktop-macos` (a Mac of the team, `~/actions-runner/riseonly-desktop`, a
+launchd agent of the logged in user). The job is the same: it compiles when no kept binary fits,
+packages, signs and notarizes with the repository secrets. There the checkout keeps `target` and
+`vendor/ffmpeg` between runs, the Rust toolchain and the cargo home are the machine's own, and the
+build waits for `/tmp/riseonly-desktop-build.lock`. The label alone picks both Mac builds; a pull
+request from a fork never reaches that runner. The Mac has to be on and logged in, else the job
+waits in the queue.
+
 ## Where the files go
 
 ```

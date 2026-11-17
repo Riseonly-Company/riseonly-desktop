@@ -15,7 +15,10 @@ ARCH_LABELS = {
     "macos": (("macos-silicon", "aarch64"), ("macos-intel", "x86_64")),
 }
 DEFAULT_ARCHS = {"linux": ["x86_64"], "windows": ["x86_64"], "macos": ["aarch64", "x86_64"]}
+MACOS_LOCAL_LABEL = "macos-local"
+MACOS_LOCAL_RUNNER = ["self-hosted", "macOS", "ARM64", "riseonly-desktop-macos"]
 LABELS_OF = {p: {OS_LABEL[p]} | {label for label, _ in ARCH_LABELS[p]} for p in PLATFORMS}
+LABELS_OF["macos"].add(MACOS_LOCAL_LABEL)
 ENV_LABELS = (("env-dev", "dev"), ("env-staging", "staging"), ("env-prod", "production"))
 SLUGS = {"production": "Riseonly", "staging": "Riseonly-Staging", "dev": "Riseonly-Dev"}
 RELEASE_PROFILE_LABEL = "release-profile"
@@ -168,12 +171,16 @@ def main():
     event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
     pr = event["pull_request"]
     kind, reason, labels = decide(mode, event)
+    head_repo = (pr["head"].get("repo") or {}).get("full_name")
+    local = MACOS_LOCAL_LABEL in labels and head_repo == pr["base"]["repo"]["full_name"]
     out = {
         "run": "false",
         "reason": reason,
         "linux_archs": json.dumps(archs("linux", labels)),
         "windows_archs": json.dumps(archs("windows", labels)),
         "macos_archs": json.dumps(archs("macos", labels)),
+        "macos_runner": json.dumps(MACOS_LOCAL_RUNNER) if local else os.environ.get("MACOS_RUNNER") or '"macos-15"',
+        "macos_local": str(local).lower(),
     }
     if kind:
         env = ci_env(root)
