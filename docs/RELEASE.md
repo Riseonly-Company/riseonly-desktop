@@ -51,11 +51,11 @@ platforms keeps the other targets of the same version.
 url. Publishing an older version again leaves `latest/` alone. Republishing a version replaces its
 build in `releases.json`, the files of the earlier build stay on the cdn under their own folder.
 
-The cdn serves this zone with `cache-control: public, max-age=2592000`, so the files that change in
-place (`feed.json`, `feed.json.sig`, `releases.json`, `index.html`, `latest/*`) need either the
-`BUNNY_API_KEY` secret (the publish step purges them) or an edge rule on the pull zone that sets the
-cache time and the browser cache time to 0 for those paths. Without one of them the app and the site
-can see the previous release for up to 30 days.
+The pull zone caches for 30 days by default, so the files that change in place have two edge rules:
+`feed.json`, `releases.json` and `index.html` under `desktop/` are never cached (cdn and browser
+cache time 0), `latest/*` stays cached on the cdn for download speed but gets browser cache time 0,
+and the publish step purges every `latest/` file it replaces with `BUNNY_API_KEY`. Without that
+secret a new `latest/` file can lag behind on the cdn until its cache expires.
 
 The publish step also posts the release as json to `BACKEND_RELEASE_HOOK` when that secret is set.
 A failed hook is a warning, the feed is already out.
