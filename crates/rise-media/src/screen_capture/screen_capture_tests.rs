@@ -120,11 +120,12 @@ fn options_follow_the_shelf_and_keep_the_aspect() {
     let shelf = screen_share_shelf(ScreenShareQuality::High, VideoCeiling { max_height: 1080, max_fps: 30 }, (3024, 1964));
     let options = CaptureOptions::from_shelf(&shelf);
     assert_eq!(options.max_fps, 30);
-    assert_eq!(options.output_size(3024, 1964), (1662, 1080));
+    assert_eq!(options.output_size(3024, 1964), (1660, 1080));
     assert_eq!(options.output_size(1280, 800), (1280, 800));
     assert_eq!(options.output_size(1080, 1920), (1080, 1920));
     assert_eq!(options.output_size(1201, 701), (1200, 700));
-    assert_eq!(options.output_size(0, 10), (2, 2));
+    assert_eq!(options.output_size(1203, 703), (1200, 700));
+    assert_eq!(options.output_size(0, 10), (4, 4));
     assert_eq!(options.frame_interval(), Duration::from_secs(1) / 30);
 }
 

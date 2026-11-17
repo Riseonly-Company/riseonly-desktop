@@ -544,7 +544,7 @@ pub trait SurfaceBinding {
     }
 }
 
-/// holds a hardware decoder output surface past the decoder own frame release
+/// holds a hardware decoder or screen capture surface past its producer own frame release
 /// # Safety
 /// same contract as SurfaceBinding retain
 pub unsafe fn retain_decoder_surface(address: *mut c_void) -> Result<RetainedSurface, SurfaceError> {

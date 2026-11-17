@@ -101,19 +101,22 @@ platforms keeps the other targets of the same version.
 Publishing an older version again leaves `latest/` alone. The versions page and `releases.json`
 link the exact files (`url`), the fixed one is `stable_url`.
 
-A file is never replaced under its url: the cdn keeps a big file in 5 MB pieces, and after a
-replace an edge that served the old file answers with old and new pieces mixed, the right size and
+A cached file is never replaced under its url: the cdn keeps a big file in 5 MB pieces, and after
+a replace an edge that served the old file answers with old and new pieces mixed, the right size and
 the wrong bytes; neither a url purge nor a folder purge clears it. So publishing a version and build
-that already has a folder goes to a new one, `<version>-<build>.<run>-<attempt>`. `latest/` is the
-one place still replaced in place, so a fixed url can serve a broken file to people near an edge
-that cached the previous version until the pull zone stops caching `latest/*`; link the exact files
-where it matters.
+that already has a folder goes to a new one, `<version>-<build>.<run>-<attempt>`, and `latest/`,
+the one place replaced in place, is not cached on the cdn at all.
 
-The pull zone caches for 30 days by default, so the files that change in place have two edge rules:
-`feed.json`, `releases.json` and `index.html` under `desktop/` are never cached (cdn and browser
-cache time 0), `latest/*` stays cached on the cdn but gets browser cache time 0. The publish step
-purges what it replaced with `BUNNY_API_KEY`, then downloads every file it uploaded through the
-cdn and compares it with the build; that check sees one edge only.
+The pull zone caches for 30 days by default, so the files that change in place have two edge rules
+with cdn and browser cache time 0: `feed.json`, `releases.json` and `index.html` under `desktop/`,
+and `desktop/*/latest/*`. The publish step purges what it replaced with `BUNNY_API_KEY`, then
+downloads every file it uploaded through the cdn and compares it with the build; that check sees
+one edge only.
+
+The zone has no allowed referrers list. A third edge rule keeps the hotlink protection for the app
+media: a request outside `desktop/` whose `Referer` starts with `http` and is not riseonly.net or
+a subdomain is blocked. Everything under `desktop/` answers any referer, so a download link works
+from GitHub, a chat or a search page.
 
 The publish step also posts the release as json to `BACKEND_RELEASE_HOOK` when that secret is set.
 A failed hook is a warning, the feed is already out.

@@ -11,10 +11,11 @@ use thiserror::Error;
 use crate::rtc_media::{screen_share_liveness, ScreenShareLiveness, VideoShelf};
 use crate::texture::color::{ColorDescription, ColorRange, ColorSpace};
 use crate::texture::frame::FrameFormat;
-use crate::texture::native_surface::HostNv12Frame;
+use crate::texture::native_surface::{HostNv12Frame, RetainedSurface};
 
 pub const PICKER_WINDOW: Duration = Duration::from_secs(60);
 pub const DEFAULT_MAX_FPS: u32 = 30;
+pub const TRACK_SIDE_STEP: u32 = 4;
 pub const MACOS_SCREEN_CAPTURE_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
@@ -87,10 +88,10 @@ impl CaptureOptions {
 
     /// size frames are delivered at for a source of width by height
     /// scaled down to fit the shelf with aspect kept, never up
-    /// both sides even (nv12 chroma is 2x2) and at least 2
+    /// both sides are multiples of 4, the step the published track takes pictures at with no rescale
     pub fn output_size(&self, width: u32, height: u32) -> (u32, u32) {
         if width == 0 || height == 0 {
-            return (2, 2);
+            return (TRACK_SIDE_STEP, TRACK_SIDE_STEP);
         }
         let portrait = height > width;
         let (long, short) = if portrait { (height, width) } else { (width, height) };
@@ -103,8 +104,8 @@ impl CaptureOptions {
         } else {
             (max_long, scaled(short, max_long, long))
         };
-        let even = |side: u32| (side & !1).max(2);
-        let (long, short) = (even(long), even(short));
+        let stepped = |side: u32| (side - side % TRACK_SIDE_STEP).max(TRACK_SIDE_STEP);
+        let (long, short) = (stepped(long), stepped(short));
         if portrait { (short, long) } else { (long, short) }
     }
 }
@@ -116,10 +117,12 @@ fn scaled(side: u32, numerator: u32, denominator: u32) -> u32 {
 }
 
 /// pixels of one captured picture
+/// a surface is the system own buffer held as is, the encoder reads it with no copy
 #[derive(Clone)]
 pub enum ScreenPixels {
     Nv12 { luma: Arc<[u8]>, luma_stride: u32, chroma: Arc<[u8]>, chroma_stride: u32 },
     Bgra { pixels: Arc<[u8]>, stride: u32 },
+    Surface(RetainedSurface),
 }
 
 impl std::fmt::Debug for ScreenPixels {
@@ -135,6 +138,7 @@ impl std::fmt::Debug for ScreenPixels {
                 .field("bytes", &pixels.len())
                 .field("stride", stride)
                 .finish(),
+            Self::Surface(surface) => f.debug_tuple("Surface").field(surface).finish(),
         }
     }
 }
@@ -162,6 +166,7 @@ impl ScreenFrame {
                 let chroma_stride = self.width.div_ceil(2) * 2;
                 (luma.into(), self.width, chroma.into(), chroma_stride)
             }
+            ScreenPixels::Surface(_) => return Err(ScreenCaptureError::BadFrame("a surface has no planes to hand over")),
         };
         let description = ColorDescription { space: ColorSpace::Bt601, range: ColorRange::Limited };
         Ok(HostNv12Frame {
