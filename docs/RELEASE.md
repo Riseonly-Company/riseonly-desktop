@@ -8,9 +8,17 @@ Branches: `development` -> `staging` -> `main`. Everything goes through pull req
 |---|---|---|
 | `build` | ci, on every pull request into `staging` or `main` | builds the picked platforms and uploads them as workflow artifacts (7 days) |
 | `deploy` | you | after the merge the build is released; without it a merge ships nothing |
-| `macos` `linux` `win` | you | pick platforms; no platform label means all three |
-| `macos-silicon` `macos-intel` | you | pick the Mac architectures; `macos` or both of them means both, with no platform label at all every platform and both Macs build |
+| `linux` `win` `macos` | you | pick a platform with every architecture of it: Linux and Windows x86_64 and arm64, both Macs |
+| `linux-x64` `linux-arm64` | you | pick the Linux architectures (AppImage) |
+| `win-x64` `win-arm64` | you | pick the Windows architectures (zip) |
+| `macos-silicon` `macos-intel` | you | pick the Mac architectures |
+| `env-dev` `env-staging` `env-prod` | you | pull request builds only: the backend the app talks to, instead of the branch default (staging, production into `main`); one at a time |
+| `release-profile` | you | pull request builds only: the `release` profile (lto) instead of `fast` |
 | `tests` | you | also runs `cargo test` and clippy on Linux |
+
+With no platform or architecture label at all, Linux x86_64, Windows x86_64 and both Macs build.
+Labels mix: `linux-arm64` and `macos-intel` build exactly those two. A release (`deploy`) builds
+the same picked architectures, always against its branch environment and with the release profile.
 
 Any other pull request builds only when you add `build` yourself. Removing `build` stops builds on
 later pushes. The labels are created by ci on the first pull request.
@@ -71,9 +79,13 @@ A failed hook is a warning, the feed is already out.
 
 ## Machines
 
-- Linux and Windows build on the ci builder, in docker (`scripts/ci/toolchain/Dockerfile`, Ubuntu
-  22.04 for the glibc floor, llvm 19, cargo-xwin for msvc). One runner per platform so both build
-  at once:
+- Linux x86_64 and both Windows architectures build on the ci builder, in docker
+  (`scripts/ci/toolchain/Dockerfile`, Ubuntu 22.04 for the glibc floor, llvm 19, cargo-xwin for
+  msvc, mingw-w64 and llvm-mingw for the Windows FFmpeg dlls). Windows arm64 is cross compiled
+  there too (`WIN_ARCH=aarch64`); the two Windows jobs run one after another. Linux arm64 builds
+  on the GitHub hosted `ubuntu-24.04-arm` runner in the same image (override with the
+  `DESKTOP_LINUX_ARM_RUNNER` variable), with a 14 GB container cap. One runner per platform so
+  both build at once:
 
   ```
   sudo bash scripts/ci/install-runner.sh <owner/repo> linux
