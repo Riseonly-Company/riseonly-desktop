@@ -42,6 +42,7 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       tree: ${{ steps.plan.outputs.tree }}
       payloads: ${{ steps.plan.outputs.payloads }}
+      payload_names: ${{ steps.plan.outputs.payload_names }}
       payload_tag: ${{ steps.plan.outputs.payload_tag }}
       payload_assets: ${{ steps.plan.outputs.payload_assets }}
       tools_repo: ${{ steps.plan.outputs.tools_repo }}
@@ -62,6 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MACOS_RUNNER: ${{ vars.DESKTOP_MACOS_RUNNER }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
         run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
       - name: The version is new
         if: steps.plan.outputs.run == 'true' && steps.plan.outputs.environment == 'production'
@@ -94,7 +96,8 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       SLUG: ${{ needs.plan.outputs.slug }}
       PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('linux-{0}', matrix.arch)] }}
-      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-linux-${{ matrix.arch }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-linux-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('linux-{0}', matrix.arch)] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,7 +115,7 @@ jobs:
         name: the build of this tree from an earlier release
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ env.PAYLOAD_NAME }}
+          name: ${{ env.PAYLOAD_FOUND }}
           path: riseonly-desktop/payload
           run-id: ${{ env.PAYLOAD_RUN }}
           github-token: ${{ github.token }}
@@ -128,6 +131,7 @@ jobs:
           PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
+          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
           bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
       - if: env.PAYLOAD_RUN == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -164,7 +168,8 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       SLUG: ${{ needs.plan.outputs.slug }}
       PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('windows-{0}', matrix.arch)] }}
-      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-windows-${{ matrix.arch }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-windows-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('windows-{0}', matrix.arch)] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -182,7 +187,7 @@ jobs:
         name: the build of this tree from an earlier release
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ env.PAYLOAD_NAME }}
+          name: ${{ env.PAYLOAD_FOUND }}
           path: riseonly-desktop/payload
           run-id: ${{ env.PAYLOAD_RUN }}
           github-token: ${{ github.token }}
@@ -192,6 +197,7 @@ jobs:
           PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
+          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
           bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
       - if: env.PAYLOAD_RUN == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -229,7 +235,8 @@ jobs:
       MACOS_ARCH: ${{ matrix.arch }}
       MACOS_LOCAL: ${{ needs.plan.outputs.macos_local }}
       PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('macos-{0}', matrix.arch)] }}
-      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-macos-${{ matrix.arch }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-macos-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('macos-{0}', matrix.arch)] }}
       PAYLOAD_TAG: ${{ needs.plan.outputs.payload_tag }}
       PAYLOAD_ASSET: ${{ fromJSON(needs.plan.outputs.payload_assets)[format('macos-{0}', matrix.arch)] }}
     steps:
@@ -250,7 +257,7 @@ jobs:
         name: the build of this tree from an earlier release
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ env.PAYLOAD_NAME }}
+          name: ${{ env.PAYLOAD_FOUND }}
           path: riseonly-desktop/payload
           run-id: ${{ env.PAYLOAD_RUN }}
           github-token: ${{ github.token }}
@@ -293,6 +300,7 @@ jobs:
           PAYLOAD: ${{ (env.PAYLOAD_RUN != '' || env.PAYLOAD_ASSET != '') && format('payload/macos-{0}', matrix.arch) || '' }}
         run: |
           rm -rf dist
+          python3 scripts/ci/set-version.py "$VERSION"
           if [ "$MACOS_LOCAL" = true ]; then
             [ "$MACOS_ARCH" != x86_64 ] || rustup target add x86_64-apple-darwin
             caffeinate -i /usr/bin/lockf -k /tmp/riseonly-desktop-build.lock bash scripts/ci/build-macos.sh

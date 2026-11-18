@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage="usage: payload.sh <build number> <platform-arch>=<riseonly binary> ..."
+usage="usage: [VERSION=x.y.z] payload.sh <build number> <platform-arch>=<riseonly binary> ..."
 build=${1:?$usage}
 shift
 [ $# -gt 0 ] || { echo "$usage" >&2; exit 1; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 commit=$(git rev-parse HEAD)
-tag="payload-$(python3 "$here/plan.py" key "$commit")-b$build"
+version=${VERSION:-$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "$here/../../Cargo.toml")}
+tag="payload-$(python3 "$here/plan.py" key "$commit")-v$version-b$build"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 

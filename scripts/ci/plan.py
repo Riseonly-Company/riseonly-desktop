@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 PLATFORMS = ("linux", "windows", "macos")
@@ -22,6 +23,7 @@ LABELS_OF["macos"].add(MACOS_LOCAL_LABEL)
 ENV_LABELS = (("env-dev", "dev"), ("env-staging", "staging"), ("env-prod", "production"))
 SLUGS = {"production": "Riseonly", "staging": "Riseonly-Staging", "dev": "Riseonly-Dev"}
 RELEASE_PROFILE_LABEL = "release-profile"
+RELEASE_LEVELS = (("release-major", "major"), ("release-minor", "minor"), ("release-patch", "patch"))
 REBUILD_LABELS = (
     {"build", "tests", RELEASE_PROFILE_LABEL}
     | {label for _, label_set in LABELS_OF.items() for label in label_set}
@@ -99,9 +101,56 @@ def local_entries(commit):
             yield path.decode(), meta.split()[2].decode()
 
 
-def stored_by_hand(key, fetch):
-    tag = re.compile(rf"payload-{key}-b(\d+)")
-    builds = {}
+def parse_version(raw):
+    found = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", raw or "")
+    return tuple(int(part) for part in found.groups()) if found else None
+
+
+def dotted(version):
+    return ".".join(str(part) for part in version)
+
+
+def next_version(version, level):
+    major, minor, patch = version
+    if level == "major" or (minor >= 9 and (level == "minor" or patch >= 9)):
+        return (major + 1, 0, 0)
+    if level == "minor" or patch >= 9:
+        return (major, minor + 1, 0)
+    return (major, minor, patch + 1)
+
+
+def level_of(labels):
+    return next((level for label, level in RELEASE_LEVELS if label in labels), "patch")
+
+
+def published(environment):
+    base = (os.environ.get("DOWNLOADS_BASE") or "https://cdn.riseonly.net/desktop").rstrip("/")
+    request = urllib.request.Request(
+        f"{base}/{environment}/releases.json?run={os.environ.get('GITHUB_RUN_ID', '0')}",
+        headers={"User-Agent": "riseonly-desktop-ci"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            history = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return []
+        sys.exit(f"reading the {environment} release history failed with http {error.code}")
+    versions = (parse_version(release.get("version")) for release in history.get("releases", []))
+    return [version for version in versions if version]
+
+
+def release_version(manifest, labels, history=published):
+    floor = parse_version(manifest)
+    shipped = history("staging") + history("production")
+    if not shipped:
+        return manifest
+    return dotted(max(next_version(max(shipped), level_of(labels)), floor))
+
+
+def stored_by_hand(key, fetch, manifest):
+    tag = re.compile(rf"payload-{key}(?:-v(\d+\.\d+\.\d+))?-b(\d+)")
+    kept = {}
     for release in fetch("releases?per_page=100"):
         found = tag.fullmatch(release.get("tag_name") or "")
         if not found or release.get("draft"):
@@ -112,29 +161,23 @@ def stored_by_hand(key, fetch):
             if name and asset.get("state") == "uploaded":
                 assets[name.group(1)] = asset["name"]
         if assets:
-            builds[int(found.group(1))] = (release["tag_name"], assets)
-    if not builds:
-        return None, "", {}
-    build = max(builds)
-    return str(build), builds[build][0], builds[build][1]
+            kept[(found.group(1) or manifest, int(found.group(2)))] = (release["tag_name"], assets)
+    return kept
 
 
-def compiled_before(key, fetch):
-    name = re.compile(rf"payload-{key}-b(\d+)-([a-z]+-[a-z0-9_]+)")
-    builds = {}
+def compiled_before(key, fetch, manifest):
+    name = re.compile(rf"payload-{key}(?:-v(\d+\.\d+\.\d+))?-b(\d+)-([a-z]+-[a-z0-9_]+)")
+    kept = {}
     for page in range(1, 11):
         batch = fetch(f"actions/artifacts?per_page=100&page={page}")["artifacts"]
         for artifact in batch:
             found = name.fullmatch(artifact["name"])
             if found and not artifact["expired"]:
-                build, target = int(found.group(1)), found.group(2)
-                builds.setdefault(build, {}).setdefault(target, artifact["workflow_run"]["id"])
+                build = (found.group(1) or manifest, int(found.group(2)))
+                kept.setdefault(build, {}).setdefault(found.group(3), (artifact["workflow_run"]["id"], artifact["name"]))
         if len(batch) < 100:
             break
-    if not builds:
-        return None, {}
-    build = max(builds)
-    return str(build), builds[build]
+    return kept
 
 
 def decide(mode, event):
@@ -146,7 +189,7 @@ def decide(mode, event):
         if action in ("opened", "reopened", "ready_for_review") and base in FLOW:
             labels.add("build")
         added = (event.get("label") or {}).get("name")
-        if action == "labeled" and added not in REBUILD_LABELS:
+        if action in ("labeled", "unlabeled") and added not in REBUILD_LABELS:
             return None, f"label {added} does not change the build", labels
         if "build" not in labels:
             return None, "no build label", labels
@@ -186,24 +229,32 @@ def main():
         env = ci_env(root)
         picked = [p for p in PLATFORMS if LABELS_OF[p] & labels] or list(PLATFORMS)
         environment = environment_of(kind, pr["base"]["ref"], labels)
-        version = workspace_version(root)
+        manifest = workspace_version(root)
+        version = manifest
         build_number = os.environ.get("GITHUB_RUN_NUMBER", "1")
         sha = pr.get("merge_commit_sha") if kind == "release" else pr["head"]["sha"]
-        tree, payloads, payload_tag, payload_assets = "", {}, "", {}
-        if kind == "release" and os.environ.get("GH_TOKEN"):
-            root = github(f"git/commits/{sha}")["tree"]["sha"]
-            listing = github(f"git/trees/{root}?recursive=1")
-            if listing.get("truncated"):
-                tree = root[:12]
+        tree, payloads, payload_names, payload_tag, payload_assets = "", {}, {}, "", {}
+        if kind == "release":
+            kept = None
+            if os.environ.get("GH_TOKEN"):
+                top = github(f"git/commits/{sha}")["tree"]["sha"]
+                listing = github(f"git/trees/{top}?recursive=1")
+                if listing.get("truncated"):
+                    tree = top[:12]
+                else:
+                    tree = source_key((e["path"], e["sha"]) for e in listing["tree"] if e["type"] != "tree")
+                by_hand = stored_by_hand(tree, github, manifest)
+                by_run = compiled_before(tree, github, manifest)
+                builds = sorted(set(by_hand) | set(by_run), key=lambda build: (parse_version(build[0]), build[1]))
+                kept = builds[-1] if builds else None
+            if kept:
+                version, build_number = kept[0], str(kept[1])
+                payload_tag, payload_assets = by_hand.get(kept, ("", {}))
+                for target, (run, name) in by_run.get(kept, {}).items():
+                    if target not in payload_assets:
+                        payloads[target], payload_names[target] = run, name
             else:
-                tree = source_key((e["path"], e["sha"]) for e in listing["tree"] if e["type"] != "tree")
-            inherited, payload_tag, payload_assets = stored_by_hand(tree, github)
-            build, runs = compiled_before(tree, github)
-            if inherited is None:
-                inherited, payloads = build, runs
-            elif build == inherited:
-                payloads = {target: run for target, run in runs.items() if target not in payload_assets}
-            build_number = inherited or build_number
+                version = release_version(manifest, labels)
         out.update({
             "run": "true",
             "platforms": json.dumps(picked),
@@ -220,6 +271,7 @@ def main():
             "sha": sha,
             "tree": tree,
             "payloads": json.dumps(payloads),
+            "payload_names": json.dumps(payload_names),
             "payload_tag": payload_tag,
             "payload_assets": json.dumps(payload_assets),
             "tools_repo": env["TOOLS_REPO"],

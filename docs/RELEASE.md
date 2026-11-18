@@ -30,15 +30,27 @@ later pushes. The labels are created by ci on the first pull request.
 - **development -> staging, merged with `deploy`** (`release.yml`): release profile build, packaged
   as the staging app (`Riseonly Staging`, talks to the staging backend), uploaded to the cdn under
   `staging/`, the staging feed updated, a draft GitHub release. The compiled binaries stay as
-  `payload-<key>-b<build>-<platform>-<arch>` artifacts for 90 days.
+  `payload-<key>-v<version>-b<build>-<platform>-<arch>` artifacts for 90 days.
 - **staging -> main, merged with `deploy`**: the same for production: the production feed, a
-  published GitHub release with tag `v<version>`. It fails early when that tag exists, so bump
-  `[workspace.package] version` in `Cargo.toml` first. The updater compares versions, so a staging
-  build reaches staging installs only with a higher version too. When the staging release of the
+  published GitHub release with tag `v<version>`. It fails early when that tag exists. When the staging release of the
   same sources left its binaries, nothing compiles: they are packaged again as the production app
   under the staging build number, signed and notarized. A platform with no kept binary compiles.
 
 Any other merge into `staging` or `main` (another head branch, no `deploy`) releases nothing.
+
+## Versions
+
+Nobody edits the version by hand. A release into staging whose sources have no kept binary gets the
+next version: the highest one ever published to staging or production, moved by the label of the
+merged pull request. `release-patch` (1.1.4 -> 1.1.5) is put on every pull request into staging by
+ci, `release-minor` (1.2.0) and `release-major` (2.0.0) are put on by hand and take `release-patch`
+off. Minor and patch are single digits, as in the iOS app: 1.0.9 is followed by 1.1.0, 1.9.9 by
+2.0.0. `set-version.py` writes that version into `Cargo.toml` and `Cargo.lock` of the job before it
+compiles or packages, nothing is committed; the version in the repository is only a floor, raise it
+to jump further than a label does. A release that finds a kept binary keeps the version of that
+binary: publishing the same sources again, and the release into production, which ships what staging
+shipped under the same number. A pull request build carries the version of the repository. The
+updater compares versions, so a staging install moves on only when the sources changed.
 
 ## One build, two apps
 
@@ -56,7 +68,7 @@ A kept binary is found by the key of the sources that go into it: every file but
 prints it), so a
 change to those compiles nothing again. A binary compiled on another machine joins a release the
 same way: `scripts/ci/payload.sh <build> macos-aarch64=<riseonly> macos-x86_64=<riseonly>` stores
-them in the prerelease `payload-<key>-b<build>`, and the macOS jobs of the next release of these
+them in the prerelease `payload-<key>-v<version>-b<build>`, and the macOS jobs of the next release of these
 sources package, sign and notarize them instead of compiling. Compile such a binary the way
 `build-macos.sh` does: no `RISE_ENV`, the `RISE_BUILD_NUMBER` of that build, the
 `RISE_UPDATE_FEED_PUBLIC_KEY` of the repository.
