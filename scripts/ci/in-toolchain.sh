@@ -60,4 +60,4 @@ exec docker run --rm --init \
     -e CARGO_BUILD_JOBS="${DESKTOP_CI_JOBS:-$(nproc)}" \
     "${forward[@]}" \
     -w /w/riseonly-desktop \
-    "$image" "$@"
+    "$image" sh -c 'PATH="$PATH:/usr/sbin:/sbin" exec "$@"' sh "$@"
