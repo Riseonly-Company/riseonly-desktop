@@ -48,7 +48,100 @@ pub struct SystemVersion {
     pub version: String,
 }
 
+/// what the system is beyond its bare version, every reading optional
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct OsDetails {
+    pub name: Option<String>,
+    pub edition: Option<String>,
+    pub release: Option<String>,
+    pub build: Option<String>,
+    pub kernel: Option<String>,
+    pub session: Option<String>,
+    pub desktop: Option<String>,
+    pub packaging: Option<String>,
+}
+
+/// the system as a report names it next to the bare version
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ReportedOs {
+    pub name: String,
+    pub build: Option<String>,
+    pub arch: String,
+    pub environment: Option<String>,
+}
+
+impl ReportedOs {
+    pub fn resolve(host: HostOs, device: &DeviceInfo, details: &OsDetails, arch: &str) -> Self {
+        let clean = |value: &Option<String>| value.as_deref().and_then(clean_firmware_text);
+        let version = (device.system_version != UNKNOWN_VERSION).then_some(device.system_version.as_str());
+        let name = match host {
+            HostOs::MacOs => [Some(device.os_name.clone()), version.map(str::to_owned)].into_iter().flatten().collect::<Vec<_>>().join(" "),
+            HostOs::Windows => [clean(&details.name).or_else(|| Some(device.os_name.clone())), clean(&details.edition), clean(&details.release)]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" "),
+            HostOs::Linux => clean(&details.name).unwrap_or_else(|| {
+                [Some(device.os_name.clone()), version.map(str::to_owned)].into_iter().flatten().collect::<Vec<_>>().join(" ")
+            }),
+        };
+        let build = match host {
+            HostOs::Linux => clean(&details.kernel).map(|kernel| format!("Linux {kernel}")),
+            HostOs::MacOs | HostOs::Windows => clean(&details.build),
+        };
+        let environment = [clean(&details.session), clean(&details.desktop), clean(&details.packaging)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" \u{00B7} ");
+        Self {
+            name,
+            build,
+            arch: arch_name(arch).to_owned(),
+            environment: (!environment.is_empty()).then_some(environment),
+        }
+    }
+
+    /// the running system, read once
+    pub fn current() -> &'static Self {
+        static CACHED: OnceLock<ReportedOs> = OnceLock::new();
+        CACHED.get_or_init(|| {
+            let details = super::os::NativeDeviceInfo.os_details();
+            Self::resolve(HostOs::current(), DeviceInfo::current(), &details, std::env::consts::ARCH)
+        })
+    }
+}
+
+/// arm64 the way apple and microsoft spell it, other names as rust reports them
+pub fn arch_name(arch: &str) -> &str {
+    match arch {
+        "aarch64" => "arm64",
+        other => other,
+    }
+}
+
+/// windows 11 keeps major version 10 and is told apart by its build
+/// the product name in the registry still says windows 10 there
+pub fn windows_product_name(build: u32) -> &'static str {
+    if build >= WINDOWS_11_FIRST_BUILD { "Windows 11" } else { "Windows 10" }
+}
+
+pub const WINDOWS_11_FIRST_BUILD: u32 = 22000;
+
+/// edition from a registry product name like Windows 10 Pro, the version words dropped
+pub fn windows_edition(product_name: &str) -> Option<String> {
+    let rest = ["Windows 11", "Windows 10", "Windows"]
+        .into_iter()
+        .find_map(|prefix| product_name.strip_prefix(prefix))
+        .unwrap_or(product_name);
+    clean_firmware_text(rest)
+}
+
 pub trait DeviceInfoSource {
+    fn os_details(&self) -> OsDetails {
+        OsDetails::default()
+    }
+
     fn hardware_model(&self) -> Result<HardwareModel, DeviceInfoUnavailable> {
         Err(DeviceInfoUnavailable::BranchNotWritten {
             what: DeviceReading::HardwareModel,

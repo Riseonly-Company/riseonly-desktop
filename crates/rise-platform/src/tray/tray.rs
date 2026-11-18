@@ -156,6 +156,7 @@ pub struct TrayMenuItem {
     pub id: u32,
     pub label: String,
     pub checked: Option<bool>,
+    pub enabled: bool,
 }
 
 impl TrayMenuItem {
@@ -164,6 +165,7 @@ impl TrayMenuItem {
             id,
             label: label.into(),
             checked: None,
+            enabled: true,
         }
     }
 
@@ -172,7 +174,14 @@ impl TrayMenuItem {
             id,
             label: label.into(),
             checked: Some(checked),
+            enabled: true,
         }
+    }
+
+    /// shown greyed, a click on it does nothing
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
     }
 }
 

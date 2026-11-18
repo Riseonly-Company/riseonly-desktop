@@ -45,3 +45,25 @@ fn the_first_network_snapshot_arrives_on_the_engine_runtime() {
         assert!(matches!(first, Some(SystemActivityEvent::NetworkPath { .. })));
     });
 }
+
+#[test]
+fn a_dbus_connection_opens_on_a_thread_without_a_tokio_runtime() {
+    let (server_end, client_end) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+    let (answer, answered) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outside_tokio = tokio::runtime::Handle::try_current().is_err();
+        let opened = futures::executor::block_on(async move {
+            let server = zbus::connection::Builder::unix_stream(server_end)
+                .server(zbus::Guid::generate())
+                .expect("a generated guid")
+                .p2p()
+                .build();
+            let client = zbus::connection::Builder::unix_stream(client_end).p2p().build();
+            let (server, client) = futures::join!(server, client);
+            server.is_ok() && client.is_ok()
+        });
+        let _ = answer.send(outside_tokio && opened);
+    });
+    let opened = answered.recv_timeout(std::time::Duration::from_secs(10));
+    assert_eq!(opened, Ok(true));
+}

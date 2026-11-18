@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{PoisonError, RwLock};
 
 use futures::StreamExt;
@@ -148,6 +149,8 @@ pub struct RiseEnergySavingDidChange;
 
 static SNAPSHOT: RwLock<RiseEnergySavingSnapshot> = RwLock::new(RiseEnergySavingSnapshot::NONE);
 
+static WITHOUT_BATTERY: AtomicBool = AtomicBool::new(false);
+
 struct RiseEnergySavingStoreShared(Entity<RiseEnergySavingStore>);
 
 impl Global for RiseEnergySavingStoreShared {}
@@ -155,6 +158,7 @@ impl Global for RiseEnergySavingStoreShared {}
 pub struct RiseEnergySavingStore {
     settings: RiseEnergySavingSettings,
     battery_percent: Option<i64>,
+    battery_present: Option<bool>,
     on_external_power: bool,
     system_low_power_mode: bool,
     is_active: bool,
@@ -192,6 +196,7 @@ impl RiseEnergySavingStore {
         Self {
             settings,
             battery_percent,
+            battery_present: reading.battery.present,
             on_external_power,
             system_low_power_mode,
             is_active,
@@ -226,6 +231,15 @@ impl RiseEnergySavingStore {
 
     pub fn system_low_power_mode(&self) -> bool {
         self.system_low_power_mode
+    }
+
+    /// false on a machine the system says has no battery, power saving is gone there
+    pub fn applies_to_device(&self) -> bool {
+        self.battery_present != Some(false)
+    }
+
+    pub fn applies_to_device_now() -> bool {
+        !WITHOUT_BATTERY.load(Ordering::Relaxed)
     }
 
     pub fn is_active(&self) -> bool {
@@ -321,6 +335,8 @@ impl RiseEnergySavingStore {
 
     fn apply_reading(&mut self, reading: PowerReading, cx: &mut Context<Self>) {
         self.battery_percent = reading.battery.percent.map(i64::from);
+        self.battery_present = reading.battery.present;
+        WITHOUT_BATTERY.store(reading.battery.present == Some(false), Ordering::Relaxed);
         self.on_external_power = Self::is_on_external_power(&reading);
         self.system_low_power_mode = reading.low_power_mode;
         self.recompute(cx);
@@ -334,11 +350,12 @@ impl RiseEnergySavingStore {
     }
 
     fn recompute(&mut self, cx: &mut Context<Self>) {
-        self.is_active = RiseEnergySavingPolicy::is_active(
-            self.settings.threshold_percent,
-            self.battery_percent.filter(|_| !self.on_external_power),
-            self.system_low_power_mode,
-        );
+        self.is_active = self.applies_to_device()
+            && RiseEnergySavingPolicy::is_active(
+                self.settings.threshold_percent,
+                self.battery_percent.filter(|_| !self.on_external_power),
+                self.system_low_power_mode,
+            );
         cx.notify();
         let next = RiseEnergySavingSnapshot {
             is_active: self.is_active,

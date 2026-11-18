@@ -8,6 +8,8 @@ use rise_core::foundation::foundation_text::{character_count, trimming_whitespac
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_engine::CancellationError;
 use rise_i18n::tr;
+use rise_platform::user_defaults::UserDefaults;
+use rise_rtc::RtcWireEnum;
 use rise_ui::native_confirm_alert::NativeConfirmAlert;
 
 use crate::app::router::navigation_types::RiseRTCRoomTarget;
@@ -18,10 +20,11 @@ use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountC
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::core::widgets::overlay::premium_upsell_store::PremiumUpsellStore;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
-use crate::modules::chat::stores::chats::chat_actions::chat_types::VoiceChannelConfig;
-use crate::modules::rtc::engine::rise_rtc_domain::{RiseRTCDomainRegistry, RiseRTCHangupAction};
+use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatChannelKind, VoiceChannelConfig};
+use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
+use crate::modules::rtc::engine::rise_rtc_domain::{RiseRTCDomain, RiseRTCDomainRegistry, RiseRTCHangupAction};
 use crate::modules::rtc::engine::rise_rtc_engine_models::{
-    RiseRTCAnswerOutcome, RiseRTCCallMediaMode, RiseRTCCallStateExt, RiseRTCCameraPosition, RiseRTCDirectCall,
+    RiseRTCAnswerOutcome, RiseRTCCallMediaMode, RiseRTCCallState, RiseRTCCallStateExt, RiseRTCCameraPosition, RiseRTCDirectCall,
     RiseRTCModerationAction, RiseRTCParticipantRole, RiseRTCRoomEviction, RiseRTCRoomMode, RiseRTCScreenShareQuality,
     RiseRTCStateError,
 };
@@ -47,11 +50,13 @@ pub struct RTCInteractionsStore {
     microphone_before_deafen: Option<(String, bool)>,
     is_switching_from_direct_call: bool,
     is_leaving_for_music: bool,
+    announced_failure: Option<String>,
 }
 
 impl RTCInteractionsStore {
     const LISTENER_VOLUME_BEFORE_MUTE_LIMIT: usize = 64;
     const REACTION_CHARACTER_RANGE: std::ops::RangeInclusive<usize> = 1..=16;
+    const STREAM_QUALITY_KEY: &str = "rtc.stream.quality";
 
     pub fn shared(cx: &mut App) -> Entity<Self> {
         rise_ui::shared::shared(cx, Self::new)
@@ -60,7 +65,17 @@ impl RTCInteractionsStore {
     fn new(cx: &mut Context<Self>) -> Self {
         let actions = RTCActionsStore::shared(cx);
         let service = RTCServicesStore::shared(cx);
-        cx.observe(&service, |_, _, cx| cx.notify()).detach();
+        cx.observe(&service, |store, service, cx| {
+            let code = service.read(cx).last_error_code(cx).map(str::to_owned);
+            if code != store.announced_failure {
+                if let Some(text) = code.as_deref().and_then(RiseRTCDomain::desktop_failure_code_text) {
+                    Self::notify_error(text, cx);
+                }
+                store.announced_failure = code;
+            }
+            cx.notify();
+        })
+        .detach();
         Self {
             actions,
             service,
@@ -70,6 +85,7 @@ impl RTCInteractionsStore {
             microphone_before_deafen: None,
             is_switching_from_direct_call: false,
             is_leaving_for_music: false,
+            announced_failure: None,
         }
     }
 
@@ -287,6 +303,52 @@ impl RTCInteractionsStore {
         );
     }
 
+    pub fn enter_room(&mut self, target: RiseRTCRoomTarget, cx: &mut Context<Self>) {
+        let voice = !matches!(target, RiseRTCRoomTarget::DirectCall { .. });
+        let room_id = target.room_id().filter(|_| voice && !self.is_switching_from_direct_call);
+        let Some(room_id) = room_id.filter(|_| self.active_direct_call_id(cx).is_none()) else {
+            self.present_room(target, cx);
+            return;
+        };
+        RiseRTCNavigationGate::mark_self_in_voice_channel(&target, true, cx);
+        self.service.update(cx, |service, cx| service.enter_room(target.clone(), cx));
+        let role = Self::entry_role(&target, cx);
+        let join = self.join_room(&room_id, None, Some(role), cx);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Err(error) = join.await else {
+                return;
+            };
+            if error.is::<CancellationError>() {
+                return;
+            }
+            let _ = this.update(cx, |store, cx| store.entry_failed(&target, cx));
+        })
+        .detach();
+    }
+
+    fn entry_role(target: &RiseRTCRoomTarget, cx: &mut App) -> RiseRTCParticipantRole {
+        let RiseRTCRoomTarget::Topic { chat_id, topic_id } = target else {
+            return RiseRTCParticipantRole::Speaker;
+        };
+        let kind = ChatServicesStore::shared(cx)
+            .update(cx, |store, cx| store.topic_from_any_cache(chat_id, topic_id, cx))
+            .map(|topic| topic.channel_kind);
+        if kind == Some(ChatChannelKind::Stage) { RiseRTCParticipantRole::Listener } else { RiseRTCParticipantRole::Speaker }
+    }
+
+    fn entry_failed(&mut self, target: &RiseRTCRoomTarget, cx: &mut Context<Self>) {
+        let service = self.service.read(cx);
+        if service.room_presentation_target() != Some(target) || service.is_room_presentation_visible() {
+            return;
+        }
+        RiseRTCNavigationGate::mark_self_in_voice_channel(target, false, cx);
+        self.service.update(cx, |service, cx| {
+            service.dismiss_room_presentation(cx);
+            cx.notify();
+        });
+        Self::notify_error(tr("rtc_join_failed"), cx);
+    }
+
     fn switch_from_direct_call(
         &mut self,
         call_id: String,
@@ -383,6 +445,32 @@ impl RTCInteractionsStore {
         self.actions.update(cx, |actions, cx| {
             actions.join_room(room_id, display_name, preferred_role, cx)
         })
+    }
+
+    pub fn has_call_or_room_to_leave(&self, cx: &mut App) -> bool {
+        !self.sandbox_owns_active_room(cx)
+            && (self.active_direct_call_id(cx).is_some() || self.service.read(cx).active_room(cx).is_some())
+    }
+
+    pub fn leave_before_termination(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        if !self.has_call_or_room_to_leave(cx) {
+            return Task::ready(());
+        }
+        if let Some(call_id) = self.active_direct_call_id(cx) {
+            let call = self.service.read(cx).call(&call_id, cx);
+            let current_user_id = AuthServicesStore::shared(cx).read(cx).active_account_id().map(str::to_owned);
+            let ringing = call.as_ref().is_some_and(|call| call.state == RiseRTCCallState::Ringing);
+            let is_caller = call.as_ref().is_some_and(|call| Some(&call.caller_user_id) == current_user_id.as_ref());
+            let request = match (ringing, is_caller) {
+                (true, true) => self.cancel_call(&call_id, Some("client_cancelled".to_owned()), None, cx),
+                (true, false) => self.decline_call(&call_id, Some("client_declined".to_owned()), None, cx),
+                _ => self.end_call(&call_id, Some("client_hangup".to_owned()), None, cx),
+            };
+            return cx.spawn(async move |_: WeakEntity<Self>, _: &mut AsyncApp| {
+                let _ = request.await;
+            });
+        }
+        self.actions.update(cx, |actions, cx| actions.leave_room(cx))
     }
 
     pub fn leave_room(&mut self, cx: &mut Context<Self>) -> Task<()> {
@@ -725,8 +813,26 @@ impl RTCInteractionsStore {
         Self::viewer_is_premium(cx)
     }
 
+    /// last screen share quality of this account on this device, high falls back once premium is gone
+    pub fn remembered_stream_quality(&self, cx: &mut App) -> RiseRTCScreenShareQuality {
+        let key = SaiAccountCacheScope::scoped_key(Self::STREAM_QUALITY_KEY);
+        let defaults = UserDefaults::standard();
+        let stored = defaults
+            .string(&key)
+            .and_then(|raw| RiseRTCScreenShareQuality::from_alias(&raw))
+            .unwrap_or(RiseRTCScreenShareQuality::Balanced);
+        if stored != RiseRTCScreenShareQuality::High || self.is_high_stream_quality_available(cx) {
+            return stored;
+        }
+        if AuthServicesStore::shared(cx).read(cx).profile().is_some() {
+            defaults.set(&key, RiseRTCScreenShareQuality::Balanced.wire());
+        }
+        RiseRTCScreenShareQuality::Balanced
+    }
+
     pub fn select_stream_quality(&mut self, quality: RiseRTCScreenShareQuality, cx: &mut Context<Self>) -> bool {
         if quality != RiseRTCScreenShareQuality::High || self.is_high_stream_quality_available(cx) {
+            UserDefaults::standard().set(&SaiAccountCacheScope::scoped_key(Self::STREAM_QUALITY_KEY), quality.wire());
             return true;
         }
         PremiumUpsellStore::shared(cx).update(cx, |upsell, cx| {

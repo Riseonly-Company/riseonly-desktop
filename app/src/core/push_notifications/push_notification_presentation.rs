@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use gpui::App;
 use rise_canon::RisePushType;
-use rise_canon::rise_key::{events, push, push_route};
+use rise_canon::rise_key::{events, push, push_route, user as user_key};
 use rise_canon::rise_service_text::music_service;
 use rise_core::foundation::foundation_compare::{CompareOptions, range_of};
 use rise_core::foundation::foundation_text::{
@@ -52,6 +52,9 @@ impl PushNotificationRouteParser {
         }
         if let Some(sparks) = Self::sparks_link(type_) {
             return Some(sparks);
+        }
+        if let Some(achievement) = Self::achievement_link(type_, user_info) {
+            return Some(achievement);
         }
 
         let route = rise_notify::parse_route(&payload).ok()?;
@@ -116,6 +119,15 @@ impl PushNotificationRouteParser {
 
     fn sparks_link(type_: &str) -> Option<PushDeepLink> {
         (type_ == RisePushType::SPARKS_GRANTED).then_some(PushDeepLink::SparksWallet)
+    }
+
+    fn achievement_link(type_: &str, user_info: &Map<String, Value>) -> Option<PushDeepLink> {
+        if type_ != rise_events::name::ACHIEVEMENT_EARNED {
+            return None;
+        }
+        let raw = PushNotificationPayload::string(user_info, &[user_key::ACHIEVEMENT_ID])?;
+        let achievement_id = trimming_whitespaces_and_newlines(&raw).parse::<i64>().ok().filter(|id| *id > 0)?;
+        Some(PushDeepLink::Achievement { achievement_id })
     }
 
     /// maps a canon route kind to an app screen, field names come from the route table

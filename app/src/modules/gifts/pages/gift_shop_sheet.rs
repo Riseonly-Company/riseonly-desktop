@@ -48,7 +48,9 @@ use crate::modules::gifts::components::gift_card_view::{
     GiftBackdropColors, GiftCardView, GiftCornerRibbon, GiftPatternLayer, GiftRarityPill, GiftRarityStyle,
     GiftSerialFormat,
 };
-use crate::modules::gifts::components::gift_cosmetic_playback::GiftCosmeticGeometry;
+use crate::modules::gifts::components::gift_cosmetic_playback::{
+    GiftCosmeticGeometry, GiftCosmeticPlaybackPool, GiftCosmeticPlaybackPoolKey,
+};
 use crate::modules::gifts::components::gift_cosmetic_preview::{
     GiftBackdropSurface, GiftCosmeticPreview, GiftCosmeticStage, GiftEquippedBadge,
 };
@@ -68,6 +70,7 @@ use crate::modules::gifts::stores::gifts::gifts_interactions::gift_shop_footer_h
 use crate::modules::gifts::stores::gifts::gifts_interactions::gifts_interactions::{
     GIFT_SHOP_SHEET_FOOTER_VERTICAL_PADDING, GiftRecipient, GiftShopFilter, GiftsInteractionsStore, RiseGiftsLimits,
 };
+use crate::modules::gifts::stores::gifts::gifts_actions::gifts_market_types::GiftsCatalogState;
 use crate::modules::gifts::stores::gifts::gifts_services::gifts_services::GiftsServicesStore;
 use crate::modules::post::components::post::post_skeleton::PostGridSkeleton;
 use crate::modules::sparks::components::sparks_icon_view::{SparksAmountLabel, SparksIconView};
@@ -173,9 +176,44 @@ impl GiftSheetScrollReader {
     }
 }
 
-#[derive(Default)]
 struct GiftShopSheetContentState {
     viewport: Size<f32>,
+    playbacks: Entity<GiftCosmeticPlaybackPool>,
+    header: Entity<GiftShopHeaderView>,
+}
+
+/// floating header of the shop as its own view, the catalog redraws under it without touching it
+struct GiftShopHeaderView;
+
+impl GiftShopHeaderView {
+    fn wanted(cx: &mut App) -> (Option<String>, bool) {
+        let for_self = is_shop_for_self(cx);
+        let store = GiftsInteractionsStore::shared(cx);
+        let store = store.read(cx);
+        let is_on_form = store.selected_gift.is_some() && store.sent_instance.is_none();
+        let title =
+            GiftShopSheetContent::header_title(store.sent_instance.as_ref(), store.selected_gift.as_ref(), for_self);
+        (title, is_on_form)
+    }
+}
+
+impl Render for GiftShopHeaderView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (title, is_on_form) = Self::wanted(cx);
+        let leading = GiftsInteractionsStore::shared(cx);
+        SheetFloatingHeader::new("gift-shop-header", title.clone().unwrap_or_default(), move |_, cx| {
+            leading.update(cx, |store, cx| {
+                if is_on_form {
+                    store.back_to_catalog(cx);
+                } else {
+                    store.close_shop(cx);
+                }
+            });
+        })
+        .shows_title(title.is_some())
+        .leading_system_image(if is_on_form { "chevron.backward" } else { "xmark" })
+        .trailing(GiftShopBalance)
+    }
 }
 
 #[derive(IntoElement)]
@@ -248,9 +286,15 @@ impl RenderOnce for GiftShopSheetContent {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let interactions = GiftsInteractionsStore::shared(cx);
         let premium = PremiumGiftStore::shared(cx);
-        let state = window.use_keyed_state("gift-shop-sheet", cx, |_, _| GiftShopSheetContentState::default());
-        let viewport = state.read(cx).viewport;
-        let for_self = is_shop_for_self(cx);
+        let state = window.use_keyed_state("gift-shop-sheet", cx, |_, cx| GiftShopSheetContentState {
+            viewport: Size::default(),
+            playbacks: cx.new(|_| GiftCosmeticPlaybackPool::default()),
+            header: cx.new(|_| GiftShopHeaderView),
+        });
+        let (viewport, playbacks, header_view) = {
+            let state = state.read(cx);
+            (state.viewport, state.playbacks.clone(), state.header.clone())
+        };
 
         let store = interactions.read(cx);
         let recipient = store.shop_recipient.clone();
@@ -266,12 +310,17 @@ impl RenderOnce for GiftShopSheetContent {
         } else {
             "catalog".to_owned()
         };
-        let is_on_form = selected_gift.is_some() && sent_instance.is_none();
         let is_on_catalog = page_key == "catalog";
 
         let closer = interactions.clone();
         on_change("gift-shop-delivered", delivered_count, false, window, cx, move |_, _, _, cx| {
             closer.update(cx, |store, cx| store.close_shop(cx));
+        });
+        let released = playbacks.clone();
+        on_change("gift-shop-presented", is_presented, false, window, cx, move |_, presented, _, cx| {
+            if !*presented {
+                released.update(cx, |pool, _| pool.clear());
+            }
         });
 
         let recipient_key = recipient.as_ref().map(|recipient| recipient.id.as_str()).unwrap_or_default();
@@ -301,26 +350,14 @@ impl RenderOnce for GiftShopSheetContent {
             div().absolute().inset_0().child(Self::page_scroll(reader_id, Some(handle), page))
         });
 
-        let title = Self::header_title(sent_instance.as_ref(), selected_gift.as_ref(), for_self);
-        let leading = interactions.clone();
-        let header = SheetFloatingHeader::new("gift-shop-header", title.clone().unwrap_or_default(), move |_, cx| {
-            leading.update(cx, |store, cx| {
-                if is_on_form {
-                    store.back_to_catalog(cx);
-                } else {
-                    store.close_shop(cx);
-                }
-            });
-        })
-        .shows_title(title.is_some())
-        .leading_system_image(if is_on_form { "chevron.backward" } else { "xmark" })
-        .trailing(GiftShopBalance);
+        let header = header_view.cached(StyleRefinement::default().w_full().h(px(SheetFloatingHeaderMetrics::HEIGHT)));
 
         div()
             .relative()
             .size_full()
-            .child(catalog)
-            .children(detail)
+            .child(env_scope::<GiftCosmeticPlaybackPoolKey>(Some(playbacks)).child(
+                div().absolute().inset_0().child(catalog).children(detail),
+            ))
             .child(measure("gift-shop-viewport", move |bounds, _, cx| {
                 let viewport = Size { width: f32::from(bounds.size.width), height: f32::from(bounds.size.height) };
                 state.update(cx, |state, cx| {
@@ -605,20 +642,48 @@ impl RenderOnce for GiftShopShelves {
 struct GiftShopShelf {
     kind: RiseGiftItemKind,
     viewport: Size<f32>,
+    inputs: GiftShopShelfInputs,
 }
 
 impl GiftShopShelf {
-    fn new(kind: RiseGiftItemKind, viewport: Size<f32>) -> Self {
-        Self { kind, viewport }
+    fn new(kind: RiseGiftItemKind, viewport: Size<f32>, inputs: GiftShopShelfInputs) -> Self {
+        Self { kind, viewport, inputs }
     }
 }
 
 impl RenderOnce for GiftShopShelf {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         if self.kind == RiseGiftItemKind::Item {
-            GiftShopItemShelf { viewport: self.viewport }.into_any_element()
+            GiftShopItemShelf { viewport: self.viewport, inputs: self.inputs }.into_any_element()
         } else {
-            GiftShopCosmeticShelf { kind: self.kind, viewport: self.viewport }.into_any_element()
+            GiftShopCosmeticShelf { kind: self.kind, viewport: self.viewport, inputs: self.inputs }.into_any_element()
+        }
+    }
+}
+
+/// what one shelf draws from the gift stores, copied in when it changes so the shelf never
+/// redraws for a store change that is not its own
+#[derive(Clone, PartialEq)]
+struct GiftShopShelfInputs {
+    catalog: GiftsCatalogState,
+    item_shelf_has_filters: bool,
+    shop_filter: GiftShopFilter,
+    shop_kind: RiseGiftItemKind,
+    recipient: Option<GiftRecipient>,
+}
+
+impl GiftShopShelfInputs {
+    fn read(kind: RiseGiftItemKind, cx: &mut App) -> Self {
+        let services = GiftsServicesStore::shared(cx);
+        let interactions = GiftsInteractionsStore::shared(cx);
+        let services = services.read(cx);
+        let interactions = interactions.read(cx);
+        Self {
+            catalog: services.catalog(kind).clone(),
+            item_shelf_has_filters: services.item_shelf_has_filters(),
+            shop_filter: interactions.shop_filter,
+            shop_kind: interactions.shop_kind,
+            recipient: interactions.shop_recipient.clone(),
         }
     }
 }
@@ -633,6 +698,7 @@ struct GiftShopShelfPageProps {
 /// page beside it is cached
 struct GiftShopShelfPageView {
     props: Option<GiftShopShelfPageProps>,
+    inputs: Option<GiftShopShelfInputs>,
     natural_height: Rc<Cell<f32>>,
     renders_cached: Rc<Cell<bool>>,
     warm: bool,
@@ -647,15 +713,27 @@ impl GiftShopShelfPageView {
         let theme_store = ThemeStore::shared(cx);
         Self {
             props: None,
+            inputs: None,
             natural_height: Rc::new(Cell::new(0.0)),
             renders_cached: Rc::new(Cell::new(false)),
             warm: false,
             warm_task: None,
             _observations: [
-                cx.observe(&services, |_, _, cx| cx.notify()),
-                cx.observe(&interactions, |_, _, cx| cx.notify()),
+                cx.observe(&services, |page: &mut Self, _, cx| page.refresh_inputs(cx)),
+                cx.observe(&interactions, |page: &mut Self, _, cx| page.refresh_inputs(cx)),
                 cx.observe(&theme_store, |_, _, cx| cx.notify()),
             ],
+        }
+    }
+
+    fn refresh_inputs(&mut self, cx: &mut Context<Self>) {
+        let Some(props) = self.props else {
+            return;
+        };
+        let next = GiftShopShelfInputs::read(props.kind, cx);
+        if self.inputs.as_ref() != Some(&next) {
+            self.inputs = Some(next);
+            cx.notify();
         }
     }
 
@@ -711,12 +789,16 @@ impl GiftShopShelfPageView {
         });
         let (stale, height) = view.update(cx, |view, cx| {
             view.warm_up(is_active, rank, cx);
-            (view.set_props(GiftShopShelfPageProps { kind, viewport }), view.natural_height.get())
+            let stale = view.set_props(GiftShopShelfPageProps { kind, viewport });
+            if view.inputs.is_none() {
+                view.inputs = Some(GiftShopShelfInputs::read(kind, cx));
+            }
+            (stale, view.natural_height.get())
         });
         let cached = !is_active && !stale && height > 0.0;
         view.read(cx).renders_cached.set(cached);
         if cached {
-            view.cached(StyleRefinement::default().w_full().h(px(height))).replay_when_moved().into_any_element()
+            view.cached(StyleRefinement::default().w_full().h(px(height))).into_any_element()
         } else {
             AnyView::from(view).into_any_element()
         }
@@ -726,13 +808,14 @@ impl GiftShopShelfPageView {
 impl Render for GiftShopShelfPageView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         tracing::warn!(target: "riseonly::X2374", warm = self.warm, cached = self.renders_cached.get(), "gift shop shelf page render");
-        let Some(props) = self.props.filter(|_| self.warm) else {
-            return div().w_full();
+        let (Some(props), Some(inputs)) = (self.props.filter(|_| self.warm), self.inputs.clone()) else {
+            let kept = self.natural_height.get();
+            return div().w_full().when(kept > 0.0, |page| page.h(px(kept)));
         };
         let natural_height = self.natural_height.clone();
         let renders_cached = self.renders_cached.clone();
         let page = cx.entity().downgrade();
-        div().relative().w_full().child(GiftShopShelf::new(props.kind, props.viewport)).child(
+        div().relative().w_full().child(GiftShopShelf::new(props.kind, props.viewport, inputs)).child(
             canvas(
                 move |bounds, window, cx| {
                     let height = f32::from(bounds.size.height);
@@ -769,6 +852,7 @@ fn shelf_error() -> Div {
 #[derive(IntoElement)]
 struct GiftShopItemShelf {
     viewport: Size<f32>,
+    inputs: GiftShopShelfInputs,
 }
 
 struct GiftShopItemShelfMotion {
@@ -782,11 +866,7 @@ struct GiftShopItemShelfMotion {
 
 impl RenderOnce for GiftShopItemShelf {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let services = GiftsServicesStore::shared(cx);
-        let services = services.read(cx);
-        let state = services.catalog(RiseGiftItemKind::Item).clone();
-        let item_shelf_has_filters = services.item_shelf_has_filters();
-        let shop_filter = GiftsInteractionsStore::shared(cx).read(cx).shop_filter;
+        let GiftShopShelfInputs { catalog: state, item_shelf_has_filters, shop_filter, .. } = self.inputs;
 
         let content = if !state.loaded {
             if state.failed {
@@ -794,7 +874,7 @@ impl RenderOnce for GiftShopItemShelf {
             } else {
                 vstack(14.0)
                     .w_full()
-                    .when(item_shelf_has_filters, |stack| stack.child(GiftShopFilters::new(true)))
+                    .when(item_shelf_has_filters, |stack| stack.child(GiftShopFilters::new(true, shop_filter)))
                     .child(GiftShopShelfSkeleton { kind: RiseGiftItemKind::Item })
                     .into_any_element()
             }
@@ -846,7 +926,7 @@ impl RenderOnce for GiftShopItemShelf {
             let natural_height = motion.natural_height.clone();
             vstack(14.0)
                 .w_full()
-                .when(has_both_shelves, |stack| stack.child(GiftShopFilters::new(false)))
+                .when(has_both_shelves, |stack| stack.child(GiftShopFilters::new(false, shop_filter)))
                 .child(
                     div().w_full().when_some(clamped_height, |clamp, height| clamp.h(px(height)).overflow_hidden()).child(
                     div().relative().w_full().px(px(GiftShopCellMetrics::GRID_INSET)).opacity(shelf_opacity).child(
@@ -887,14 +967,15 @@ impl RenderOnce for GiftShopItemShelf {
 struct GiftShopCosmeticShelf {
     kind: RiseGiftItemKind,
     viewport: Size<f32>,
+    inputs: GiftShopShelfInputs,
 }
 
 impl RenderOnce for GiftShopCosmeticShelf {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = current_theme(cx);
         let kind = self.kind;
-        let state = GiftsServicesStore::shared(cx).read(cx).catalog(kind).clone();
-        let recipient = GiftsInteractionsStore::shared(cx).read(cx).shop_recipient.clone();
+        let GiftShopShelfInputs { catalog: state, recipient, shop_kind, .. } = self.inputs;
+        let on_active_shelf = shop_kind == kind;
         let preview_size = GiftShopCellMetrics::preview_size(kind, self.viewport);
 
         let content = if !state.loaded {
@@ -932,7 +1013,7 @@ impl RenderOnce for GiftShopCosmeticShelf {
                                 recipient: recipient.clone(),
                                 preview_size,
                             };
-                            GiftShopCosmeticCellView::cell(props, window, cx)
+                            GiftShopCosmeticCellView::cell(props, on_active_shelf, window, cx)
                         },
                     )
                     .spacing(GiftShopCellMetrics::GRID_SPACING)
@@ -964,15 +1045,17 @@ struct GiftShopFilterChipFade {
 #[derive(IntoElement)]
 struct GiftShopFilters {
     is_placeholder: bool,
+    current: GiftShopFilter,
 }
 
 impl GiftShopFilters {
-    fn new(is_placeholder: bool) -> Self {
-        Self { is_placeholder }
+    fn new(is_placeholder: bool, current: GiftShopFilter) -> Self {
+        Self { is_placeholder, current }
     }
 
     fn chip(
         filter: GiftShopFilter,
+        current: GiftShopFilter,
         id: &'static str,
         title: String,
         is_placeholder: bool,
@@ -981,7 +1064,7 @@ impl GiftShopFilters {
     ) -> AnyElement {
         let theme = current_theme(cx);
         let interactions = GiftsInteractionsStore::shared(cx);
-        let selected = interactions.read(cx).shop_filter == filter;
+        let selected = current == filter;
         let target = if selected { 1.0 } else { 0.0 };
         let fade = window.use_keyed_state(SharedString::from(format!("{id}/fade")), cx, move |_, _| GiftShopFilterChipFade {
             selected: Animated::new(target),
@@ -1022,9 +1105,11 @@ impl GiftShopFilters {
 impl RenderOnce for GiftShopFilters {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let is_placeholder = self.is_placeholder;
+        let current = self.current;
         hstack(6.0)
             .child(Self::chip(
                 GiftShopFilter::All,
+                current,
                 "gift-shop-filter-all",
                 tr("gift_shop_filter_all"),
                 is_placeholder,
@@ -1033,6 +1118,7 @@ impl RenderOnce for GiftShopFilters {
             ))
             .child(Self::chip(
                 GiftShopFilter::Collectible,
+                current,
                 "gift-shop-filter-collectible",
                 tr("gift_shop_filter_collectible"),
                 is_placeholder,
@@ -1386,6 +1472,7 @@ struct GiftShopCosmeticCell {
     kind: RiseGiftItemKind,
     recipient: Option<GiftRecipient>,
     preview_size: Option<Size<f32>>,
+    on_active_shelf: bool,
 }
 
 impl RenderOnce for GiftShopCosmeticCell {
@@ -1401,8 +1488,10 @@ impl RenderOnce for GiftShopCosmeticCell {
             recipient: self.recipient,
             preview_size: self.preview_size,
         };
-        let backdrop = GiftShopCosmeticLayerView::layer(GiftShopCosmeticLayer::Backdrop, props.clone(), window, cx);
-        let preview = GiftShopCosmeticLayerView::layer(GiftShopCosmeticLayer::Preview, props, window, cx);
+        let on_active_shelf = self.on_active_shelf;
+        let backdrop =
+            GiftShopCosmeticLayerView::layer(GiftShopCosmeticLayer::Backdrop, props.clone(), on_active_shelf, window, cx);
+        let preview = GiftShopCosmeticLayerView::layer(GiftShopCosmeticLayer::Preview, props, on_active_shelf, window, cx);
         div()
             .relative()
             .w_full()
@@ -1424,41 +1513,46 @@ impl RenderOnce for GiftShopCosmeticCell {
 /// now a card the scroll only moves replays its last frame, no height of its own
 struct GiftShopCosmeticCellView {
     props: Option<GiftShopCosmeticLayerProps>,
+    on_active_shelf: bool,
     _theme: Subscription,
 }
 
 impl GiftShopCosmeticCellView {
     fn new(cx: &mut Context<Self>) -> Self {
         let theme_store = ThemeStore::shared(cx);
-        Self { props: None, _theme: cx.observe(&theme_store, |_, _, cx| cx.notify()) }
+        Self { props: None, on_active_shelf: false, _theme: cx.observe(&theme_store, |_, _, cx| cx.notify()) }
     }
 
-    fn set_props(&mut self, props: GiftShopCosmeticLayerProps) -> bool {
-        if self.props.as_ref() == Some(&props) {
+    fn set_props(&mut self, props: GiftShopCosmeticLayerProps, on_active_shelf: bool) -> bool {
+        if self.props.as_ref() == Some(&props) && self.on_active_shelf == on_active_shelf {
             return false;
         }
         self.props = Some(props);
+        self.on_active_shelf = on_active_shelf;
         true
     }
 
-    fn cell(props: GiftShopCosmeticLayerProps, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn cell(props: GiftShopCosmeticLayerProps, on_active_shelf: bool, window: &mut Window, cx: &mut App) -> AnyElement {
         let id = SharedString::from(format!("gift-shop-cosmetic-cell-view/{}/{}", props.kind.slug(), props.gift.id));
         let view = window.use_keyed_state(id, cx, |_, cx: &mut Context<GiftShopCosmeticCellView>| {
             GiftShopCosmeticCellView::new(cx)
         });
-        let stale = view.update(cx, |view, _| view.set_props(props));
+        let stale = view.update(cx, |view, _| view.set_props(props, on_active_shelf));
         if stale {
             AnyView::from(view).into_any_element()
-        } else {
+        } else if on_active_shelf {
             view.cached(StyleRefinement::default().absolute().top_0().left_0().right_0().bottom_0())
                 .replay_when_moved()
                 .into_any_element()
+        } else {
+            view.cached(StyleRefinement::default().absolute().top_0().left_0().right_0().bottom_0()).into_any_element()
         }
     }
 }
 
 impl Render for GiftShopCosmeticCellView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let on_active_shelf = self.on_active_shelf;
         let card = self.props.clone().map(|props| {
             let selected = props.gift.clone();
             plain(SharedString::from(format!("gift-shop-cell/{}", props.gift.id)))
@@ -1470,6 +1564,7 @@ impl Render for GiftShopCosmeticCellView {
                     kind: props.kind,
                     recipient: props.recipient,
                     preview_size: props.preview_size,
+                    on_active_shelf,
                 })
         });
         div().absolute().top_0().left_0().right_0().bottom_0().children(card)
@@ -1524,6 +1619,7 @@ impl GiftShopCosmeticLayerView {
     fn layer(
         layer: GiftShopCosmeticLayer,
         props: GiftShopCosmeticLayerProps,
+        on_active_shelf: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
@@ -1539,8 +1635,10 @@ impl GiftShopCosmeticLayerView {
         let stale = view.update(cx, |view, _| view.set_props(props));
         if stale {
             AnyView::from(view).into_any_element()
-        } else {
+        } else if on_active_shelf {
             view.cached(StyleRefinement::default().size_full()).replay_when_moved().into_any_element()
+        } else {
+            view.cached(StyleRefinement::default().size_full()).into_any_element()
         }
     }
 }

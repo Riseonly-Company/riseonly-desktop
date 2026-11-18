@@ -7,6 +7,8 @@ pub struct RiseRTCCallWindowHooks {
     pub app_id: fn() -> Option<String>,
     pub is_main_window: fn(AnyWindowHandle) -> bool,
     pub activate_call_window: fn(&mut App),
+    pub present_call: fn(&mut App),
+    pub uses_separate_window: fn(&App) -> bool,
 }
 
 pub(crate) static RISE_RTC_CALL_WINDOW_HOOKS: FeatureHookSlot<RiseRTCCallWindowHooks> =

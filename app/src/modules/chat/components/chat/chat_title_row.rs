@@ -69,8 +69,9 @@ impl ChatTitleRow {
         }
     }
 
-    fn type_icon_symbol(chat_type: ChatType) -> Option<&'static str> {
+    fn type_icon_symbol(chat_type: ChatType, topics_enabled: bool) -> Option<&'static str> {
         match chat_type {
+            ChatType::Group if topics_enabled => Some("person.3.fill"),
             ChatType::Group => Some("person.2.fill"),
             ChatType::Channel => Some("megaphone.fill"),
             ChatType::Favourites => Some("bookmark.fill"),
@@ -103,7 +104,7 @@ impl RenderOnce for ChatTitleRow {
                 .emoji(participant.more.premium_badge_emoji.clone().map(SharedString::from))
                 .size(self.title_px)
         });
-        let type_icon = Self::type_icon_symbol(chat.r#type)
+        let type_icon = Self::type_icon_symbol(chat.r#type, chat.topics_enabled)
             .and_then(|symbol| IconUi::sized(symbol, px(self.icon_size), theme.text.secondary, true));
 
         hstack(4.0)

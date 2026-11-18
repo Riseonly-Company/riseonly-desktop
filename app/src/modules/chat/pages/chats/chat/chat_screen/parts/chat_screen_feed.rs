@@ -328,6 +328,14 @@ impl ChatScreen {
             });
         }));
         let screen = this.clone();
+        feed.on_begin_message_selection = Some(Rc::new(move |message: &GetMessageMessage, window: &mut Window, cx: &mut App| {
+            let _ = screen.update(cx, |screen, cx| {
+                if !screen.is_context_preview(cx) && !screen.state.is_message_selection_active {
+                    screen.begin_message_selection(message, window, cx);
+                }
+            });
+        }));
+        let screen = this.clone();
         feed.on_reaction = Some(Rc::new(move |message_id: &str, emoji: &str, window: &mut Window, cx: &mut App| {
             let _ = screen.update(cx, |screen, cx| {
                 if !screen.is_context_preview(cx) {

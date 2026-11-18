@@ -147,15 +147,8 @@ impl RenderOnce for MapEditingControls {
                 )
         });
 
-        let mut panel = div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .flex_col()
-            .gap(px(DEFAULT_STACK_SPACING))
-            .px(px(16.0))
-            .pb(px(Self::PANEL_BOTTOM_PADDING))
-            .child(spacer_min_h(0.0));
+        let column_width = rise_ui::theme(cx).shell.feed_max_width;
+        let mut panel = div().w_full().max_w(column_width).flex().flex_col().gap(px(DEFAULT_STACK_SPACING));
         if let Some(error) = error {
             panel = panel.child(
                 div().w_full().flex().justify_center().child(
@@ -319,7 +312,18 @@ impl RenderOnce for MapEditingControls {
                 }
             })
             .children(eraser_layer)
-            .child(panel)
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .px(px(16.0))
+                    .pb(px(Self::PANEL_BOTTOM_PADDING))
+                    .child(spacer_min_h(0.0))
+                    .child(panel),
+            )
             .on_appear("map-editing-controls-lifecycle", move |window, cx| {
                 LayerFocus::did_appear(&layer_appearing, &appear_focus, window, cx);
             })

@@ -1593,18 +1593,30 @@ pub struct MessageTopicMentionEntity {
     pub chat_id: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MessageTextLinkEntity {
+    pub offset: i64,
+    pub length: i64,
+    pub url: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct MessageNormalizedEntities {
     pub custom_emojis: Vec<MessageCustomEmojiEntity>,
     pub role_mentions: Vec<MessageRoleMentionEntity>,
     pub topic_mentions: Vec<MessageTopicMentionEntity>,
+    pub text_links: Vec<MessageTextLinkEntity>,
 }
 
 static EMPTY_NORMALIZED_ENTITIES: MessageNormalizedEntities = MessageNormalizedEntities::EMPTY;
 
 impl MessageNormalizedEntities {
-    pub const EMPTY: MessageNormalizedEntities =
-        MessageNormalizedEntities { custom_emojis: Vec::new(), role_mentions: Vec::new(), topic_mentions: Vec::new() };
+    pub const EMPTY: MessageNormalizedEntities = MessageNormalizedEntities {
+        custom_emojis: Vec::new(),
+        role_mentions: Vec::new(),
+        topic_mentions: Vec::new(),
+        text_links: Vec::new(),
+    };
 
     pub fn parse(entities_json: Option<&str>) -> Self {
         let parsed = MessageEntitiesCodec::parse(entities_json);
@@ -1640,6 +1652,15 @@ impl MessageNormalizedEntities {
                     length: entity.length,
                     topic_id: entity.topic_id.clone(),
                     chat_id: entity.chat_id.clone(),
+                })
+                .collect(),
+            text_links: parsed
+                .text_links
+                .iter()
+                .map(|entity| MessageTextLinkEntity {
+                    offset: entity.offset,
+                    length: entity.length,
+                    url: entity.url.clone(),
                 })
                 .collect(),
         }

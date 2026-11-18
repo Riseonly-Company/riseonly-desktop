@@ -3,7 +3,7 @@ use collections::FxHashMap;
 use etagere::{BucketedAtlasAllocator, size2};
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    PlatformAtlas, PlatformImageUploader, Point, Size,
 };
 use parking_lot::Mutex;
 use std::{borrow::Cow, ops, sync::Arc};
@@ -21,7 +21,7 @@ fn etagere_point_to_device(point: etagere::Point) -> Point<DevicePixels> {
     }
 }
 
-pub struct WgpuAtlas(Mutex<WgpuAtlasState>);
+pub struct WgpuAtlas(Arc<Mutex<WgpuAtlasState>>);
 
 struct PendingUpload {
     id: AtlasTextureId,
@@ -37,6 +37,7 @@ struct WgpuAtlasState {
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     pending_uploads: Vec<PendingUpload>,
+    generation: u64,
 }
 
 pub struct WgpuTextureInfo {
@@ -50,7 +51,7 @@ impl WgpuAtlas {
         color_texture_format: wgpu::TextureFormat,
     ) -> Self {
         let max_texture_size = device.limits().max_texture_dimension_2d;
-        WgpuAtlas(Mutex::new(WgpuAtlasState {
+        WgpuAtlas(Arc::new(Mutex::new(WgpuAtlasState {
             device,
             queue,
             max_texture_size,
@@ -58,7 +59,8 @@ impl WgpuAtlas {
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
             pending_uploads: Vec::new(),
-        }))
+            generation: 0,
+        })))
     }
 
     pub fn from_context(context: &WgpuContext) -> Self {
@@ -89,6 +91,7 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.generation += 1;
     }
 
     /// Handles device lost by clearing all textures and cached tiles.
@@ -101,6 +104,7 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.generation += 1;
     }
 }
 
@@ -133,9 +137,90 @@ impl PlatformAtlas for WgpuAtlas {
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        lock.release(tile);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
+        Some(Arc::new(WgpuImageUploader(self.0.clone())))
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct WgpuImageUploader(Arc<Mutex<WgpuAtlasState>>);
+
+#[cfg(not(target_family = "wasm"))]
+impl PlatformImageUploader for WgpuImageUploader {
+    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) {
+        let (tile, texture, format, queue, generation) = {
+            let mut lock = self.0.lock();
+            if lock.tiles_by_key.contains_key(key) {
+                return;
+            }
+            let Some(tile) = lock.allocate(size, key.texture_kind()) else {
+                return;
+            };
+            let Some(texture) = lock.storage.get(tile.texture_id) else {
+                return;
+            };
+            let (texture, format) = (texture.texture.clone(), texture.format);
+            (tile, texture, format, lock.queue.clone(), lock.generation)
+        };
+        let bytes_per_pixel: u32 = if format == wgpu::TextureFormat::R8Unorm { 1 } else { 4 };
+        let width = tile.bounds.size.width.0.max(0) as u32;
+        let height = tile.bounds.size.height.0.max(0) as u32;
+        let written = bytes.len() >= (width * bytes_per_pixel) as usize * height as usize;
+        if written {
+            let data = if format == wgpu::TextureFormat::Rgba8Unorm {
+                Cow::Owned(swizzle_upload_data(bytes, format))
+            } else {
+                Cow::Borrowed(bytes)
+            };
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: tile.bounds.origin.x.0 as u32,
+                        y: tile.bounds.origin.y.0 as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * bytes_per_pixel),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let mut lock = self.0.lock();
+        if lock.generation != generation {
+            return;
+        }
+        if !written || lock.tiles_by_key.contains_key(key) {
+            lock.release(tile);
+        } else {
+            lock.tiles_by_key.insert(key.clone(), tile);
+        }
+    }
+
+    fn is_resident(&self, key: &AtlasKey) -> bool {
+        self.0.lock().tiles_by_key.contains_key(key)
+    }
+}
+
+impl WgpuAtlasState {
+    fn release(&mut self, tile: AtlasTile) {
         let id = tile.texture_id;
 
-        let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
+        let Some(texture_slot) = self.storage[id.kind].textures.get_mut(id.index as usize) else {
             return;
         };
 
@@ -143,9 +228,9 @@ impl PlatformAtlas for WgpuAtlas {
             texture.allocator.deallocate(tile.tile_id.into());
             texture.decrement_ref_count();
             if texture.is_unreferenced() {
-                lock.pending_uploads
+                self.pending_uploads
                     .retain(|upload| upload.id != texture.id);
-                lock.storage[id.kind]
+                self.storage[id.kind]
                     .free_list
                     .push(texture.id.index as usize);
             } else {

@@ -214,6 +214,8 @@ pub struct PostListController {
     was_scrolling: Cell<bool>,
     is_evaluation_scheduled: Cell<bool>,
     evaluation_token: Cell<u64>,
+    evaluations_this_turn: Cell<u32>,
+    is_evaluation_turn_reset_armed: Cell<bool>,
     is_visible_flush_scheduled: Cell<bool>,
     visible_flush_token: Cell<u64>,
     did_warm_diamond: Cell<bool>,
@@ -235,6 +237,7 @@ pub struct PostListController {
 
 impl PostListController {
     const SEEDS_PER_TURN: i64 = 8;
+    const MAX_EVALUATIONS_PER_TURN: u32 = 8;
     const FIRST_VIEWPORT_MAX_EXTRA_ROWS: usize = 6;
     const FIRST_VIEWPORT_SYNC_BUDGET_SECONDS: f64 = 0.024;
 
@@ -275,7 +278,13 @@ impl PostListController {
                 }
             };
             let pull_down = has_destination.then(|| PostListPullDownDismiss::new(list_view.downgrade()));
-            let refresh_control = is_feed.then(|| cx.new(|cx| PostListRefreshControl::new(cx)));
+            let refresh_control = is_feed.then(|| {
+                cx.new(|cx| {
+                    let mut control = PostListRefreshControl::new(cx);
+                    control.set_pulls_refresh(false);
+                    control
+                })
+            });
             let refresh_indicator = refresh_control.as_ref().map(|control| control.read(cx).indicator_view.clone());
             let playback_focus =
                 cx.new(|cx| PostListPlaybackFocus::new(session, Some(list_view.downgrade()), cx));
@@ -392,6 +401,8 @@ impl PostListController {
                 was_scrolling: Cell::new(false),
                 is_evaluation_scheduled: Cell::new(false),
                 evaluation_token: Cell::new(0),
+                evaluations_this_turn: Cell::new(0),
+                is_evaluation_turn_reset_armed: Cell::new(false),
                 is_visible_flush_scheduled: Cell::new(false),
                 visible_flush_token: Cell::new(0),
                 did_warm_diamond: Cell::new(false),
@@ -519,6 +530,21 @@ impl PostListController {
                 if let Some(controller) = owner.upgrade() {
                     work(controller, window, cx);
                 }
+            });
+        });
+    }
+
+    fn on_next_frame(&self, cx: &mut App, work: impl FnOnce(Rc<Self>, &mut Window, &mut App) + 'static) {
+        let owner = self.this.clone();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, _| {
+                window.on_next_frame(move |window, cx| {
+                    if let Some(controller) = owner.upgrade() {
+                        work(controller, window, cx);
+                    }
+                });
+                window.refresh();
             });
         });
     }
@@ -1721,22 +1747,25 @@ impl PostListController {
         version
     }
 
-    fn store(&self, row: Arc<PreparedPostRow>, reason: PostListControllerStoreReason, cx: &App) {
+    fn store(&self, row: Arc<PreparedPostRow>, reason: PostListControllerStoreReason, cx: &App) -> bool {
         let id = row.presentation_id.clone();
         let previous = self.row(&id);
+        let rows = self.current_rows();
+        let is_current_post =
+            rows.index_by_presentation_id.get(&id).is_some_and(|index| rows.items[*index] == row.post);
+        let is_current_spec =
+            self.environment.borrow().as_ref().is_some_and(|environment| row.key.spec == environment.spec);
+        if is_current_post && is_current_spec {
+            self.clear_stale(&id);
+        }
         if previous.as_ref().is_some_and(|previous| Arc::ptr_eq(previous, &row)) {
-            return;
+            return false;
         }
         self.table.borrow_mut().insert(id.clone(), row.clone());
         let serial = self.next_serial.get().wrapping_add(1);
         self.next_serial.set(serial);
         self.table_serials.borrow_mut().insert(id.clone(), serial);
         self.cached_prepared_end.set(None);
-        let rows = self.current_rows();
-        let is_current_post =
-            rows.index_by_presentation_id.get(&id).is_some_and(|index| rows.items[*index] == row.post);
-        let is_current_spec =
-            self.environment.borrow().as_ref().is_some_and(|environment| row.key.spec == environment.spec);
         if row.post.is_liked || previous.as_ref().is_some_and(|previous| previous.post.is_liked != row.post.is_liked) {
             x251_mark(|| {
                 format!(
@@ -1747,22 +1776,17 @@ impl PostListController {
                 )
             });
         }
-        if is_current_post && is_current_spec {
-            self.stale_set.borrow_mut().remove(&id);
-            self.idle_only_stale.borrow_mut().remove(&id);
-            self.aspect_stale.borrow_mut().remove(&id);
-        }
         let Some(previous) = previous else {
-            return;
+            return true;
         };
         if !self.reconciler.is_retained(&id) {
-            return;
+            return true;
         }
         let delta = row.height() - previous.height();
         let height_changed = delta.abs() > 0.5;
         self.reconciler.mark_dirty(&id, height_changed, reason == PostListControllerStoreReason::Spec);
         if !height_changed || !self.reconciler.presented_set().contains(&id) {
-            return;
+            return true;
         }
         let is_visible = self.list_view.read(cx).visible_ids().contains(&id);
         self.trace.count_late_height_update(delta, is_visible, reason.name());
@@ -1774,6 +1798,7 @@ impl PostListController {
                 ])
             });
         }
+        true
     }
 
     fn remove_row(&self, id: &str) {
@@ -1781,10 +1806,14 @@ impl PostListController {
         self.table_serials.borrow_mut().remove(id);
         self.engine_versions.borrow_mut().remove(id);
         self.row_context_generations.borrow_mut().remove(id);
+        self.clear_stale(id);
+        self.cached_prepared_end.set(None);
+    }
+
+    fn clear_stale(&self, id: &str) {
         self.stale_set.borrow_mut().remove(id);
         self.idle_only_stale.borrow_mut().remove(id);
         self.aspect_stale.borrow_mut().remove(id);
-        self.cached_prepared_end.set(None);
     }
 
     /// drops rows that left the page and that no transaction can still ask for
@@ -1936,16 +1965,14 @@ impl PostListController {
                     break;
                 }
                 let Some(index) = rows.index_by_presentation_id.get(&id).copied() else {
-                    self.stale_set.borrow_mut().remove(&id);
-                    self.idle_only_stale.borrow_mut().remove(&id);
-                    self.aspect_stale.borrow_mut().remove(&id);
+                    self.clear_stale(&id);
                     continue;
                 };
                 budget -= 1;
                 let post_input = self.preparer.input(&rows.items[index], cx);
                 if let Some(cached) = self.preparer.cached_row(&post_input, &environment) {
-                    self.store(cached, self.store_reason(&id), cx);
-                    stored_synchronously = true;
+                    stored_synchronously |= self.store(cached, self.store_reason(&id), cx);
+                    self.clear_stale(&id);
                 } else {
                     inputs.push(post_input);
                 }
@@ -2397,12 +2424,35 @@ impl PostListController {
         self.is_evaluation_scheduled.set(true);
         let token = self.evaluation_token.get().wrapping_add(1);
         self.evaluation_token.set(token);
-        self.on_next_main_turn(cx, move |controller, window, cx| {
+        let work = move |controller: Rc<Self>, window: &mut Window, cx: &mut App| {
             if controller.evaluation_token.get() != token {
                 return;
             }
             controller.is_evaluation_scheduled.set(false);
             controller.evaluate(window, cx);
+        };
+        if self.evaluations_this_turn.get() >= Self::MAX_EVALUATIONS_PER_TURN {
+            self.on_next_frame(cx, work);
+        } else {
+            self.on_next_main_turn(cx, work);
+        }
+    }
+
+    fn count_evaluation(&self, window: &mut Window) {
+        let count = self.evaluations_this_turn.get().saturating_add(1);
+        self.evaluations_this_turn.set(count);
+        if count == Self::MAX_EVALUATIONS_PER_TURN {
+            tracing::warn!(target: "riseonly::X921", count, "feed evaluations in one effect pass, the rest waits for the next frame");
+        }
+        if self.is_evaluation_turn_reset_armed.replace(true) {
+            return;
+        }
+        let owner = self.this.clone();
+        window.on_next_frame(move |_, _| {
+            if let Some(controller) = owner.upgrade() {
+                controller.evaluations_this_turn.set(0);
+                controller.is_evaluation_turn_reset_armed.set(false);
+            }
         });
     }
 
@@ -2410,6 +2460,7 @@ impl PostListController {
         if self.is_stopped.get() || !self.did_start_first_commit.get() {
             return;
         }
+        self.count_evaluation(window);
         self.pump_preparation(cx);
         self.reconciler.commit_now(window, cx);
         let metrics = self.list_view.read(cx).scroll_metrics();

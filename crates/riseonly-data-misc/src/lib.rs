@@ -1159,6 +1159,7 @@ pub mod modules {
     }
     pub mod shorts {
         pub mod components {
+            pub mod shorts_autoscroll;
             #[allow(unused_imports)]
             pub use riseonly_data_mid::modules::shorts::components::*;
         }

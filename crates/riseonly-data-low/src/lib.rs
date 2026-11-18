@@ -475,6 +475,7 @@ pub mod modules {
                     pub mod music_listening_interruption_gate;
                     #[cfg(test)]
                     mod music_listening_interruption_gate_tests;
+                    pub mod music_local_folder_import;
                     pub mod music_local_state;
                     pub mod music_local_track_draft_store;
                     pub mod music_local_tracks_queue_continuation;

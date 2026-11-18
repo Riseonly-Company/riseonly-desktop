@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Context, ElementId, Empty, Entity, EntityId, ExternalPaths, FontWeight, IntoElement, RenderOnce, SharedString,
+    AnyElement, App, Context, ElementId, Empty, Entity, EntityId, ExternalPaths, IntoElement, RenderOnce, SharedString,
     Subscription, Window, anchored, deferred, transparent_black,
 };
 use rise_ui::window_cover::WindowCoverFrame;
@@ -19,7 +19,6 @@ use rise_ui::bottom_sheet_ui::native_bottom_sheet_presentation_host::{
 };
 use rise_ui::liquid_chrome::LiquidChrome;
 use rise_ui::liquid_glass_button::{LiquidGlassButton, LiquidGlassButtonShape};
-use rise_ui::main_text::MainText;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::motion::ease_out;
 use rise_ui::swiftui::prelude::*;
@@ -38,6 +37,8 @@ use crate::modules::chat::components::chat::composer::chat_composer_types::{
     ChatBottomBarMetrics, ChatDraftCustomEmoji,
 };
 use crate::modules::chat::stores::message::message_actions::message_poll_codec::MessagePollDraft;
+use crate::modules::chat::components::chat::input_picker::chat_input_picker_kit::ChatInputSegmentedTabs;
+use rise_ui::animated_tabs_ui::animated_tabs_types::TabHeaderConfig;
 use crate::modules::media_picker::api::media_picker_configuration::{MediaPickerConfiguration, MediaPickerSourceTab};
 use crate::modules::media_picker::api::media_picker_result::{
     MediaPickerItem, MediaPickerResult, MediaPickerTrackSelection,
@@ -203,7 +204,7 @@ impl MediaPickerSheet {
             let (content_wiring, content_session) = (wiring.clone(), session);
             let content_id = self.child_id("runtime");
             let (on_dismiss, on_did_dismiss, on_refused) = (wiring.clone(), wiring.clone(), wiring.clone());
-            let (edge_theme, edge_session) = (self.theme_store.clone(), content_session.clone());
+            let edge_theme = self.theme_store.clone();
             let edge_handle_clearance =
                 if wiring.uses_native_sheet_presentation { 0.0 } else { MediaPickerScreen::SHEET_HANDLE_CLEARANCE };
             BottomSheetUi::new(
@@ -226,9 +227,6 @@ impl MediaPickerSheet {
             .sheet_background(Some(if editor_covers_sheet { transparent_black() } else { surface }))
             .modal_chrome_hidden(editor_covers_sheet)
             .modal_edge_underlay(move |_, cx| {
-                if edge_session.read(cx).source_tab != MediaPickerSourceTab::Gallery {
-                    return Empty.into_any_element();
-                }
                 MediaPickerScreen::modal_edge_header_chrome(edge_handle_clearance, &edge_theme, cx)
             })
             .backdrop_color(Some(media_send_backdrop(cx)))
@@ -627,7 +625,7 @@ impl MediaPickerSheetRuntimeParts {
 
         self.error_alert(window, cx);
 
-        let mut content = div().size_full().bg(theme.bg._100).child(self.sheet_content(&theme, window, cx));
+        let mut content = div().size_full().bg(theme.bg._100).child(self.sheet_content(window, cx));
         if editor_covers_sheet {
             content = content.invisible();
         }
@@ -723,8 +721,8 @@ impl MediaPickerSheetRuntimeParts {
         )
     }
 
-    fn sheet_content(&self, theme: &AppTheme, window: &mut Window, cx: &mut App) -> Div {
-        let tabs = self.sheet_tabs(theme, window, cx);
+    fn sheet_content(&self, window: &mut Window, cx: &mut App) -> Div {
+        let tabs = self.sheet_tabs(window, cx);
         let document_editor = self.state.read(cx).document_editor.clone();
         let document_layer = document_editor.map(|editor| {
             let embedder = self.state.read(cx).is_embedding_media.then(|| self.embedding_picker(&editor));
@@ -744,17 +742,20 @@ impl MediaPickerSheetRuntimeParts {
             div()
                 .absolute()
                 .inset_0()
-                .child(MediaPickerPollComposer::new(
-                    self.child_id("poll-composer"),
-                    move |_: &mut Window, cx: &mut App| {
-                        on_cancel.state.update(cx, |state, cx| state.set_composing_poll(false, true, cx));
-                    },
-                    move |poll: MessagePollDraft, window: &mut Window, cx: &mut App| {
-                        on_create.state.update(cx, |state, cx| state.set_composing_poll(false, false, cx));
-                        on_create.session.update(cx, |session, cx| session.finish_with_poll(poll, cx));
-                        on_create.close_if_finished(window, cx);
-                    },
-                ))
+                .child(
+                    MediaPickerPollComposer::new(
+                        self.child_id("poll-composer"),
+                        move |_: &mut Window, cx: &mut App| {
+                            on_cancel.state.update(cx, |state, cx| state.set_composing_poll(false, true, cx));
+                        },
+                        move |poll: MessagePollDraft, window: &mut Window, cx: &mut App| {
+                            on_create.state.update(cx, |state, cx| state.set_composing_poll(false, false, cx));
+                            on_create.session.update(cx, |session, cx| session.finish_with_poll(poll, cx));
+                            on_create.close_if_finished(window, cx);
+                        },
+                    )
+                    .allows_public(self.configuration.allows_public_poll),
+                )
                 .transition_effect(effect)
         });
 
@@ -885,10 +886,10 @@ impl MediaPickerSheetRuntimeParts {
         });
     }
 
-    fn sheet_tabs(&self, theme: &AppTheme, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn sheet_tabs(&self, window: &mut Window, cx: &mut App) -> AnyElement {
         let source_tabs = &self.configuration.source_tabs;
         if source_tabs.len() > 1 {
-            return self.source_tabs(theme, window, cx);
+            return self.source_tabs(window, cx);
         }
         match source_tabs.first() {
             Some(MediaPickerSourceTab::File) => {
@@ -937,7 +938,7 @@ impl MediaPickerSheetRuntimeParts {
 
     /// every page once shown stays mounted and only the selected one paints, topmost so its hit targets win
     /// the location page holds a live map that must not run behind the others
-    fn source_tabs(&self, theme: &AppTheme, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn source_tabs(&self, window: &mut Window, cx: &mut App) -> AnyElement {
         let selected = self.session.read(cx).source_tab;
         self.state.update(cx, |state, _| {
             if !state.visited_tabs.contains(&selected) {
@@ -965,8 +966,7 @@ impl MediaPickerSheetRuntimeParts {
             .bottom_0()
             .h(px(tab_bar_height))
             .overflow_hidden()
-            .bg(theme.bg._100)
-            .child(self.source_tab_bar(theme, selected));
+            .child(self.source_tab_bar());
 
         div().relative().size_full().children(pages).child(bar).into_any_element()
     }
@@ -986,40 +986,67 @@ impl MediaPickerSheetRuntimeParts {
         }
     }
 
-    fn source_tab_bar(&self, theme: &AppTheme, selected: MediaPickerSourceTab) -> impl IntoElement {
+    fn source_tab_bar(&self) -> impl IntoElement {
         let tabs = &self.configuration.source_tabs;
         let items = [
-            (MediaPickerSourceTab::Gallery, "media_picker_tab_gallery", "photo.on.rectangle.angled", "tab-gallery"),
-            (MediaPickerSourceTab::File, "media_picker_tab_file", "doc.fill", "tab-file"),
-            (MediaPickerSourceTab::Audio, "media_picker_tab_audio", "waveform", "tab-audio"),
-            (MediaPickerSourceTab::Location, "chat_msg_location", "location.fill", "tab-location"),
-            (MediaPickerSourceTab::Poll, "chat_attach_poll", "chart.bar.fill", "tab-poll"),
-            (MediaPickerSourceTab::Formatting, "media_picker_tab_formatting", "textformat", "tab-formatting"),
+            (MediaPickerSourceTab::Gallery, "media_picker_tab_gallery"),
+            (MediaPickerSourceTab::File, "media_picker_tab_file"),
+            (MediaPickerSourceTab::Audio, "media_picker_tab_audio"),
+            (MediaPickerSourceTab::Location, "chat_msg_location"),
+            (MediaPickerSourceTab::Poll, "chat_attach_poll"),
+            (MediaPickerSourceTab::Formatting, "media_picker_tab_formatting"),
         ];
-        let buttons = items.into_iter().filter(|(tab, ..)| match tab {
-            MediaPickerSourceTab::Poll => self.shows_poll_tab(),
-            tab => tabs.contains(tab),
-        });
-        hstack(0.0).w_full().h(px(SOURCE_TAB_BAR_HEIGHT)).children(buttons.map(|(tab, title, symbol, name)| {
-            let tint = if tab == selected { theme.primary._100 } else { theme.text.secondary };
-            let session = self.session.clone();
-            div().flex_1().child(
-                plain(self.child_id(name))
-                    .w_full()
-                    .on_press(move |_, cx| {
-                        session.update(cx, |session, cx| {
-                            session.source_tab = tab;
-                            cx.notify();
-                        });
-                    })
-                    .child(
-                        vstack(2.0)
-                            .w_full()
-                            .children(IconUi::sized(symbol, px(22.0), tint, symbol.ends_with(".fill")))
-                            .child(MainText::new(tr(title)).px(10.0).font_weight(FontWeight::MEDIUM).color(tint)),
-                    ),
+        let shown: Vec<(MediaPickerSourceTab, &'static str)> = items
+            .into_iter()
+            .filter(|(tab, _)| match tab {
+                MediaPickerSourceTab::Poll => self.shows_poll_tab(),
+                tab => tabs.contains(tab),
+            })
+            .collect();
+        let order: Rc<Vec<MediaPickerSourceTab>> = Rc::new(shown.iter().map(|(tab, _)| *tab).collect());
+        let headers: Vec<TabHeaderConfig> = shown
+            .iter()
+            .enumerate()
+            .map(|(index, (_, title))| TabHeaderConfig {
+                id: index as i64,
+                text: SharedString::from(tr(title)),
+                guide_anchor: None,
+                custom_emojis: Vec::new(),
+            })
+            .collect();
+        let read_order = order.clone();
+        let write_order = order.clone();
+        let active = Binding::entity(
+            self.session.clone(),
+            move |session: &MediaPickerSession| {
+                read_order.iter().position(|tab| *tab == session.source_tab).unwrap_or(0) as i64
+            },
+            move |session: &mut MediaPickerSession, index: i64, cx: &mut Context<MediaPickerSession>| {
+                if let Some(tab) = usize::try_from(index).ok().and_then(|index| write_order.get(index)) {
+                    session.source_tab = *tab;
+                    cx.notify();
+                }
+            },
+        );
+        let session = self.session.clone();
+        div().w_full().h(px(SOURCE_TAB_BAR_HEIGHT)).flex().items_center().justify_center().child(
+            ChatInputSegmentedTabs::new(
+                self.child_id("source-tabs"),
+                headers,
+                active,
+                |_: &App| 0.0,
+                move |id: i64, _: &mut Window, cx: &mut App| {
+                    let Some(tab) = usize::try_from(id).ok().and_then(|index| order.get(index).copied()) else {
+                        return;
+                    };
+                    session.update(cx, |session, cx| {
+                        session.source_tab = tab;
+                        cx.notify();
+                    });
+                },
             )
-        }))
+            .uses_flat_chrome(true),
+        )
     }
 
     fn gallery_source_page(&self, tab_bar_height: f32, window: &Window, cx: &mut App) -> Div {

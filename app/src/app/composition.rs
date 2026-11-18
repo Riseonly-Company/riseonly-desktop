@@ -5,6 +5,7 @@ use rise_engine::rise_core::rise_secure_key_store::RiseKeychainKeyStore;
 use rise_platform::app_info::{AppIdentity, identity_for};
 use rise_platform::user_defaults::UserDefaults;
 use rise_platform::notifications::NotificationService;
+use rise_platform::secure_store::{fallback_secure_store, move_fallback_secrets};
 use rise_platform::{AppPaths, InMemorySecureStore, KeyringSecureStore, SecureStore};
 use tokio::runtime::Runtime;
 
@@ -39,7 +40,10 @@ pub fn install_storage() {
     }
 
     let secrets: Arc<dyn SecureStore> = match identity_for(environment.as_str()) {
-        Some(identity) => usable_secure_store(os_secure_store(identity)),
+        Some(identity) => match stealth_secure_store(identity) {
+            Some(store) => usable_secure_store(store, None),
+            None => usable_secure_store(Arc::new(KeyringSecureStore::for_identity(identity)), Some(identity)),
+        },
         None => {
             RiseEngineAppRuntime::use_launch_scoped_directory();
             Arc::new(InMemorySecureStore::new())
@@ -49,31 +53,49 @@ pub fn install_storage() {
     KeychainStore::install(secrets);
 }
 
-fn os_secure_store(identity: &AppIdentity) -> Arc<dyn SecureStore> {
+fn stealth_secure_store(identity: &AppIdentity) -> Option<Arc<dyn SecureStore>> {
     #[cfg(feature = "dev-drive")]
     {
         if crate::app::dev_drive::DevDrive::stealth_from_launch() {
             if let Some(store) = rise_platform::keyring_store::FileSecureStore::in_home(identity) {
-                return Arc::new(store);
+                return Some(Arc::new(store));
             }
         }
     }
-    Arc::new(KeyringSecureStore::for_identity(identity))
+    let _ = identity;
+    None
 }
 
-/// a session can run without a keychain eg no secret service on linux
-/// tokens then stay in memory until quit, whatever the os store holds is left alone
-fn usable_secure_store(os_store: Arc<dyn SecureStore>) -> Arc<dyn SecureStore> {
+fn usable_secure_store(os_store: Arc<dyn SecureStore>, identity: Option<&AppIdentity>) -> Arc<dyn SecureStore> {
+    let data_dir = AppPaths::resolve(AppEnvironment::current().canon()).ok().map(|paths| paths.data_dir().to_path_buf());
+    let fallback_site = identity.zip(data_dir.as_deref());
     match os_store.availability() {
-        Ok(()) => os_store,
-        Err(reason) => {
-            tracing::warn!(
-                target: "riseonly",
-                "{reason}; sessions will not survive a restart"
-            );
-            RiseEngineAppRuntime::use_launch_scoped_directory();
-            Arc::new(InMemorySecureStore::new())
+        Ok(()) => {
+            if let Some((identity, data_dir)) = fallback_site {
+                let moved = move_fallback_secrets(data_dir, identity, os_store.as_ref());
+                if moved > 0 {
+                    tracing::info!(target: "riseonly", moved, "secrets moved from the encrypted file store into the OS secret store");
+                }
+            }
+            os_store
         }
+        Err(reason) => match fallback_site.and_then(|(identity, data_dir)| fallback_secure_store(data_dir, identity)) {
+            Some(file_store) => {
+                tracing::warn!(
+                    target: "riseonly",
+                    "{reason}; sessions are kept in an encrypted file in the app data directory"
+                );
+                file_store
+            }
+            None => {
+                tracing::warn!(
+                    target: "riseonly",
+                    "{reason}; sessions will not survive a restart"
+                );
+                RiseEngineAppRuntime::use_launch_scoped_directory();
+                Arc::new(InMemorySecureStore::new())
+            }
+        },
     }
 }
 

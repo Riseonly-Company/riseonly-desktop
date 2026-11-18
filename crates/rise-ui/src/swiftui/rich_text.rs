@@ -266,7 +266,7 @@ impl AttributedString {
         let found = self.runs.iter().enumerate().find_map(|(index, run)| {
             let start = offset;
             offset += run.len;
-            (byte > start && byte < offset).then_some((index, byte - start))
+            (byte > start && byte < offset).then(|| (index, byte - start))
         });
         let Some((index, head)) = found else {
             return;

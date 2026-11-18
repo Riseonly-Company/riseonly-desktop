@@ -63,6 +63,7 @@ fn non_empty_entities_stay_on_the_full_renderer() {
         }],
         role_mentions: Vec::new(),
         topic_mentions: Vec::new(),
+        text_links: Vec::new(),
     });
 
     let seed = RiseAsyncTextMessageEligibility::seed(

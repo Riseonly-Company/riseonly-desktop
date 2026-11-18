@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AnyView, App, Context, ElementId, Empty, Entity, FontWeight, Hsla, ListAlignment, ListOffset, Pixels, Point, SharedString, Subscription,
+    AnyElement, AnyView, App, Context, ElementId, Empty, Entity, Hsla, ListAlignment, ListOffset, Pixels, Point, SharedString, Subscription,
     StyleRefinement, Task, Window, transparent_black,
 };
 use rise_i18n::tr;
@@ -12,7 +12,6 @@ use rise_ui::hold_context_menu_ui::hold_context_menu_types::{HoldContextMenuAlig
 use rise_ui::liquid_glass_button::{LiquidGlassButton, LiquidGlassButtonShape};
 use rise_ui::list_ui::list_ui::ListUi;
 use rise_ui::native_confirm_alert::NativeConfirmAlert;
-use rise_ui::official_badge::OfficialBadge;
 use rise_ui::search_field_ui::SearchFieldUi;
 use rise_ui::sheet_header_bar::SheetHeaderBar;
 use rise_ui::swiftui::prelude::*;
@@ -28,9 +27,10 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws_pending_registry::SaiWsPendin
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_ui::BottomSheetUi;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_container::HoldContextMenuContainer;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
-use crate::core::ui::premium_badge::PremiumBadge;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::sheets::report_sheet::{ReportSheetStore, ReportSubject};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::User;
@@ -550,23 +550,12 @@ impl PostLikesSheetParts {
         let press_parts = self.clone();
         let press_user = user.clone();
 
-        let mut name_row = hstack(4.0).w_full().child(
-            MainText::new(if user.name.is_empty() { handle.clone() } else { user.name.clone() })
-                .px(16.0)
-                .font_weight(FontWeight::SEMIBOLD)
-                .number_of_lines(1),
-        );
-        if user.is_official {
-            name_row = name_row.child(OfficialBadge::new().size(px(14.0)));
-        }
-        if user.is_premium {
-            name_row = name_row.child(
-                PremiumBadge::new()
-                    .user_id(Some(SharedString::from(user.id.clone())))
-                    .emoji(user.premium_badge_emoji.clone().map(SharedString::from))
-                    .size(14.0),
-            );
-        }
+        let name_row = UserNameWithBadges::new(
+            Some(SharedString::from(user.id.clone())),
+            if user.name.is_empty() { handle.clone() } else { user.name.clone() },
+        )
+        .official(user.is_official)
+        .premium(user.is_premium, user.premium_badge_emoji.clone(), user.name_color.clone());
 
         let mut names = vstack(4.0).align(HorizontalAlignment::Leading).flex_1().min_w_0().child(name_row);
         if !user.tag.is_empty() {
@@ -584,7 +573,12 @@ impl PostLikesSheetParts {
                     .story_ring_state(story_ring.0, story_ring.1)
                     .size(UserRelationshipRowMetrics::AVATAR_SIZE)
                     .is_button(true)
-                    .on_press(move |_, cx| press_parts.open_profile(&press_user, cx)),
+                    .on_press(move |_, cx| press_parts.open_profile(&press_user, cx))
+                    .gift_worn_frame(
+                        SharedString::from(format!("{SHEET_ID}-frame-{}", user.id)),
+                        Some(user.id.clone()),
+                        UserRelationshipRowMetrics::AVATAR_SIZE,
+                    ),
             )
             .child(names)
     }

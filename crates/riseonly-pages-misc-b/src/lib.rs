@@ -1617,6 +1617,7 @@ pub mod modules {
             pub mod map_friends {
                 pub mod map_friends_page;
                 pub mod map_invite_link_card;
+                pub mod map_profile_page;
             }
         }
         pub mod recorder {

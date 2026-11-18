@@ -1,5 +1,8 @@
 use std::any::Any;
+use std::cell::Cell;
 use std::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -22,11 +25,12 @@ use ::windows::Win32::Media::MediaFoundation::{
     MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_EVENT_ENDED, MF_MEDIA_ENGINE_EVENT_ERROR,
     MF_MEDIA_ENGINE_EVENT_FORMATCHANGE, MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA, MF_MEDIA_ENGINE_EVENT_SEEKED,
     MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC, MF_MEDIA_ENGINE_PRELOAD_METADATA, MF_MEDIA_ENGINE_READY_HAVE_FUTURE_DATA,
-    MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_VERSION, MFASYNC_CALLBACK_QUEUE_LONG_FUNCTION,
+    MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_VIDEO_ROTATION, MF_VERSION, MFASYNC_CALLBACK_QUEUE_LONG_FUNCTION,
     MFBYTESTREAM_IS_READABLE, MFBYTESTREAM_IS_SEEKABLE, MFBYTESTREAM_SEEK_ORIGIN, MFSTARTUP_FULL, msoBegin, msoCurrent,
 };
 use ::windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize};
 use ::windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
+use ::windows::Win32::System::Variant::VT_UI4;
 use ::windows::core::{BOOL, BSTR, ComObject, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, Ref, implement, s, w};
 use gpui::{AnyElement, IntoElement as _, ObjectFit, OwnedSurfaceFrame, Size, Styled as _, size};
 use parking_lot::Mutex;
@@ -40,7 +44,7 @@ use crate::texture::color::{ColorRange, ColorSpace, ConversionParams};
 use crate::texture::frame::FrameFormat;
 use crate::texture::native_surface::ycbcr_to_rgb_columns;
 use crate::video::av_asset::{AVAssetByteSource, AVAssetReadError, ContentInformation};
-use crate::video::av_player::pixel_buffer::Nv12PixelBuffer;
+use crate::video::av_player::pixel_buffer::{Nv12PixelBuffer, clockwise_quarter_turns_of_display_rotation, turned_nv12};
 
 const NO_MEDIA_FOUNDATION: &str =
     "Media Foundation is not installed (a Windows N edition without the Media Feature Pack)";
@@ -56,6 +60,11 @@ type MfCreateAsyncResultFn = unsafe extern "system" fn(*mut c_void, *mut c_void,
 type MfPutWorkItemFn = unsafe extern "system" fn(u32, *mut c_void, *mut c_void) -> HRESULT;
 type MfInvokeCallbackFn = unsafe extern "system" fn(*mut c_void) -> HRESULT;
 type MfCreateByteStreamWrapperFn = unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> HRESULT;
+type MfCreateFileFn = unsafe extern "system" fn(i32, i32, i32, *const u16, *mut *mut c_void) -> HRESULT;
+
+const MF_ACCESSMODE_READ: i32 = 1;
+const MF_OPENMODE_FAIL_IF_NOT_EXIST: i32 = 0;
+const MF_FILEFLAGS_NONE: i32 = 0;
 
 struct MediaFoundation {
     startup: MfStartupFn,
@@ -66,6 +75,7 @@ struct MediaFoundation {
     put_work_item: MfPutWorkItemFn,
     invoke_callback: MfInvokeCallbackFn,
     create_byte_stream_wrapper: MfCreateByteStreamWrapperFn,
+    create_file: MfCreateFileFn,
 }
 
 fn media_foundation() -> Option<&'static MediaFoundation> {
@@ -86,6 +96,7 @@ fn resolve_media_foundation() -> Option<MediaFoundation> {
     let put_work_item = export(s!("MFPutWorkItem"))?;
     let invoke_callback = export(s!("MFInvokeCallback"))?;
     let create_byte_stream_wrapper = export(s!("MFCreateMFByteStreamWrapper"))?;
+    let create_file = export(s!("MFCreateFile"))?;
     type Exported = unsafe extern "system" fn() -> isize;
     unsafe {
         Some(MediaFoundation {
@@ -101,6 +112,7 @@ fn resolve_media_foundation() -> Option<MediaFoundation> {
             create_byte_stream_wrapper: std::mem::transmute::<Exported, MfCreateByteStreamWrapperFn>(
                 create_byte_stream_wrapper,
             ),
+            create_file: std::mem::transmute::<Exported, MfCreateFileFn>(create_file),
         })
     }
 }
@@ -207,6 +219,7 @@ fn engine_source(url: &Url) -> Result<String, AVPlayerError> {
 #[derive(Clone, Debug)]
 struct ClipSource {
     url: String,
+    file: Option<PathBuf>,
     bytes: Option<AVAssetByteSource>,
 }
 
@@ -214,6 +227,7 @@ impl ClipSource {
     fn of(item: &AVPlayerItem) -> Result<Self, AVPlayerError> {
         Ok(Self {
             url: engine_source(item.url())?,
+            file: item.url().is_file_url().then(|| item.url().to_file_path()).flatten(),
             bytes: item.asset().map(|asset| asset.resource_loader().byte_source()),
         })
     }
@@ -489,6 +503,7 @@ struct Engine {
     context: ID3D11DeviceContext,
     _manager: IMFDXGIDeviceManager,
     targets: Option<Targets>,
+    quarter_turns: Cell<Option<u8>>,
 }
 
 impl Drop for Engine {
@@ -533,7 +548,7 @@ impl Engine {
             media.SetAutoPlay(false)?;
             media.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC)?;
         }
-        Ok(Self { api, media, device, context, _manager: manager, targets: None })
+        Ok(Self { api, media, device, context, _manager: manager, targets: None, quarter_turns: Cell::new(None) })
     }
 
     /// current time and duration in seconds, none when the engine says nan or infinity
@@ -595,10 +610,36 @@ impl Engine {
         let (mut aspect_x, mut aspect_y) = (0_u32, 0_u32);
         let aspect = unsafe { self.media.GetVideoAspectRatio(Some(&mut aspect_x), Some(&mut aspect_y)) };
         if aspect.is_err() || aspect_x == 0 || aspect_y == 0 {
-            return Some(presentation_size_of(width, height, (1, 1), 0.0));
+            let degrees = f64::from(self.output_quarter_turns()) * 90.0;
+            return Some(presentation_size_of(width, height, (1, 1), degrees));
         }
         let shown_width = f64::from(height) * f64::from(aspect_x) / f64::from(aspect_y);
+        if self.output_quarter_turns() % 2 == 1 {
+            return Some(size(height as f32, shown_width as f32));
+        }
         Some(size(shown_width as f32, height as f32))
+    }
+
+    /// clockwise quarter turns that stand the pictures upright, the engine hands them over as encoded
+    fn output_quarter_turns(&self) -> u8 {
+        if let Some(turns) = self.quarter_turns.get() {
+            return turns;
+        }
+        let Ok(extended) = self.media.cast::<IMFMediaEngineEx>() else {
+            return 0;
+        };
+        let streams = unsafe { extended.GetNumberOfStreams() }.unwrap_or(0);
+        if streams == 0 {
+            return 0;
+        }
+        let degrees = (0..streams).find_map(|index| {
+            let value = unsafe { extended.GetStreamAttribute(index, &MF_MT_VIDEO_ROTATION) }.ok()?;
+            let inner = unsafe { &value.Anonymous.Anonymous };
+            (inner.vt == VT_UI4).then(|| unsafe { inner.Anonymous.ulVal })
+        });
+        let turns = degrees.map_or(0, |degrees| clockwise_quarter_turns_of_display_rotation(f64::from(degrees)));
+        self.quarter_turns.set(Some(turns));
+        turns
     }
 
     /// swaps the source, a failure is logged and the engine keeps the old one
@@ -610,8 +651,13 @@ impl Engine {
 
     /// opens the clip by url, or through the asset loader if the item has one
     fn set_source(&self, source: &ClipSource) -> ::windows::core::Result<()> {
+        self.quarter_turns.set(None);
         let url = BSTR::from(source.url.as_str());
         let Some(bytes) = &source.bytes else {
+            if let Some(stream) = source.file.as_ref().and_then(|path| self.file_stream(path)) {
+                let extended: IMFMediaEngineEx = self.media.cast()?;
+                return unsafe { extended.SetSourceFromByteStream(&stream, &url) };
+            }
             return unsafe { self.media.SetSource(&url) };
         };
         let information = match bytes.content_information() {
@@ -642,6 +688,20 @@ impl Engine {
         }
         let extended: IMFMediaEngineEx = self.media.cast()?;
         unsafe { extended.SetSourceFromByteStream(&wrapped, &url) }
+    }
+
+    fn file_stream(&self, path: &std::path::Path) -> Option<IMFByteStream> {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let opened = created(|out| unsafe {
+            (self.api.create_file)(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, wide.as_ptr(), out)
+        });
+        match opened {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                tracing::warn!(target: "riseonly", %error, path = %path.display(), "MFCreateFile");
+                None
+            }
+        }
     }
 
     /// applies one setting, a failure is logged and the hub keeps the callers value
@@ -710,7 +770,11 @@ impl Engine {
         } else {
             let length = row_pitch * (rows - 1) + row_bytes;
             let bytes = unsafe { std::slice::from_raw_parts(mapped.pData.cast::<u8>(), length) };
-            bgra_to_nv12(bytes, row_pitch, width, height, generation)
+            let picture = bgra_to_nv12(bytes, row_pitch, width, height, generation);
+            match self.output_quarter_turns() {
+                0 => picture,
+                turns => picture.and_then(|picture| turned_nv12(&picture, turns)),
+            }
         };
         unsafe { self.context.Unmap(&targets.staging, 0) };
         Ok(picture)

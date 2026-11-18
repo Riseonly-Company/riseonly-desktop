@@ -30,12 +30,21 @@ impl MessageActionsStore {
         }));
     }
 
-    pub fn release_unread_marks_action(&self, chat_id: &str, topic_id: Option<&str>, cx: &mut App) {
+    pub fn release_unread_marks_action(
+        &self,
+        chat_id: &str,
+        topic_id: Option<&str>,
+        seen_candidates: Vec<RiseUnreadMarkCandidate>,
+        cx: &mut App,
+    ) {
         let Some(domain) = active_domain(cx) else {
             return;
         };
         let scope = message_scope(chat_id, topic_id);
         drop(RiseAccountRuntime::current().spawn(async move {
+            if !seen_candidates.is_empty() {
+                domain.consume_unread_marks(&scope, seen_candidates).await;
+            }
             domain.release_unread_marks(&scope).await;
         }));
     }

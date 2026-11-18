@@ -25,7 +25,9 @@ use crate::core::guides::guide_facts::GuideFacts;
 use crate::core::lib::canon_timing::RiseTimingCanonExt;
 use crate::core::lib::sai::modules::sai_debouncer::sai_debouncer::SaiDebouncer;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::wrappers::list_shell_ui::{ListShellScrollUnderChromeModifiers, SettingsWrapperUi};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui::{
@@ -470,8 +472,12 @@ impl CloseFriendsScreenParts {
                             .name(SharedString::from(author.name.clone()))
                             .user_id(SharedString::from(id.clone()))
                             .size(40.0)
-                            .show_story_ring(false)
-                            .open_story_on_press(false),
+                            .open_story_on_press(false)
+                            .gift_worn_frame(
+                                SharedString::from(format!("close-friends-row-frame-{id}")),
+                                Some(id.clone()),
+                                40.0,
+                            ),
                     )
                     .child(
                         vstack(2.0)
@@ -479,7 +485,14 @@ impl CloseFriendsScreenParts {
                             .min_w_0()
                             .align(HorizontalAlignment::Leading)
                             .child(
-                                MainText::new(title).px(15.0).tac(TextAlignT::Left).font_weight(FontWeight::MEDIUM),
+                                UserNameWithBadges::new(Some(SharedString::from(id.clone())), title)
+                                    .font(15.0, FontWeight::MEDIUM)
+                                    .official(author.is_official)
+                                    .premium(
+                                        author.is_premium,
+                                        author.premium_badge_emoji.clone(),
+                                        author.name_color.clone(),
+                                    ),
                             )
                             .when(!author.tag.is_empty(), |labels| {
                                 labels.child(
@@ -632,6 +645,7 @@ impl CloseFriendsScreenParts {
     fn story_author_from_user(user: &User) -> StoryAuthorDTO {
         StoryAuthorDTO {
             id: user.id.clone(),
+            is_official: user.more.is_official,
             is_online: false,
             is_premium: user.more.is_premium,
             last_seen_ms: None,
@@ -647,6 +661,7 @@ impl CloseFriendsScreenParts {
     fn story_author_from_author(author: &AuthorInfo) -> StoryAuthorDTO {
         StoryAuthorDTO {
             id: author.id.clone().unwrap_or_default(),
+            is_official: author.more.is_official,
             is_online: false,
             is_premium: author.more.is_premium,
             last_seen_ms: None,

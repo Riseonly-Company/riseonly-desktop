@@ -20,7 +20,7 @@ use rise_media::camera_capture::call_camera::{CallCameraCapture, CallCameraEndSi
 use rise_media::camera_capture::CameraCaptureError;
 use rise_media::rtc_media::livekit_room::{self, RemoteVideoFrame, RtcEvent};
 use rise_media::rtc_media::{
-    self as rtc_media, ConnectRequest, MediaIntent, MediaSessionKey, RemoteParticipant, RemotePlayout, RtcUnavailable,
+    self as rtc_media, ConnectRequest, DeviceDirection, MediaIntent, MediaSessionKey, RemoteParticipant, RemotePlayout, RtcUnavailable,
     SessionOutput, TrackSource, VideoCeiling, VideoShelf, CODE_DATA_PUBLISH_DISABLED,
 };
 use rise_media::texture::native_surface::{self, HostNv12Frame};
@@ -37,6 +37,7 @@ use crate::modules::rtc::engine::rise_rtc_engine_models::{
     RiseRTCMediaDriving, RiseRTCMediaEvent, RiseRTCMediaIntent, RiseRTCMediaSessionKey, RiseRTCParticipant,
     RiseRTCParticipantRole, RiseRTCRoomMode, RiseRTCScreenShareQuality, RiseRTCStateError, RiseRTCVideoCeiling,
 };
+use crate::modules::rtc::engine::rise_rtc_domain::RiseRTCDomain;
 use crate::modules::rtc::engine::rise_rtc_media_boundary::RiseRTCMediaRuntime;
 use crate::modules::rtc::media::rise_rtc_audio_settings::{RiseRTCAudioProcessingSettings, RiseRTCAudioSettingsStore};
 use crate::modules::rtc::media::rise_rtc_call_picture_in_picture::RiseRTCCallPictureInPictureController;
@@ -87,6 +88,7 @@ struct RiseRTCLiveKitMediaControllerState {
     active_session: Option<RiseRTCLiveKitMediaControllerActiveSession>,
     remote_playout_muted: bool,
     listener_gains: HashMap<String, f64>,
+    stream_gains: HashMap<String, f64>,
     intended_session_key: Option<RiseRTCMediaSessionKey>,
     terminal_outcome: Option<RiseRTCLiveKitMediaControllerTerminalOutcome>,
     lifecycle_generation: u64,
@@ -161,6 +163,7 @@ impl RiseRTCLiveKitMediaController {
                         active_session: None,
                         remote_playout_muted: false,
                         listener_gains: HashMap::new(),
+                        stream_gains: HashMap::new(),
                         intended_session_key: None,
                         terminal_outcome: None,
                         lifecycle_generation: 1,
@@ -554,10 +557,32 @@ impl RiseRTCLiveKitMediaController {
         self.apply_remote_playout_volume(session)
     }
 
+    /// sound of one persons screen share on this machine only, 1 plays it as sent and 2 doubles it
+    pub fn set_stream_volume(&self, user_id: &str, gain: f64) {
+        let session = self.state.with(|state| {
+            if (gain - 1.0).abs() < f64::EPSILON {
+                state.stream_gains.remove(user_id);
+            } else {
+                state.stream_gains.insert(user_id.to_owned(), gain);
+            }
+            state.active_session.as_ref().map(|active| active.key.clone())
+        });
+        if let Some(session) = session
+            && let Err(error) = self.apply_remote_playout_volume(&session)
+        {
+            tracing::debug!(%error, "rtc stream volume not applied");
+        }
+    }
+
+    pub fn stream_volume(&self, user_id: &str) -> f64 {
+        self.state.with(|state| state.stream_gains.get(user_id).copied().unwrap_or(1.0))
+    }
+
     fn apply_remote_playout_volume(&self, session: &RiseRTCMediaSessionKey) -> anyhow::Result<()> {
         let playout = self.state.with(|state| RemotePlayout {
             deafened: state.remote_playout_muted,
             gains: state.listener_gains.clone(),
+            stream_gains: state.stream_gains.clone(),
         });
         rtc_media::perform(&MediaIntent::SetRemotePlayout { session: Self::seam_key(session), playout })
             .map_err(Self::state_error)?;
@@ -665,14 +690,22 @@ impl RiseRTCLiveKitMediaController {
             Ok(Ok(source)) => source,
             Ok(Err(ScreenCaptureError::PickerUnavailable)) => match self.choose_screen_share_source_in_app().await {
                 Ok(Some(source)) => source,
-                Ok(None) => return Ok(()),
+                Ok(None) => return Err(CancellationError.into()),
                 Err(error) => {
                     tracing::warn!(%error, "rtc screen share sources unavailable");
                     return Err(RiseRTCStateError::Remote(rtc_media::CODE_CONNECT_FAILED.to_owned()).into());
                 }
             },
-            Ok(Err(error)) if error.is_user_choice() => return Ok(()),
+            Ok(Err(ScreenCaptureError::PortalMissing(reason))) => {
+                RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || format!("screen share: {reason}"));
+                return Err(RiseRTCStateError::Remote(RiseRTCDomain::SCREEN_SHARE_NO_PORTAL_CODE.to_owned()).into());
+            }
+            Ok(Err(error)) if error.is_user_choice() => {
+                RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Media, || "screen share: picker ended with no source".to_owned());
+                return Err(CancellationError.into());
+            }
             Ok(Err(error)) => {
+                RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || format!("screen share: no source: {error}"));
                 tracing::warn!(%error, "rtc screen share source unavailable");
                 return Err(RiseRTCStateError::Remote(rtc_media::CODE_CONNECT_FAILED.to_owned()).into());
             }
@@ -803,6 +836,17 @@ impl RiseRTCLiveKitMediaController {
         }
     }
 
+    fn end_lost_screen_share(&self, code: &str) {
+        let Some(share) = self.state.with(|state| state.screen_share.take()) else {
+            return;
+        };
+        let session = share.session.clone();
+        Self::stop_screen_share_capture(Some(share));
+        self.refresh_tracks(&session);
+        self.yield_event(RiseRTCMediaEvent::LocalScreenShareEnded { session: session.clone() });
+        self.yield_event(RiseRTCMediaEvent::Failure { session: Some(session), code: code.to_owned() });
+    }
+
     async fn handle_screen_capture_end(&self, end: ScreenCaptureEnd) {
         let share = self.state.with(|state| state.screen_share.take());
         let Some(share) = share else {
@@ -924,21 +968,25 @@ impl RiseRTCLiveKitMediaController {
             }
             RtcEvent::LocalVideoStopped { .. } => {}
             RtcEvent::ScreenShareDeadPipe => {
-                let share = self.state.with(|state| state.screen_share.take());
-                let Some(share) = share else {
-                    return;
-                };
-                let session = share.session.clone();
                 RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || {
                     "screen share: published but no frames arrived".to_owned()
                 });
-                tracing::warn!(room = %session.room_id, "screen share published but produced no frames; tearing down");
-                Self::stop_screen_share_capture(Some(share));
-                self.refresh_tracks(&session);
-                self.yield_event(RiseRTCMediaEvent::LocalScreenShareEnded { session: session.clone() });
-                self.yield_event(RiseRTCMediaEvent::Failure {
-                    session: Some(session),
-                    code: SCREEN_SHARE_NO_FRAMES_CODE.to_owned(),
+                tracing::warn!("screen share published but produced no frames; tearing down");
+                self.end_lost_screen_share(SCREEN_SHARE_NO_FRAMES_CODE);
+            }
+            RtcEvent::ScreenSharePublishFailed { code } => {
+                RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || format!("screen share: publish failed: {code}"));
+                self.end_lost_screen_share(code);
+            }
+            RtcEvent::AudioDeviceFailed { direction, reason } => {
+                RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || format!("call audio {direction:?} failed: {reason}"));
+                let Some(current) = self.state.with(|state| state.active_session.clone()) else {
+                    return;
+                };
+                let session = current.key;
+                self.yield_event(match direction {
+                    DeviceDirection::Input => RiseRTCMediaEvent::LocalMicrophoneLost { session },
+                    DeviceDirection::Output => RiseRTCMediaEvent::LocalPlayoutLost { session },
                 });
             }
             RtcEvent::RemoteVideo(frame) => {
@@ -1241,6 +1289,8 @@ impl RiseRTCLiveKitMediaController {
             screen_share_enabled: participant.screen_share_enabled,
             server_muted: false,
             server_deafened: false,
+            server_camera_blocked: false,
+            server_screen_share_blocked: false,
             deafened: false,
             hand_raised: false,
             joined_at_ms: participant.joined_at_ms.unwrap_or(now),

@@ -169,6 +169,8 @@ impl RenderOnce for RiseRTCParticipantsPanel {
             can_manage_stage: false,
             can_mute: false,
             can_deafen: false,
+            can_block_camera: false,
+            can_block_screen_share: false,
             can_remove: false,
             chat_id: None,
         };

@@ -52,6 +52,7 @@ use crate::core::widgets::overlay::premium_upsell_host::PremiumUpsellSheet;
 use crate::core::widgets::overlay::premium_upsell_store::{PremiumUpsellInteractionsStore, PremiumUpsellStore};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::guides::stores::guides_services::guides_services::GuidesServicesStore;
+use crate::modules::rtc::pages::rise_rtc_room_screen::RiseRTCRoomScreenView;
 use crate::modules::rtc::components::rise_rtc_floating_video_window::{
     RiseRTCFloatingVideoWindow, RiseRTCFloatingVideoWindowModifiers, RiseRTCVideoSurface, VideoViewLayoutMode,
     VideoViewMirrorMode,
@@ -1955,6 +1956,7 @@ impl RiseRTCDirectCallScreenState {
         if sharing {
             self.stop_own_screen_share(cx);
         } else {
+            self.stream_quality = interactions(cx).update(cx, |store, cx| store.remembered_stream_quality(cx));
             self.stream_settings_visible = true;
         }
         cx.notify();
@@ -3004,7 +3006,9 @@ impl RiseRTCDirectCallScreenState {
                         {
                             this.microphone_refused = true;
                         }
-                        if !keeps_optimistic_on_failure && !RiseRTCDeviceRefusal::present_settings_alert(&error, cx) {
+                        if let Some(text) = RiseRTCDomain::desktop_failure_text(&error) {
+                            this.show_action_failure(Some(text), cx);
+                        } else if !keeps_optimistic_on_failure && !RiseRTCDeviceRefusal::present_settings_alert(&error, cx) {
                             this.show_action_failure(failure_title, cx);
                         }
                     }
@@ -3592,6 +3596,7 @@ impl Render for RiseRTCDirectCallScreenState {
             })
             .child(content)
             .children(self.floating_windows(geometry, window, cx))
+            .child(RiseRTCRoomScreenView::window_mode_toggle(white(), cx))
             .child(div().absolute().inset_0().child(audio_route_sheet))
             .child(div().absolute().inset_0().child(audio_input_sheet))
             .children(encryption_sheet.map(|sheet| div().absolute().inset_0().child(sheet)))

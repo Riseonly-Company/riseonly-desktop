@@ -58,6 +58,7 @@ pub mod test;
 mod text_system;
 mod util;
 mod view;
+mod wheel_glide;
 mod window;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -157,6 +158,7 @@ pub use test::*;
 pub use text_system::*;
 pub use util::{FutureExt, Timeout};
 pub use view::*;
+pub use wheel_glide::{WHEEL_LINE_HEIGHT, WheelGlide, wheel_glides};
 pub use window::*;
 
 pub use pollster::block_on;

@@ -23,6 +23,7 @@ use crate::core::ui::premium_badge::PremiumBadge;
 use crate::core::ui::reaction_emoji_glyph::ReactionEmojiGlyph;
 use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::modules::chat::engine::core::rise_conversation_auxiliary_repository::RiseConversationAuxiliaryLoadState;
 use crate::modules::chat::engine::messages::rise_message_read_receipt_presentation::{
     MessageReadReceiptReactor, RiseMessageReadReceiptFormatSeed, RiseMessageReadReceiptPresentation,
@@ -575,8 +576,12 @@ impl MessageReadReceiptDetails {
                     .user_id(Some(SharedString::from(reader.id.clone())))
                     .size(MessageReadReceiptMenuMetrics::DETAILS_AVATAR_SIZE)
                     .show_border(true)
-                    .show_story_ring(false)
-                    .open_story_on_press(false),
+                    .open_story_on_press(false)
+                    .gift_worn_frame(
+                        self.id(&format!("reader-frame-{}", reader.id)),
+                        Some(reader.id.clone()),
+                        MessageReadReceiptMenuMetrics::DETAILS_AVATAR_SIZE,
+                    ),
             )
             .child(
                 div()

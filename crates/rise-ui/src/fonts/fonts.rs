@@ -79,6 +79,28 @@ impl FontLoad {
     }
 }
 
+pub fn load_fallback_fonts(cx: &mut App) {
+    let source = cx.asset_source().clone();
+    let read = cx.background_executor().spawn(async move {
+        rise_platform::font_fallback::uncovered_faces()
+            .into_iter()
+            .filter_map(|asset| source.load(asset).ok().flatten())
+            .collect::<Vec<_>>()
+    });
+    cx.spawn(async move |cx| {
+        let faces = read.await;
+        if faces.is_empty() {
+            return;
+        }
+        cx.update(|cx| {
+            if let Err(error) = cx.text_system().add_fonts(faces) {
+                tracing::warn!(target: "riseonly", %error, "the bundled fallback faces were refused");
+            }
+        });
+    })
+    .detach();
+}
+
 pub fn load_bundled_fonts(cx: &App) -> FontLoad {
     let source = cx.asset_source().clone();
     let mut report = FontLoad::default();

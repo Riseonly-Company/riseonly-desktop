@@ -48,8 +48,7 @@ impl GiftAnimationView {
 impl RenderOnce for GiftAnimationView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let motion_style = env::<GiftMotionStyleKey>(cx);
-        let playback =
-            window.use_keyed_state((self.id.clone(), "playback"), cx, |_, cx| GiftCosmeticPlayback::new(cx));
+        let playback = GiftCosmeticPlayback::keyed((self.id.clone(), "playback"), window, cx);
         let mut source = GiftCosmeticPlaybackSource::new(
             self.media.as_ref().and_then(|media| media.poster(self.large)),
             self.media.as_ref().and_then(|media| media.movie(self.large)),

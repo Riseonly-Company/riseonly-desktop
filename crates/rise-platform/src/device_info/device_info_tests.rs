@@ -186,3 +186,42 @@ fn this_machine_answers_both_readings_on_macos() {
         assert_ne!(info.system_version, UNKNOWN_VERSION);
     }
 }
+
+#[test]
+fn windows_eleven_is_told_by_its_build() {
+    assert_eq!(windows_product_name(26100), "Windows 11");
+    assert_eq!(windows_product_name(22000), "Windows 11");
+    assert_eq!(windows_product_name(19045), "Windows 10");
+    assert_eq!(windows_edition("Windows 10 Pro").as_deref(), Some("Pro"));
+    assert_eq!(windows_edition("Windows 10 Home Single Language").as_deref(), Some("Home Single Language"));
+}
+
+#[test]
+fn reported_windows_os_joins_product_edition_and_release() {
+    let device = DeviceInfo::resolve(
+        HostOs::Windows,
+        Ok(model(Some("B650 EAGLE"), Some("Gigabyte"), None)),
+        Ok(version(None, "10.0.26100")),
+    );
+    let details = OsDetails {
+        name: Some("Windows 11".to_owned()),
+        edition: Some("Pro".to_owned()),
+        release: Some("24H2".to_owned()),
+        build: Some("26100.2314".to_owned()),
+        ..OsDetails::default()
+    };
+    let reported = ReportedOs::resolve(HostOs::Windows, &device, &details, "aarch64");
+    assert_eq!(reported.name, "Windows 11 Pro 24H2");
+    assert_eq!(reported.build.as_deref(), Some("26100.2314"));
+    assert_eq!(reported.arch, "arm64");
+    assert_eq!(reported.environment, None);
+}
+
+#[test]
+fn reported_macos_names_version_and_build() {
+    let device = DeviceInfo::resolve(HostOs::MacOs, Ok(model(Some("Mac16,1"), None, None)), Ok(version(None, "26.1")));
+    let details = OsDetails { build: Some("25B78".to_owned()), ..OsDetails::default() };
+    let reported = ReportedOs::resolve(HostOs::MacOs, &device, &details, "aarch64");
+    assert_eq!(reported.name, "macOS 26.1");
+    assert_eq!(reported.build.as_deref(), Some("25B78"));
+}

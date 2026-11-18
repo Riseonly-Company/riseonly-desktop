@@ -1277,7 +1277,7 @@ impl RenderOnce for ChatInputStickersTab {
                 tab.rebuild_rows(user_id, is_premium, cx);
             }
             tab.grid_scroll.frame(&tab.grid, window);
-            tab.grid.paint_under_top_padding(true);
+            tab.grid.paint_under_top_padding(ChatInputPickerMetrics::grid_paints_under_strip());
             if hold_is_active {
                 let top = *tab.hold_scroll_top.get_or_insert_with(|| tab.grid.logical_scroll_top());
                 tab.grid.scroll_to(top);
@@ -1294,7 +1294,7 @@ impl RenderOnce for ChatInputStickersTab {
         } else if is_library_empty {
             self.empty_state(&theme)
         } else {
-            self.grid(&state, &theme, height, cx)
+            ChatInputPickerMetrics::grid_below_strip(self.grid(&state, &theme, height, cx))
         };
 
         let measure_state = state.clone();

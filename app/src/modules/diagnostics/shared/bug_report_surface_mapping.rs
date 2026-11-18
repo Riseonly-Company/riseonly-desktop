@@ -51,6 +51,7 @@ impl RootRoute {
             | RootRoute::MapJourneyComposer
             | RootRoute::WorldMap
             | RootRoute::MapFriends
+            | RootRoute::MapProfile
             | RootRoute::MapSettings
             | RootRoute::MapSettingsSection(_) => RiseBugReportSurface::Profile,
             RootRoute::ChatTopics { .. } | RootRoute::ForumHome { .. } | RootRoute::ForumAll { .. } => {

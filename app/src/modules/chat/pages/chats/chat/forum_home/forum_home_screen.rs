@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use gpui::{App, Context, Entity, FontWeight, Hsla, SharedString, Subscription, Window};
 use rise_i18n::tr;
+use rise_ui::icon_ui::IconUi;
 use rise_ui::main_text::{MainText, TextAlignT};
 use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
 use rise_ui::swiftui::prelude::*;
@@ -65,13 +66,19 @@ impl ForumHomeScreen {
                     .size_full()
                     .justify_center()
                     .child(
-                        div().max_w(px(220.0)).child(
-                            MainText::new(chat.title.clone())
-                                .px(15.0)
-                                .tac(TextAlignT::Center)
-                                .font_weight(FontWeight::BOLD)
-                                .number_of_lines(1),
-                        ),
+                        hstack(4.0)
+                            .max_w(px(220.0))
+                            .justify_center()
+                            .child(
+                                div().min_w(px(0.0)).child(
+                                    MainText::new(chat.title.clone())
+                                        .px(15.0)
+                                        .tac(TextAlignT::Center)
+                                        .font_weight(FontWeight::BOLD)
+                                        .number_of_lines(1),
+                                ),
+                            )
+                            .children(IconUi::sized("person.3.fill", px(12.0), secondary, true).map(|icon| icon.flex_none())),
                     )
                     .child(div().max_w(px(220.0)).child(ForumMembersSubtitle::new(
                         chat_id.to_owned(),

@@ -2750,15 +2750,22 @@ impl Interactivity {
                     .cloned()
             });
             let current_view = window.current_view();
+            // Riseonly 0126: an element without an id keeps no hover state between frames, so the
+            // hover it painted is the state; its hover style follows the mouse like one with an id.
+            let has_hover_style = self.hover_style.is_some();
+            let painted_hover = self.hovered.unwrap_or(false);
 
             window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                 let hovered = hitbox.is_hovered(window);
-                let was_hovered = hover_state
-                    .as_ref()
-                    .is_some_and(|state| state.borrow().element);
+                let was_hovered = match hover_state.as_ref() {
+                    Some(state) => state.borrow().element,
+                    None => painted_hover,
+                };
                 if phase == DispatchPhase::Capture && hovered != was_hovered {
                     if let Some(hover_state) = &hover_state {
                         hover_state.borrow_mut().element = hovered;
+                        cx.notify(current_view);
+                    } else if has_hover_style {
                         cx.notify(current_view);
                     }
                 }
@@ -2772,17 +2779,19 @@ impl Interactivity {
                     .and_then(|element| element.hover_state.as_ref())
                     .cloned();
                 let current_view = window.current_view();
+                let painted_group_hover = group_hitbox_id.is_hovered(window);
 
                 window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                     let group_hovered = group_hitbox_id.is_hovered(window);
-                    let was_group_hovered = hover_state
-                        .as_ref()
-                        .is_some_and(|state| state.borrow().group);
+                    let was_group_hovered = match hover_state.as_ref() {
+                        Some(state) => state.borrow().group,
+                        None => painted_group_hover,
+                    };
                     if phase == DispatchPhase::Capture && group_hovered != was_group_hovered {
                         if let Some(hover_state) = &hover_state {
                             hover_state.borrow_mut().group = group_hovered;
-                            cx.notify(current_view);
                         }
+                        cx.notify(current_view);
                     }
                 });
             }
@@ -3222,9 +3231,15 @@ impl Interactivity {
             let current_view = window.current_view();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
+                    let glides = crate::wheel_glides(&event.delta);
+                    let offset_cell = scroll_offset.clone();
                     let mut scroll_offset = scroll_offset.borrow_mut();
                     let old_scroll_offset = *scroll_offset;
-                    let mut delta = event.delta.pixel_delta(line_height);
+                    let mut delta = event.delta.pixel_delta(if glides {
+                        crate::WHEEL_LINE_HEIGHT
+                    } else {
+                        line_height
+                    });
 
                     if restrict_scroll_to_axis
                         && event.delta.precise()
@@ -3259,6 +3274,19 @@ impl Interactivity {
                         } else {
                             delta_x = Pixels::ZERO;
                         }
+                    }
+                    if glides {
+                        drop(scroll_offset);
+                        if !delta_x.is_zero() || !delta_y.is_zero() {
+                            crate::wheel_glide::glide_scroll_offset(
+                                offset_cell,
+                                point(delta_x, delta_y),
+                                current_view,
+                                window,
+                                cx,
+                            );
+                        }
+                        return;
                     }
                     scroll_offset.y += delta_y;
                     scroll_offset.x += delta_x;

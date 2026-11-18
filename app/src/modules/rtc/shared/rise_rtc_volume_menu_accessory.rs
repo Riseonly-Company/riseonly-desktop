@@ -177,6 +177,7 @@ impl RenderOnce for RiseRTCVolumeMenuPanel {
 
         vstack(RiseRTCVolumeMenuMetrics::ROW_SPACING)
             .items_start()
+            .w_full()
             .child(
                 hstack(8.0)
                     .w_full()

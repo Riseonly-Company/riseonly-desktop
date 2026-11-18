@@ -47,6 +47,23 @@ if [ -n "${PAYLOAD:-}" ]; then
     cp "$PAYLOAD/riseonly.exe" "$exe"
 else
     export "RC_$triple_env=$PWD/scripts/xwin-llvm-rc.sh"
+    # MapLibre: the released Windows core is /MD and leaves its dependencies out, so the map links
+    # the static core scripts/build-maplibre-core-windows.sh builds once per MLN_COMMIT and script.
+    case "$arch" in x86_64) mln_arch=x64 ;; aarch64) mln_arch=arm64 ;; esac
+    mln_commit=$(sed -n 's/^const MLN_COMMIT: &str = "core-\(.*\)";/\1/p' vendor/maplibre_native-0.10.0/build.rs)
+    mln_key=$(sha256sum scripts/build-maplibre-core-windows.sh | cut -c1-12)
+    mln_core=${MLN_WINDOWS_CORE_DIR:-$target/maplibre-core-windows-$arch-${mln_commit:0:12}-$mln_key}
+    mln_lib="$mln_core/maplibre-native-core-amalgam-windows-$mln_arch-vulkan.lib"
+    if [ ! -f "$mln_lib" ]; then
+        cargo xwin env --target "$triple" > /dev/null
+        WIN_ARCH="$arch" ./scripts/build-maplibre-core-windows.sh "$target/maplibre-native-src" "$target/maplibre-core-build-$arch"
+        mkdir -p "$mln_core"
+        cp "$target/maplibre-core-build-$arch/out/"* "$mln_core/"
+    fi
+    export MLN_PRECOMPILE=1
+    case "$mln_lib" in /*) MLN_CORE_LIBRARY_PATH="$mln_lib" ;; *) MLN_CORE_LIBRARY_PATH="$PWD/$mln_lib" ;; esac
+    export MLN_CORE_LIBRARY_PATH
+    export MLN_CORE_LIBRARY_HEADERS_PATH="$(dirname "$MLN_CORE_LIBRARY_PATH")/maplibre-native-headers.tar.gz"
     env -u RISE_ENV cargo xwin build --locked --profile "$profile" --target "$triple" -p riseonly
     rm -rf "payload/windows-$arch"
     mkdir -p "payload/windows-$arch"

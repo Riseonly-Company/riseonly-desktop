@@ -26,6 +26,8 @@ pub enum RiseRTCRoomMenuAction {
     MoveToAudience,
     ToggleMute,
     ToggleDeafen,
+    ToggleCamera,
+    ToggleScreenShare,
     Kick,
 }
 
@@ -38,6 +40,8 @@ impl RiseRTCRoomMenuAction {
             Self::MoveToAudience => "rtc.audience",
             Self::ToggleMute => "rtc.mute",
             Self::ToggleDeafen => "rtc.deafen",
+            Self::ToggleCamera => "rtc.camera-block",
+            Self::ToggleScreenShare => "rtc.screen-share-block",
             Self::Kick => "rtc.kick",
         }
     }
@@ -50,6 +54,8 @@ impl RiseRTCRoomMenuAction {
             "rtc.audience" => Some(Self::MoveToAudience),
             "rtc.mute" => Some(Self::ToggleMute),
             "rtc.deafen" => Some(Self::ToggleDeafen),
+            "rtc.camera-block" => Some(Self::ToggleCamera),
+            "rtc.screen-share-block" => Some(Self::ToggleScreenShare),
             "rtc.kick" => Some(Self::Kick),
             _ => None,
         }
@@ -61,13 +67,20 @@ pub struct RiseRTCRoomMenuCapabilities {
     pub can_manage_stage: bool,
     pub can_mute: bool,
     pub can_deafen: bool,
+    pub can_block_camera: bool,
+    pub can_block_screen_share: bool,
     pub can_remove: bool,
     pub chat_id: Option<String>,
 }
 
 impl RiseRTCRoomMenuCapabilities {
     pub fn is_empty(&self) -> bool {
-        !self.can_manage_stage && !self.can_mute && !self.can_deafen && !self.can_remove
+        !self.can_manage_stage
+            && !self.can_mute
+            && !self.can_deafen
+            && !self.can_block_camera
+            && !self.can_block_screen_share
+            && !self.can_remove
     }
 }
 
@@ -189,6 +202,30 @@ impl RiseRTCRoomMenu {
                 )
                 .system_image(if participant.server_deafened { "ear.fill" } else { "ear.badge.waveform" })
                 .section_break(!capabilities.can_mute),
+            );
+        }
+
+        if capabilities.can_block_camera {
+            let blocked = participant.server_camera_blocked;
+            actions.push(
+                HoldContextMenuAction::new(
+                    RiseRTCRoomMenuAction::ToggleCamera.raw_value(),
+                    tr(if blocked { "rtc_allow_camera" } else { "rtc_block_camera" }),
+                )
+                .system_image(if blocked { "video.fill" } else { "video.slash.fill" })
+                .section_break(!capabilities.can_mute && !capabilities.can_deafen),
+            );
+        }
+
+        if capabilities.can_block_screen_share {
+            let blocked = participant.server_screen_share_blocked;
+            actions.push(
+                HoldContextMenuAction::new(
+                    RiseRTCRoomMenuAction::ToggleScreenShare.raw_value(),
+                    tr(if blocked { "rtc_allow_screen_share" } else { "rtc_block_screen_share" }),
+                )
+                .system_image(if blocked { "rectangle.on.rectangle" } else { "rectangle.on.rectangle.slash" })
+                .section_break(!capabilities.can_mute && !capabilities.can_deafen && !capabilities.can_block_camera),
             );
         }
 

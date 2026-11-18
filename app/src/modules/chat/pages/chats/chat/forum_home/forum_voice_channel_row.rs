@@ -188,11 +188,13 @@ impl ForumVoiceChannelHeaderRow {
     }
 
     fn header(&self, theme: &AppTheme, state: Option<&VoiceChannelState>) -> Div {
+        let hover = row_hover_fill(theme);
         hstack(8.0)
             .w_full()
             .h(px(ForumVoiceChannelMetrics::HEADER_HEIGHT))
             .px(px(ForumVoiceChannelMetrics::HORIZONTAL_PADDING))
             .bg(theme.bg._100)
+            .hover(move |style| style.bg(hover))
             .child(self.channel_icon(theme))
             .child(
                 MainText::new(self.topic.title.clone())
@@ -317,6 +319,7 @@ impl RenderOnce for ForumVoiceOverflowRow {
             .pl(px(ForumVoiceChannelMetrics::HORIZONTAL_PADDING + ForumVoiceChannelMetrics::PARTICIPANT_LEADING_INSET))
             .pr(px(ForumVoiceChannelMetrics::HORIZONTAL_PADDING))
             .bg(theme.bg._100)
+            .hover_fill(row_hover_fill(&theme))
             .on_press(move |window, cx| on_tap(window, cx))
             .child(
                 MainText::new(self.text)
@@ -376,10 +379,12 @@ impl ForumVoiceParticipantRow {
                 row.children(IconUi::sized("video.fill", px(11.0), theme.text.secondary, true))
             })
             .when(self.participant.is_deafened(), |row| {
-                row.children(IconUi::sized(RiseSymbol::DEAFENED, px(12.0), error, false))
+                let color = if self.participant.server_deafened { theme.primary._100 } else { error };
+                row.children(IconUi::sized(RiseSymbol::DEAFENED, px(12.0), color, false))
             })
             .when(self.participant.is_microphone_muted(), |row| {
-                row.children(IconUi::sized("mic.slash.fill", px(12.0), error, true))
+                let imposed = self.participant.server_muted || self.participant.server_deafened;
+                row.children(IconUi::sized("mic.slash.fill", px(12.0), if imposed { theme.primary._100 } else { error }, true))
             })
             .when(self.shows_hand(), |row| {
                 row.children(IconUi::sized("hand.raised.fill", px(11.0), theme.primary._100, true))
@@ -440,6 +445,10 @@ impl RenderOnce for ForumVoiceParticipantRow {
             .pl(px(ForumVoiceChannelMetrics::HORIZONTAL_PADDING + ForumVoiceChannelMetrics::PARTICIPANT_LEADING_INSET))
             .pr(px(ForumVoiceChannelMetrics::HORIZONTAL_PADDING))
             .bg(theme.bg._100)
+            .hover({
+                let hover = row_hover_fill(&theme);
+                move |style| style.bg(hover)
+            })
             .child(
                 div()
                     .flex_none()

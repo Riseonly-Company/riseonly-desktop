@@ -935,12 +935,13 @@ struct ChatsPinnedReorderState {
     ordered_ids: Vec<String>,
     base_order: Vec<String>,
     control: Option<Weak<RiseChatNativeListControl>>,
-    accumulated_shift: f32,
     row_heights: HashMap<ChatsPinnedReorderStateRowKey, f32>,
     page_pinned_ids: HashSet<String>,
 }
 
 impl ChatsPinnedReorderState {
+    const DROP_GLIDE: Duration = Duration::from_millis(300);
+
     fn new() -> Self {
         Self {
             dragging_chat_id: None,
@@ -948,7 +949,6 @@ impl ChatsPinnedReorderState {
             ordered_ids: Vec::new(),
             base_order: Vec::new(),
             control: None,
-            accumulated_shift: 0.0,
             row_heights: HashMap::new(),
             page_pinned_ids: HashSet::new(),
         }
@@ -984,10 +984,6 @@ impl ChatsPinnedReorderState {
         self.control.as_ref().and_then(Weak::upgrade)
     }
 
-    fn page_order(&self) -> Vec<String> {
-        self.ordered_ids.iter().filter(|id| self.page_pinned_ids.contains(*id)).cloned().collect()
-    }
-
     /// rows never change places in the native list while the pointer is down
     /// the dragged row follows the pointer and neighbours slide by offsets
     /// the new order lands once
@@ -1018,7 +1014,7 @@ impl ChatsPinnedReorderState {
                 return;
             }
             if let Some(previous) = self.control() {
-                previous.clear_row_shifts(false, cx);
+                previous.clear_row_shifts(cx);
             }
             self.page_pinned_ids = pinned_ids.iter().cloned().collect();
             self.base_order = stored.iter().filter(|id| self.page_pinned_ids.contains(*id)).cloned().collect();
@@ -1026,115 +1022,71 @@ impl ChatsPinnedReorderState {
             self.page_id = Some(page_id.to_owned());
             self.control = Some(Rc::downgrade(control));
             self.dragging_chat_id = Some(chat_id.to_owned());
-            self.accumulated_shift = 0.0;
+            let fallback = self.row_height(page_id, chat_id, control, cx).unwrap_or_default();
+            let strides: HashMap<String, f32> = self
+                .base_order
+                .iter()
+                .map(|id| {
+                    let height = self.row_height(page_id, id, control, cx).unwrap_or(fallback);
+                    (id.clone(), height + ChatListRowMetrics::SEPARATOR_HEIGHT)
+                })
+                .collect();
+            control.begin_reorder(self.base_order.clone(), strides, cx);
             control.lift_row(Some(chat_id), cx);
             cx.notify();
         }
-        let Some(dragged) = self.row_height(page_id, chat_id, control, cx) else {
-            return;
-        };
-        let dragged_stride = dragged + ChatListRowMetrics::SEPARATOR_HEIGHT;
-        let mut swapped = false;
-        while self.ordered_ids.iter().any(|id| id == chat_id) {
-            let residual = translation_y - self.accumulated_shift;
-            let direction: i64 = if residual > 0.0 { 1 } else { -1 };
-            let page_order = self.page_order();
-            let Some(index) = page_order.iter().position(|id| id == chat_id) else {
-                break;
-            };
-            let Some(neighbor_id) =
-                usize::try_from(index as i64 + direction).ok().and_then(|neighbor| page_order.get(neighbor)).cloned()
-            else {
-                break;
-            };
-            let (Some(current), Some(neighbor)) = (
-                self.ordered_ids.iter().position(|id| id == chat_id),
-                self.ordered_ids.iter().position(|id| *id == neighbor_id),
-            ) else {
-                break;
-            };
-            let Some(height) = self.row_height(page_id, &neighbor_id, control, cx) else {
-                tracing::warn!(target: "riseonly::X2051", neighbor_id = %neighbor_id, "reorder step stopped: no neighbour height");
-                break;
-            };
-            let stride = height + ChatListRowMetrics::SEPARATOR_HEIGHT;
-            if residual * direction as f32 <= stride * 0.5 {
-                break;
-            }
-            self.accumulated_shift += stride * direction as f32;
-            self.ordered_ids.swap(current, neighbor);
-            swapped = true;
+        if control.drag_reorder(chat_id, translation_y, cx) {
+            tracing::warn!(target: "riseonly::X2051", chat_id, translation_y, "reorder slot changed");
         }
-        control.shift_row(chat_id, translation_y, false, None, cx);
-        if !swapped {
-            return;
-        }
-        let page_order = self.page_order();
-        let (Some(dragged_base), Some(dragged_now)) = (
-            self.base_order.iter().position(|id| id == chat_id),
-            page_order.iter().position(|id| id == chat_id),
-        ) else {
-            return;
-        };
-        for (base_index, id) in self.base_order.iter().enumerate() {
-            if id == chat_id {
-                continue;
-            }
-            let Some(now_index) = page_order.iter().position(|candidate| candidate == id) else {
-                continue;
-            };
-            let shift = if base_index < dragged_base && now_index > dragged_now {
-                dragged_stride
-            } else if base_index > dragged_base && now_index < dragged_now {
-                -dragged_stride
-            } else {
-                0.0
-            };
-            control.shift_row(id, shift, true, None, cx);
-        }
-        let _ = selection_changed();
     }
 
     /// glides the dragged row into its slot then commits the order to save
     /// nothing is committed when nothing moved
     fn finish(&mut self, commit: impl FnOnce(Vec<String>, Option<String>, &mut App) + 'static, cx: &mut Context<Self>) {
-        let (Some(chat_id), Some(control)) = (self.dragging_chat_id.clone(), self.control()) else {
+        let (Some(_), Some(control)) = (self.dragging_chat_id.clone(), self.control()) else {
             self.reset(cx);
             cx.notify();
             return;
         };
-        let ids = std::mem::take(&mut self.ordered_ids);
+        let page_order = control.end_reorder(cx).unwrap_or_default();
+        let moved = !page_order.is_empty() && page_order != self.base_order;
+        let mut next_page = page_order.into_iter();
+        let ids: Vec<String> = std::mem::take(&mut self.ordered_ids)
+            .into_iter()
+            .map(|id| if self.page_pinned_ids.contains(&id) { next_page.next().unwrap_or(id) } else { id })
+            .collect();
         let folder_id = self.page_id.as_deref().and_then(Self::folder_id);
-        let moved = ids.iter().filter(|id| self.page_pinned_ids.contains(*id)).cloned().collect::<Vec<_>>()
-            != self.base_order;
-        let target = if moved { self.accumulated_shift } else { 0.0 };
         self.dragging_chat_id = None;
         self.page_id = None;
-        self.accumulated_shift = 0.0;
         self.control = None;
         cx.notify();
-        let settle_control = control.clone();
-        let completion: Box<dyn FnOnce(&mut App)> = Box::new(move |cx: &mut App| {
-            if !moved {
-                settle_control.clear_row_shifts(false, cx);
-                return;
-            }
-            settle_control.settle_row_shifts(ids.clone(), cx);
-            commit(ids, folder_id, cx);
-        });
-        control.shift_row(&chat_id, target, true, Some(completion), cx);
+        if !moved {
+            cx.spawn(async move |_, cx| {
+                cx.background_executor().timer(Self::DROP_GLIDE).await;
+                let _ = cx.update(|cx| control.clear_row_shifts(cx));
+            })
+            .detach();
+            return;
+        }
+        cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(Self::DROP_GLIDE).await;
+            let _ = cx.update(|cx| {
+                control.settle_row_shifts(ids.clone(), cx);
+                commit(ids, folder_id, cx);
+            });
+        })
+        .detach();
     }
 
     fn reset(&mut self, cx: &mut App) {
         if let Some(control) = self.control() {
-            control.clear_row_shifts(false, cx);
+            control.clear_row_shifts(cx);
         }
         self.control = None;
         self.dragging_chat_id = None;
         self.page_id = None;
         self.ordered_ids.clear();
         self.base_order.clear();
-        self.accumulated_shift = 0.0;
         self.page_pinned_ids.clear();
     }
 
@@ -2629,13 +2581,19 @@ impl ChatsActions {
                 .opacity(progress)
                 .tooltip_label(forum_chat.title.clone())
                 .child(
-                    div().max_w(px(220.0)).child(
-                        MainText::new(forum_chat.title.clone())
-                            .px(15.0)
-                            .tac(TextAlignT::Center)
-                            .font_weight(FontWeight::BOLD)
-                            .number_of_lines(1),
-                    ),
+                    hstack(4.0)
+                        .max_w(px(220.0))
+                        .justify_center()
+                        .child(
+                            div().min_w(px(0.0)).child(
+                                MainText::new(forum_chat.title.clone())
+                                    .px(15.0)
+                                    .tac(TextAlignT::Center)
+                                    .font_weight(FontWeight::BOLD)
+                                    .number_of_lines(1),
+                            ),
+                        )
+                        .children(IconUi::sized("person.3.fill", px(12.0), secondary, true).map(|icon| icon.flex_none())),
                 )
                 .child(div().max_w(px(220.0)).child(ForumMembersSubtitle::new(
                     forum_chat.id.clone(),
@@ -3962,18 +3920,23 @@ impl ChatsActions {
             })
         };
 
+        let mut geometry = DefaultHasher::new();
+        frame.viewport.read(cx).geometry_version(chat).hash(&mut geometry);
+        if let Some(draft) = &draft {
+            draft.text.hash(&mut geometry);
+        }
+        frame.is_reorder_mode.hash(&mut geometry);
+        is_selected.hash(&mut geometry);
+        if chat.r#type == ChatType::Direct {
+            ChatListPreviewFactory::chat_title(chat, cx).hash(&mut geometry);
+        }
+        let geometry_version = geometry.finish() as i64;
         let mut version = DefaultHasher::new();
+        geometry_version.hash(&mut version);
         frame.viewport.read(cx).content_version(chat).hash(&mut version);
         if let Some(draft) = &draft {
-            draft.text.hash(&mut version);
             draft.updated_at.to_bits().hash(&mut version);
         }
-        frame.is_reorder_mode.hash(&mut version);
-        is_selected.hash(&mut version);
-        if chat.r#type == ChatType::Direct {
-            ChatListPreviewFactory::chat_title(chat, cx).hash(&mut version);
-        }
-        let geometry_version = version.finish() as i64;
         (frame.is_reorder_mode && frame.is_active_page).hash(&mut version);
         frame.pinned_count.hash(&mut version);
         is_first.hash(&mut version);

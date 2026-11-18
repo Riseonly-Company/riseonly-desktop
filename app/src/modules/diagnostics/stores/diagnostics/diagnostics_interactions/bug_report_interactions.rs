@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use gpui::{App, Context, Entity};
-use rise_canon::{RiseBugReportSurface, RiseFeedbackKind, RiseGuideSignal};
+use rise_canon::{RiseBugReportPlatform, RiseBugReportSurface, RiseFeedbackKind, RiseGuideSignal};
 use rise_core::foundation::foundation_text::{trimming_whitespaces, trimming_whitespaces_and_newlines};
 use rise_core::foundation::foundation_url::Url;
 use rise_i18n::tr;
@@ -33,6 +34,9 @@ use crate::modules::media_picker::api::media_picker_result::{
 pub struct BugReportInteractionsStore {
     actions: Entity<BugReportActionsStore>,
     services: Entity<BugReportServicesStore>,
+    linked_report_id: Option<String>,
+    linked_report_loads: HashSet<BugReportDraftKind>,
+    linked_report_pages: usize,
 }
 
 impl BugReportInteractionsStore {
@@ -41,7 +45,13 @@ impl BugReportInteractionsStore {
     }
 
     fn new(cx: &mut Context<Self>) -> Self {
-        Self { actions: BugReportActionsStore::shared(cx), services: BugReportServicesStore::shared(cx) }
+        Self {
+            actions: BugReportActionsStore::shared(cx),
+            services: BugReportServicesStore::shared(cx),
+            linked_report_id: None,
+            linked_report_loads: HashSet::new(),
+            linked_report_pages: 0,
+        }
     }
 
     fn route(&self, cx: &App) -> BugReportRoute {
@@ -225,6 +235,23 @@ impl BugReportInteractionsStore {
 
     pub fn select_feedback_kind(&mut self, kind: RiseFeedbackKind, cx: &mut Context<Self>) {
         self.services.update(cx, |services, cx| services.mutate_draft(|draft| draft.feedback_kind = kind, cx));
+    }
+
+    pub fn toggle_platform(&mut self, platform: RiseBugReportPlatform, cx: &mut Context<Self>) {
+        self.services.update(cx, |services, cx| {
+            services.mutate_draft(
+                |draft| {
+                    if let Some(index) = draft.fix_platforms.iter().position(|picked| *picked == platform) {
+                        if draft.fix_platforms.len() > 1 {
+                            draft.fix_platforms.remove(index);
+                        }
+                        return;
+                    }
+                    draft.fix_platforms.push(platform);
+                },
+                cx,
+            );
+        });
     }
 
     pub fn update_page_query(&mut self, raw: &str, cx: &mut Context<Self>) {
@@ -507,6 +534,52 @@ impl BugReportInteractionsStore {
         self.services.update(cx, |services, cx| services.apply_my_reports_tab(index, cx));
     }
 
+    pub fn open_linked_report(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.linked_report_id = Some(id.to_lowercase());
+        self.linked_report_pages = 0;
+        self.linked_report_loads = BugReportDraftKind::ALL_CASES.into_iter().collect();
+        self.refresh_my_reports(cx);
+    }
+
+    fn linked_report_page_arrived(&mut self, kind: BugReportDraftKind, cx: &mut Context<Self>) {
+        let Some(id) = self.linked_report_id.clone() else {
+            return;
+        };
+        self.linked_report_loads.remove(&kind);
+        for kind in BugReportDraftKind::ALL_CASES {
+            let slice = self.services.read(cx).slice_for(kind);
+            let Some(record) = slice.records.iter().find(|record| record.id.to_lowercase() == id).cloned() else {
+                continue;
+            };
+            self.linked_report_id = None;
+            self.linked_report_loads.clear();
+            if let Some(tab) = BugReportServicesStore::TAB_ORDER.iter().position(|ordered| *ordered == kind) {
+                self.select_my_reports_tab(tab as i64, cx);
+            }
+            self.open_report(&record, cx);
+            return;
+        }
+        if !self.linked_report_loads.is_empty() {
+            return;
+        }
+        let more: Vec<BugReportDraftKind> = BugReportDraftKind::ALL_CASES
+            .into_iter()
+            .filter(|kind| self.services.read(cx).slice_for(*kind).have_more)
+            .collect();
+        if more.is_empty() || self.linked_report_pages >= Self::LINKED_REPORT_PAGE_LIMIT {
+            self.linked_report_id = None;
+            return;
+        }
+        self.linked_report_pages += 1;
+        self.linked_report_loads = more.iter().copied().collect();
+        for kind in more {
+            let offset = self.services.read(cx).slice_for(kind).records.len() as i64;
+            self.load_my_reports(kind, offset, true, cx);
+        }
+    }
+
+    const LINKED_REPORT_PAGE_LIMIT: usize = 10;
+
     pub fn ensure_my_reports_loaded(&mut self, kind: BugReportDraftKind, cx: &mut Context<Self>) {
         if self.services.read(cx).slice_for(kind).state.is_loading() {
             return;
@@ -580,6 +653,7 @@ impl BugReportInteractionsStore {
                 }
                 self.services
                     .update(cx, |services, cx| services.apply_records(records, have_more, append, kind, cx));
+                self.linked_report_page_arrived(kind, cx);
             }
             Err(error) => {
                 RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || {
@@ -593,6 +667,7 @@ impl BugReportInteractionsStore {
                     BugReportListState::Loaded
                 };
                 self.services.update(cx, |services, cx| services.apply_list_state(list_state, kind, cx));
+                self.linked_report_page_arrived(kind, cx);
             }
         }
     }
@@ -627,15 +702,35 @@ impl BugReportInteractionsStore {
             self.present_edit(record, cx);
             return;
         }
-        if record.can_refile() {
-            self.present_refile(record, cx);
+        self.present_view(record, cx);
+    }
+
+    pub fn present_view(&mut self, record: &BugReportRecord, cx: &mut Context<Self>) {
+        if self.route(cx) != BugReportRoute::Idle {
             return;
         }
-        Self::send_toast(
-            tr(if record.is_feedback() { "feedback_locked" } else { "bug_report_locked" }),
-            NotifierType::Warning,
-            cx,
-        );
+        if !Self::is_authenticated(cx) {
+            return;
+        }
+        if self.services.read(cx).state().is_sending() {
+            return;
+        }
+        self.services.update(cx, |services, cx| {
+            services.activate_persistence(cx);
+            services.start_viewing(record, cx);
+        });
+        self.apply_route(BugReportRoute::Sheet, cx);
+    }
+
+    pub fn refile_viewed_report(&mut self, cx: &mut Context<Self>) {
+        if self.route(cx) != BugReportRoute::Sheet {
+            return;
+        }
+        let Some(record) = self.services.read(cx).viewed_record().filter(|record| record.can_refile()).cloned() else {
+            return;
+        };
+        self.services.update(cx, |services, cx| services.start_follow_up(&record, cx));
+        RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Screen, || format!("bug report refiled on {}", record.id));
     }
 
     pub fn present_refile(&mut self, record: &BugReportRecord, cx: &mut Context<Self>) {

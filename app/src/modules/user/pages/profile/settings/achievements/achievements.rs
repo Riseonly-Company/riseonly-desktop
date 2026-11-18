@@ -47,22 +47,51 @@ struct AchievementsState {
     detail_achievement: Option<RiseAchievement>,
     detail_content_height: f32,
     grid_width: f32,
-    _subscriptions: [Subscription; 2],
+    is_own_list: bool,
+    _subscriptions: [Subscription; 3],
 }
 
 impl AchievementsState {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(is_own_list: bool, cx: &mut Context<Self>) -> Self {
         let presentation = RiseUserAchievementsPresentation::shared(cx);
         let hold_context_menu = HoldContextMenuPresenter::shared(cx);
+        let interactions = UserAchievementsInteractionsStore::shared(cx);
+        let this = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = this.update(cx, |state, cx| state.open_pending_detail(cx));
+        });
         Self {
             detail_achievement: None,
             detail_content_height: 0.0,
             grid_width: 0.0,
+            is_own_list,
             _subscriptions: [
-                cx.observe(&presentation, |_, _, cx| cx.notify()),
+                cx.observe(&presentation, |state: &mut Self, _, cx| {
+                    state.open_pending_detail(cx);
+                    cx.notify();
+                }),
                 cx.observe(&hold_context_menu, |_, _, cx| cx.notify()),
+                cx.observe(&interactions, |state: &mut Self, _, cx| state.open_pending_detail(cx)),
             ],
         }
+    }
+
+    fn open_pending_detail(&mut self, cx: &mut Context<Self>) {
+        if !self.is_own_list {
+            return;
+        }
+        let interactions = UserAchievementsInteractionsStore::shared(cx);
+        let Some(id) = interactions.read(cx).pending_detail_id() else {
+            return;
+        };
+        let Some(achievement) =
+            UserAchievementsServicesStore::achievements(cx).into_iter().find(|achievement| achievement.id == id)
+        else {
+            return;
+        };
+        self.detail_achievement = Some(achievement);
+        cx.notify();
+        interactions.update(cx, |store, cx| store.consume_pending_detail(cx));
     }
 
     fn set_detail_achievement(&mut self, achievement: Option<RiseAchievement>, cx: &mut Context<Self>) {
@@ -169,11 +198,12 @@ impl Achievements {
 
 impl RenderOnce for Achievements {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state(named_child(&self.id, "state"), cx, |_, cx| AchievementsState::new(cx));
-        let theme = theme(cx).clone();
-        let nav_store = env::<NavigationStoreKey>(cx);
         let target_user_id = Self::target_user_id(self.user_id.as_deref());
         let is_own_list = target_user_id.is_none();
+        let state =
+            window.use_keyed_state(named_child(&self.id, "state"), cx, move |_, cx| AchievementsState::new(is_own_list, cx));
+        let theme = theme(cx).clone();
+        let nav_store = env::<NavigationStoreKey>(cx);
 
         let detail_open = state.read(cx).detail_achievement.is_some();
         on_change(named_child(&self.id, "detail-open"), detail_open, false, window, cx, |_, open, _, cx| {
@@ -201,7 +231,12 @@ impl RenderOnce for Achievements {
                 }
             });
         })
-        .and_on_disappear(|_, cx| GuideFacts::set(RiseGuideSignal::AchievementDetailOpen, false, cx));
+        .and_on_disappear(move |_, cx| {
+            GuideFacts::set(RiseGuideSignal::AchievementDetailOpen, false, cx);
+            if is_own_list {
+                UserAchievementsInteractionsStore::shared(cx).update(cx, |store, cx| store.consume_pending_detail(cx));
+            }
+        });
 
         let sheet = Self::detail_sheet(named_child(&self.id, "detail"), state, is_own_list, &theme, window, cx);
 

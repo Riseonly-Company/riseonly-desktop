@@ -292,6 +292,8 @@ pub enum ScreenCaptureError {
     BranchNotWritten(HostOs),
     #[error("screen capture is unavailable: {0}")]
     Unsupported(String),
+    #[error("no xdg-desktop-portal ScreenCast on this desktop: {0}")]
+    PortalMissing(String),
     #[error("this system has no screen sharing picker")]
     PickerUnavailable,
     #[error("screen recording access was refused")]
@@ -315,7 +317,7 @@ pub enum ScreenCaptureError {
 impl ScreenCaptureError {
     /// host cant do this at all, the call screen hides the share button
     pub fn is_unsupported(&self) -> bool {
-        matches!(self, Self::BranchNotWritten(_) | Self::Unsupported(_))
+        matches!(self, Self::BranchNotWritten(_) | Self::Unsupported(_) | Self::PortalMissing(_))
     }
 
     /// user decided and nothing failed, no error is shown

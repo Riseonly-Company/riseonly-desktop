@@ -738,8 +738,10 @@ pub enum CleverImageRenderMemoryCache {}
 
 static RENDER_CACHE: LazyLock<NSCache<String, CleverImage>> = LazyLock::new(|| {
     let cache = NSCache::new();
-    cache.set_count_limit(usize::try_from(RiseLimits::client_value("image_render_cache_entries")).unwrap_or(0));
-    cache.set_total_cost_limit(usize::try_from(RiseLimits::client_value("image_render_cache_bytes")).unwrap_or(0));
+    cache.set_count_limit(usize::try_from(RiseLimits::client_value("desktop_image_render_cache_entries")).unwrap_or(0));
+    cache.set_total_cost_limit(
+        usize::try_from(RiseLimits::client_value("desktop_image_render_cache_bytes")).unwrap_or(0),
+    );
     cache
 });
 static LATEST_BY_SOURCE: LazyLock<Mutex<HashMap<String, std::sync::Weak<RenderImage>>>> =

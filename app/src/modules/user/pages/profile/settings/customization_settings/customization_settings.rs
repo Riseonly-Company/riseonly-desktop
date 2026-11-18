@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use gpui::{App, Context, ElementId, Entity, Hsla, SharedString, Subscription, Window, rgb};
 use rise_canon::{RiseGuideAnchor, RiseGuideSignal};
+use rise_energy::rise_energy_saving::RiseEnergySavingStore;
 use rise_i18n::tr;
 use rise_theme::ThemeStore;
 use rise_ui::grouped_btns::{GroupedBtn, GroupedBtns};
@@ -131,17 +132,21 @@ impl RenderOnce for CustomizationSettingsBody {
             ],
         );
 
+        let energy = RiseEnergySavingStore::shared(cx).read(cx).applies_to_device().then(|| {
+            self.route_button(
+                "energy",
+                "bolt.batteryblock",
+                Self::hex(0xFDCB6E),
+                tr("settings_energy"),
+                Some(RiseGuideAnchor::CustomizationEnergy),
+                RootRoute::EnergySavingSettings,
+            )
+        });
         let behavior = GroupedBtns::new(
             named_child(&self.id, "behavior"),
-            vec![
-                self.route_button(
-                    "energy",
-                    "bolt.batteryblock",
-                    Self::hex(0xFDCB6E),
-                    tr("settings_energy"),
-                    Some(RiseGuideAnchor::CustomizationEnergy),
-                    RootRoute::EnergySavingSettings,
-                ),
+            energy
+                .into_iter()
+                .chain([
                 self.route_button(
                     "launch_animation",
                     "play.circle",
@@ -158,7 +163,8 @@ impl RenderOnce for CustomizationSettingsBody {
                     None,
                     RootRoute::TextSizeSettings,
                 ),
-            ],
+            ])
+                .collect(),
         );
 
         let palette = GroupedBtns::new(

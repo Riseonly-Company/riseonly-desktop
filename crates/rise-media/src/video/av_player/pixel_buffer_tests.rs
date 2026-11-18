@@ -102,3 +102,54 @@ fn a_buffer_turns_into_an_image_of_the_turned_size() {
     let size = image.size(0);
     assert_eq!((size.width.0, size.height.0), (2, 3));
 }
+
+#[test]
+fn a_quarter_turn_moves_the_left_column_to_the_top_row() {
+    let turned = turned_nv12(&picture(), 1).expect("turns");
+    assert_eq!((turned.width, turned.height, turned.luma_stride, turned.chroma_stride), (2, 3, 2, 2));
+    assert_eq!(&*turned.luma, &[40, 10, 50, 20, 60, 30]);
+    assert_eq!(turned.chroma.len(), 4);
+    assert_eq!(turned.generation, 1);
+}
+
+#[test]
+fn the_turned_planes_match_the_turned_copy_of_the_picture() {
+    let source = picture();
+    for turns in 0..4 {
+        let turned = turned_nv12(&source, turns).expect("turns");
+        let (_, _, upright) = oriented_bgra_of_nv12(&turned, &LUMA_ONLY, 0).expect("converts");
+        let (_, _, copied) = oriented_bgra_of_nv12(&source, &LUMA_ONLY, turns).expect("converts");
+        assert_eq!(blues(&upright), blues(&copied), "turns {turns}");
+    }
+}
+
+#[test]
+fn chroma_follows_its_pixels_through_a_half_turn() {
+    let source = Nv12Picture {
+        width: 4,
+        height: 2,
+        luma: Arc::from(vec![0_u8; 8]),
+        luma_stride: 4,
+        chroma: Arc::from(vec![1_u8, 2, 3, 4]),
+        chroma_stride: 4,
+        generation: 7,
+    };
+    let turned = turned_nv12(&source, 2).expect("turns");
+    assert_eq!(&*turned.chroma, &[3, 4, 1, 2]);
+}
+
+#[test]
+fn four_quarter_turns_give_the_picture_back() {
+    let mut turned = picture();
+    for _ in 0..4 {
+        turned = turned_nv12(&turned, 1).expect("turns");
+    }
+    assert_eq!(turned, picture());
+}
+
+#[test]
+fn planes_shorter_than_their_strides_are_refused() {
+    let mut short = picture();
+    short.luma = Arc::from(vec![0_u8; 4]);
+    assert!(turned_nv12(&short, 1).is_none());
+}

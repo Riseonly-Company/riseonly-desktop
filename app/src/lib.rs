@@ -8627,6 +8627,10 @@ pub mod modules {
                         #[allow(unused_imports)]
                         pub use riseonly_pages_user::modules::user::pages::profile::settings::sessions_settings::*;
                     }
+                    pub mod settings_search {
+                        #[allow(unused_imports)]
+                        pub use riseonly_pages_misc_a::modules::user::pages::profile::settings::settings_search::*;
+                    }
                     pub mod social_links {
                         #[allow(unused_imports)]
                         pub use riseonly_pages_user::modules::user::pages::profile::settings::social_links::*;
@@ -9668,11 +9672,13 @@ pub fn install_feature_hooks() {
     crate::modules::rtc::components::main_tab_bar_rtc_hooks_install::install_main_tab_bar_rtc_hooks();
     crate::modules::rtc::engine::forum_voice_roster_hooks_install::install_forum_voice_roster_hooks();
     crate::modules::rtc::engine::rise_rtc_domain_hooks_install::install_rise_rtc_domain_hooks();
+    crate::modules::rtc::pages::tray_call_hooks_install::install_tray_call_hooks();
     crate::modules::rtc::stores::group_voice::music_player_rtc_hooks_install::install_music_player_rtc_hooks();
     crate::modules::rtc::stores::rtc::rtc_interactions::topic_mention_composer_hooks_install::install_topic_mention_composer_hooks();
     crate::modules::rtc::stores::rtc::rtc_interactions::user_services_hooks_install::install_user_services_hooks();
     crate::modules::rtc::stores::rtc::rtc_services::chat_rtc_hooks_install::install_chat_rtc_hooks();
     crate::modules::rtc::system::account_state_reset_rtc_hooks_install::install_account_state_reset_rtc_hooks();
+    crate::modules::rtc::system::rise_app_quit_drain_hooks_install::install_rise_app_quit_drain_hooks();
     crate::modules::rtc::system::rise_rtc_call_system_hooks_install::install_rise_rtc_call_system_hooks();
     crate::modules::rtc::system::rise_rtc_system_bridges_hooks_install::install_rise_rtc_system_bridges_hooks();
     crate::modules::search::engine::rise_search_domain_hooks_install::install_rise_search_domain_hooks();

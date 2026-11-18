@@ -53,16 +53,7 @@ const RECENT_GRID_LIMIT: usize = 6;
 const RECENT_TRACKS_SCANNED: usize = 12;
 const TRENDING_TRACKS_SHOWN: usize = 8;
 const PLAYLIST_GRID_SPACING: f32 = 16.0;
-const PLAYLIST_TILE_MIN_WIDTH: f32 = 170.0;
-const PLAYLIST_GRID_MIN_COLUMNS: u16 = 2;
-
-fn playlist_grid_column_count(width: f32) -> u16 {
-    if width <= 0.0 {
-        return PLAYLIST_GRID_MIN_COLUMNS;
-    }
-    let fitting = ((width + PLAYLIST_GRID_SPACING) / (PLAYLIST_TILE_MIN_WIDTH + PLAYLIST_GRID_SPACING)).floor();
-    (fitting as u16).max(PLAYLIST_GRID_MIN_COLUMNS)
-}
+const PLAYLIST_TILE_SIZE: f32 = 170.0;
 
 fn liked_colors() -> Vec<String> {
     LIKED_COLORS.iter().map(|hex| (*hex).to_owned()).collect()
@@ -216,7 +207,6 @@ pub struct MusicHomeView {
     header_collapse: Option<MusicHeaderCollapseContext>,
     scroll_handle: ScrollHandle,
     playing_track_id: Option<String>,
-    playlist_grid_width: f32,
     playlist_cards: Option<Rc<(Vec<PlaylistModel>, i64)>>,
     card_subtitles: HashMap<String, (String, String)>,
     card_keys: HashMap<String, String>,
@@ -247,7 +237,6 @@ impl MusicHomeView {
             header_collapse: None,
             scroll_handle: ScrollHandle::new(),
             playing_track_id,
-            playlist_grid_width: 0.0,
             playlist_cards: None,
             card_subtitles: HashMap::new(),
             card_keys: HashMap::new(),
@@ -755,12 +744,10 @@ impl Render for MusicHomeView {
 
         let playlists_section = {
             let liked_nav = nav_store.clone();
-            let columns = playlist_grid_column_count(self.playlist_grid_width);
-            let grid_view = cx.entity().downgrade();
-            let mut grid = div().grid().grid_cols(columns).gap(px(PLAYLIST_GRID_SPACING)).w_full().child(
+            let mut grid = div().flex().flex_wrap().gap(px(PLAYLIST_GRID_SPACING)).w_full().child(
                 AlbumCard::new(home_id("liked-card"), tr("music_liked_songs"), liked_subtitle.clone(), liked_colors())
                     .icon_overlay(SharedString::new_static("heart.fill"))
-                    .fills_width(true)
+                    .size(PLAYLIST_TILE_SIZE)
                     .on_tap(move |_, cx| {
                         push(&liked_nav, RootRoute::MusicPlaylistDetail { collection_id: LIKED_SONGS_ID.to_owned() }, cx);
                     }),
@@ -777,7 +764,7 @@ impl Render for MusicHomeView {
                         playlist.cover_colors.clone(),
                     )
                     .cover_image_url(cover)
-                    .fills_width(true)
+                    .size(PLAYLIST_TILE_SIZE)
                     .on_tap(move |_, cx| {
                         push(&playlist_nav, RootRoute::MusicPlaylistDetail { collection_id: collection_id.clone() }, cx);
                     }),
@@ -794,18 +781,7 @@ impl Render for MusicHomeView {
                 .align(HorizontalAlignment::Leading)
                 .w_full()
                 .child(
-                    div().w_full().px(px(16.0)).child(div().relative().w_full().child(grid).child(measure(
-                        home_id("playlist-grid-width"),
-                        move |bounds, _, cx| {
-                            let width = f32::from(bounds.size.width);
-                            let _ = grid_view.update(cx, |view, cx| {
-                                if (view.playlist_grid_width - width).abs() > f32::EPSILON {
-                                    view.playlist_grid_width = width;
-                                    cx.notify();
-                                }
-                            });
-                        },
-                    ))),
+                    div().w_full().px(px(16.0)).child(grid),
                 )
                 .children(footer)
         };
@@ -902,7 +878,13 @@ impl Render for MusicHomeView {
                     .scroll_handle(self.scroll_handle.clone())
                     .shows_indicators(false)
                     .pt(px(self.top_inset))
-                    .child(sections),
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_center()
+                            .child(div().w_full().max_w(theme.shell.music_max_width).child(sections)),
+                    ),
             )
             .children(probe)
     }

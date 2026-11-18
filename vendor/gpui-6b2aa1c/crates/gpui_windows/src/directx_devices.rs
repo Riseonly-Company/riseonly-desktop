@@ -12,6 +12,7 @@ use windows::Win32::{
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG,
             D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS, D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS,
             D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
+            ID3D11Multithread,
         },
         Dxgi::{
             CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, DXGI_CREATE_FACTORY_FLAGS,
@@ -61,6 +62,11 @@ impl DirectXDevices {
                 log::info!("Created device with Direct3D 10.1 feature level.")
             }
             _ => unreachable!(),
+        }
+        if let Ok(multithread) = device_context.cast::<ID3D11Multithread>() {
+            unsafe {
+                let _ = multithread.SetMultithreadProtected(true);
+            }
         }
 
         Ok(Self {

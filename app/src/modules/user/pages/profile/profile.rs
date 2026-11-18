@@ -800,6 +800,7 @@ impl ProfileBody {
             ProfileContentTab::Reposts => Some(RisePostProfileKind::Reposts),
             ProfileContentTab::Mentions => Some(RisePostProfileKind::Mentions),
             ProfileContentTab::Favorites => Some(RisePostProfileKind::Favorites),
+            ProfileContentTab::Liked => Some(RisePostProfileKind::Liked),
             _ => None,
         };
         StoryInteractionsStore::shared(cx).update(cx, |store, cx| {

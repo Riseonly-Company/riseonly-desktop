@@ -1,16 +1,41 @@
 use windows::core::{w, PCWSTR};
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 
 use super::device_info::*;
 
 const BIOS_KEY: PCWSTR = w!("HARDWARE\\DESCRIPTION\\System\\BIOS");
+const CURRENT_VERSION_KEY: PCWSTR = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
 
 pub(super) struct NativeDeviceInfo;
 
 impl DeviceInfoSource for NativeDeviceInfo {
+    fn os_details(&self) -> OsDetails {
+        let mut info = OSVERSIONINFOW {
+            dwOSVersionInfoSize: u32::try_from(std::mem::size_of::<OSVERSIONINFOW>())
+                .unwrap_or(u32::MAX),
+            ..Default::default()
+        };
+        let status = unsafe { RtlGetVersion(&mut info) };
+        let build = (status.0 >= 0 && info.dwBuildNumber > 0).then_some(info.dwBuildNumber);
+        let revision = registry_dword(CURRENT_VERSION_KEY, w!("UBR")).ok().flatten();
+        OsDetails {
+            name: build.map(|build| windows_product_name(build).to_owned()),
+            edition: registry_string(CURRENT_VERSION_KEY, w!("ProductName"))
+                .ok()
+                .flatten()
+                .and_then(|product| windows_edition(&product)),
+            release: registry_string(CURRENT_VERSION_KEY, w!("DisplayVersion")).ok().flatten(),
+            build: build.map(|build| match revision {
+                Some(revision) => format!("{build}.{revision}"),
+                None => build.to_string(),
+            }),
+            ..OsDetails::default()
+        }
+    }
+
     fn hardware_model(&self) -> Result<HardwareModel, DeviceInfoUnavailable> {
         let refused = |detail: String| DeviceInfoUnavailable::SystemRefused {
             what: DeviceReading::HardwareModel,
@@ -59,14 +84,41 @@ impl DeviceInfoSource for NativeDeviceInfo {
     }
 }
 
-/// one reg_sz value under the bios key
-/// ok none when firmware left it out and err when the registry refused the read
 fn bios_string(value: PCWSTR) -> Result<Option<String>, String> {
+    registry_string(BIOS_KEY, value)
+}
+
+fn registry_dword(key: PCWSTR, value: PCWSTR) -> Result<Option<u32>, String> {
+    let mut data: u32 = 0;
+    let mut size = u32::try_from(std::mem::size_of::<u32>()).unwrap_or(4);
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key,
+            value,
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut data as *mut u32).cast()),
+            Some(&mut size),
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
+    if status != ERROR_SUCCESS {
+        return Err(format!("RegGetValueW dword failed with {}", status.0));
+    }
+    Ok(Some(data))
+}
+
+/// one reg_sz value under an hklm key
+/// ok none when the value is left out and err when the registry refused the read
+fn registry_string(key: PCWSTR, value: PCWSTR) -> Result<Option<String>, String> {
     let mut size: u32 = 0;
     let status = unsafe {
         RegGetValueW(
             HKEY_LOCAL_MACHINE,
-            BIOS_KEY,
+            key,
             value,
             RRF_RT_REG_SZ,
             None,
@@ -86,7 +138,7 @@ fn bios_string(value: PCWSTR) -> Result<Option<String>, String> {
     let status = unsafe {
         RegGetValueW(
             HKEY_LOCAL_MACHINE,
-            BIOS_KEY,
+            key,
             value,
             RRF_RT_REG_SZ,
             None,

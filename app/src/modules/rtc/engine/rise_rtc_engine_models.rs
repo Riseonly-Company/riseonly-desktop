@@ -249,6 +249,10 @@ pub struct RiseRTCParticipant {
     pub screen_share_enabled: bool,
     pub server_muted: bool,
     pub server_deafened: bool,
+    #[serde(default)]
+    pub server_camera_blocked: bool,
+    #[serde(default)]
+    pub server_screen_share_blocked: bool,
     pub deafened: bool,
     pub hand_raised: bool,
     pub joined_at_ms: i64,
@@ -656,6 +660,12 @@ pub enum RiseRTCMediaEvent {
     LocalScreenShareEnded {
         session: RiseRTCMediaSessionKey,
     },
+    LocalMicrophoneLost {
+        session: RiseRTCMediaSessionKey,
+    },
+    LocalPlayoutLost {
+        session: RiseRTCMediaSessionKey,
+    },
     LocalBroadcastStarted {
         session: RiseRTCMediaSessionKey,
     },
@@ -681,6 +691,8 @@ impl RiseRTCMediaEvent {
             | Self::ParticipantLeft { session, .. }
             | Self::Data { session, .. }
             | Self::LocalScreenShareEnded { session }
+            | Self::LocalMicrophoneLost { session }
+            | Self::LocalPlayoutLost { session }
             | Self::LocalBroadcastStarted { session }
             | Self::LocalCameraPaused { session }
             | Self::LocalCameraResumed { session }

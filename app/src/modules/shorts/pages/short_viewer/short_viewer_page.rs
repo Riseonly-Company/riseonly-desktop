@@ -11,6 +11,7 @@ use rise_ui::button_ui::ButtonUi;
 use rise_ui::expandable_text_ui::EdgeInsets;
 use rise_ui::loader_ui::{LoaderUi, LoaderUiSize};
 use rise_ui::page_header_ui::PageHeaderUi;
+use rise_ui::swiftui::modifiers::ModifierExt;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::{MainText, TextAlignT};
 
@@ -37,10 +38,11 @@ use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
 use crate::modules::post::stores::post_services::post_audio_services::PostServicesStoreAudioPostsState;
 use crate::modules::post::stores::post_services::post_services::PostServicesStore;
-use crate::modules::shorts::components::shorts_feed_cell::{ShortsFeedCell, ShortsReturnRewind};
+use crate::modules::shorts::components::shorts_feed_cell::{ShortsAutoAdvance, ShortsFeedCell, ShortsReturnRewind};
 use crate::modules::shorts::components::shorts_media_prefetch::ShortsMediaPrefetchController;
 use crate::modules::shorts::pages::short_viewer::short_viewer_shared_element_destination::ShortViewerSharedElementDestination;
 use crate::modules::shorts::pages::shorts_vertical_pager::{ShortsVerticalPager, ShortsVerticalPagerController};
+use crate::modules::shorts::pages::shorts_tab::shorts_tab::ShortsChromeFade;
 use crate::modules::shorts::stores::shorts::shorts_services::shorts_services::ShortsServicesStore;
 use crate::modules::user::components::profile_content::pages::grid_posts::profile_grid_shared_element_origin::ProfileGridSharedElementOrigin;
 use crate::modules::user::shared::rise_blocked_content::RiseBlockedContent;
@@ -627,8 +629,18 @@ impl Render for ShortViewerFeedCellView {
             return div().into_any_element();
         };
         let load_state = props.state.clone();
+        let on_auto_advance = (props.index + 1 < props.item_count).then(|| {
+            let page_state = props.state.clone();
+            Rc::new(move |cx: &mut App| {
+                let pager = page_state.read(cx).pager.clone();
+                pager.update(cx, |pager, cx| {
+                    pager.step_page(1.0, cx);
+                });
+            }) as ShortsAutoAdvance
+        });
         ShortsFeedCell::new(props.post.clone(), props.is_active, props.bottom_inset)
             .view_surface(RisePostViewSurface::ShortViewer)
+            .on_auto_advance(on_auto_advance)
             .progress_floor(Some(props.progress_floor))
             .shared_element_destination(props.flight_destination.clone())
             .rewind_token(props.rewind_token)
@@ -711,6 +723,7 @@ impl RenderOnce for ShortViewerPage {
                                 cx,
                             );
                         })
+                        .modifier(ShortsChromeFade::default())
                         .into_any_element(),
                 )
                 .shared_element_lift(ShortViewerSharedElementDestination::HEADER_ITEM_ID, SharedElementPart::Text),

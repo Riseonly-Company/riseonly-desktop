@@ -1,0 +1,125 @@
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -2750,16 +2750,23 @@
+                     .cloned()
+             });
+             let current_view = window.current_view();
++            // Riseonly 0126: an element without an id keeps no hover state between frames, so the
++            // hover it painted is the state; its hover style follows the mouse like one with an id.
++            let has_hover_style = self.hover_style.is_some();
++            let painted_hover = self.hovered.unwrap_or(false);
+ 
+             window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
+                 let hovered = hitbox.is_hovered(window);
+-                let was_hovered = hover_state
+-                    .as_ref()
+-                    .is_some_and(|state| state.borrow().element);
++                let was_hovered = match hover_state.as_ref() {
++                    Some(state) => state.borrow().element,
++                    None => painted_hover,
++                };
+                 if phase == DispatchPhase::Capture && hovered != was_hovered {
+                     if let Some(hover_state) = &hover_state {
+                         hover_state.borrow_mut().element = hovered;
+                         cx.notify(current_view);
++                    } else if has_hover_style {
++                        cx.notify(current_view);
+                     }
+                 }
+             });
+@@ -2772,17 +2779,19 @@
+                     .and_then(|element| element.hover_state.as_ref())
+                     .cloned();
+                 let current_view = window.current_view();
++                let painted_group_hover = group_hitbox_id.is_hovered(window);
+ 
+                 window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
+                     let group_hovered = group_hitbox_id.is_hovered(window);
+-                    let was_group_hovered = hover_state
+-                        .as_ref()
+-                        .is_some_and(|state| state.borrow().group);
++                    let was_group_hovered = match hover_state.as_ref() {
++                        Some(state) => state.borrow().group,
++                        None => painted_group_hover,
++                    };
+                     if phase == DispatchPhase::Capture && group_hovered != was_group_hovered {
+                         if let Some(hover_state) = &hover_state {
+                             hover_state.borrow_mut().group = group_hovered;
+-                            cx.notify(current_view);
+                         }
++                        cx.notify(current_view);
+                     }
+                 });
+             }
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -1205,6 +1205,8 @@
+                             element.prepaint_at(bounds.origin, window, cx);
+                             element
+                         });
++                        let mouse_inside = bounds.contains(&window.mouse_position());
++                        window.mouse_inside_at_render.insert(entity_id, mouse_inside);
+ 
+                         let prepaint_end = window.prepaint_index();
+                         // Riseonly 0044: a cached view inside replayed moved and listed itself;
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1721,6 +1721,9 @@
+     /// change flips `is_hovered` only for a hitbox under the mouse at that moment; the others
+     /// read hover the same way under either modality and are dropped.
+     hover_modality_readers: RefCell<FxHashSet<(EntityId, HitboxId)>>,
++    /// Riseonly 0126: whether the mouse was inside each cached view when it last rendered, so a
++    /// view replayed moved under a still mouse renders again when that changed.
++    pub(crate) mouse_inside_at_render: FxHashMap<EntityId, bool>,
+     /// Riseonly 0087: views that read the window active status while drawing; an activation
+     /// change notifies them instead of refreshing the window.
+     activation_readers: RefCell<FxHashSet<EntityId>>,
+@@ -2516,6 +2519,7 @@
+             last_input_modality: InputModality::Mouse,
+             modality_readers: RefCell::new(FxHashSet::default()),
+             hover_modality_readers: RefCell::new(FxHashSet::default()),
++            mouse_inside_at_render: FxHashMap::default(),
+             activation_readers: RefCell::new(FxHashSet::default()),
+             refreshing: false,
+             draw_count: 0,
+@@ -3701,6 +3705,7 @@
+         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
+         self.next_frame.clear();
+         self.retain_live_hover_modality_readers();
++        self.recheck_moved_hover(cx);
+         let current_focus_path = self.rendered_frame.focus_path();
+         let current_window_active = self.rendered_frame.window_active;
+         let mut focus_before_listeners = self.focus;
+@@ -4875,6 +4880,32 @@
+     /// under the mouse again. Dropped once per frame, the set stays bounded by the live hitboxes
+     /// that were drawn under the mouse, even when the modality never changes (mouse-only use).
+     /// A cached view replays its hitboxes with the same ids, so its pairs survive reuse.
++    /// Riseonly 0126: a scroll under a still mouse moves cached rows without a mouse event; a row
++    /// replayed with the hover it rendered under the old position renders again.
++    fn recheck_moved_hover(&mut self, cx: &mut App) {
++        let mouse = self.mouse_position;
++        let mut stale: SmallVec<[EntityId; 4]> = SmallVec::new();
++        for (entity_id, bounds) in &self.rendered_frame.moved_views {
++            let inside = bounds.contains(&mouse);
++            if self.mouse_inside_at_render.get(entity_id).copied() != Some(inside) {
++                self.mouse_inside_at_render.insert(*entity_id, inside);
++                stale.push(*entity_id);
++            }
++        }
++        if self.mouse_inside_at_render.len() > 4 * self.rendered_frame.cached_views.len() + 64 {
++            let live: FxHashSet<EntityId> =
++                self.rendered_frame.cached_views.iter().map(|(entity_id, _)| *entity_id).collect();
++            self.mouse_inside_at_render.retain(|entity_id, _| live.contains(entity_id));
++        }
++        if !stale.is_empty() {
++            cx.defer(move |cx| {
++                for entity_id in stale {
++                    cx.notify(entity_id);
++                }
++            });
++        }
++    }
++
+     fn retain_live_hover_modality_readers(&mut self) {
+         let mut readers = self.hover_modality_readers.borrow_mut();
+         if readers.is_empty() {

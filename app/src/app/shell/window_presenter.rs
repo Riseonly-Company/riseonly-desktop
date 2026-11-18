@@ -1,11 +1,11 @@
 use gpui::{
-    App, AppContext, Bounds, Context, Render, TitlebarOptions, Window, WindowBounds, WindowHandle,
+    App, AppContext, Bounds, Context, Pixels, Render, Size, TitlebarOptions, Window, WindowBounds, WindowHandle,
     WindowOptions, point, size,
 };
 use rise_platform::HostOs;
 use rise_platform::app_info::identity_for;
 use rise_platform::materials::{apply_window_material, preferred_window_material};
-use rise_platform::window_chrome::{round_window_corner, shell_window_decorations};
+use rise_platform::window_chrome::{app_owns_titlebar_drag, round_window_corner, shell_window_decorations};
 
 use crate::core::push_notifications::socket_notification_source::SocketNotificationSource;
 use crate::app::root_view::RootView;
@@ -89,11 +89,16 @@ impl WindowPresenter {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(window_bounds),
-                    window_min_size: Some(metrics.window_min_size()),
+                    window_min_size: Some(zoomed_min_size(
+                        metrics.window_min_size(),
+                        cx.window_zoom(),
+                        cx.primary_display().map(|display| display.visible_bounds().size),
+                    )),
                     display_id,
                     window_background: requested.into_gpui(),
                     window_decorations: Some(decorations),
                     app_id: Self::app_id(),
+                    app_owns_titlebar_drag: app_owns_titlebar_drag(host),
                     focus: show,
                     show,
                     titlebar: Some(TitlebarOptions {
@@ -164,6 +169,15 @@ impl WindowPresenter {
     }
 }
 
+fn zoomed_min_size(minimum: Size<Pixels>, zoom: f32, room: Option<Size<Pixels>>) -> Size<Pixels> {
+    let zoomed = size(minimum.width * zoom, minimum.height * zoom);
+    let Some(room) = room else {
+        return zoomed;
+    };
+    let fit = |zoomed: Pixels, minimum: Pixels, room: Pixels| zoomed.min(room * 0.9).max(zoomed.min(minimum).min(room));
+    size(fit(zoomed.width, minimum.width, room.width), fit(zoomed.height, minimum.height, room.height))
+}
+
 fn cascade_step(existing: usize) -> f32 {
     const WRAP: usize = 6;
     (existing % WRAP) as f32
@@ -171,6 +185,8 @@ fn cascade_step(existing: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use gpui::px;
+
     use super::*;
 
     #[test]
@@ -184,6 +200,18 @@ mod tests {
         assert_eq!(minimum.height, metrics.window_min_height);
         assert!(minimum.width <= metrics.window_default_width);
         assert!(minimum.height <= metrics.window_default_height);
+    }
+
+    #[test]
+    fn a_zoomed_window_keeps_room_for_the_zoomed_layout_but_fits_the_screen() {
+        let minimum = size(px(500.0), px(400.0));
+        assert_eq!(zoomed_min_size(minimum, 1.0, None), minimum);
+        assert_eq!(zoomed_min_size(minimum, 2.0, None), size(px(1000.0), px(800.0)));
+        let laptop = Some(size(px(1366.0), px(768.0)));
+        let fitted = zoomed_min_size(minimum, 2.0, laptop);
+        assert_eq!(fitted.width, px(1000.0));
+        assert!(fitted.height < px(768.0) && fitted.height >= minimum.height);
+        assert_eq!(zoomed_min_size(minimum, 0.5, laptop), size(px(250.0), px(200.0)));
     }
 
     #[test]

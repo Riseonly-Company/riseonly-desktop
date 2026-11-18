@@ -1245,6 +1245,7 @@ impl NowPlayingParts {
             (player.is_shuffled(cx), player.is_playing, player.repeat_mode(cx))
         };
         let inactive = white().opacity(0.7);
+        let active = rise_ui::theme(cx).primary._100;
 
         hstack(0.)
             .w_full()
@@ -1252,7 +1253,7 @@ impl NowPlayingParts {
             .child(self.transport_button(
                 "shuffle",
                 tr("music_shuffle"),
-                div().children(icon("shuffle", 20., if is_shuffled { accent() } else { inactive })),
+                div().children(icon("shuffle", 20., if is_shuffled { active } else { inactive })),
                 |player, cx| player.toggle_shuffle(cx),
             ))
             .child(self.transport_button(
@@ -1286,7 +1287,7 @@ impl NowPlayingParts {
                 div().children(icon(
                     repeat_mode.icon(),
                     20.,
-                    if repeat_mode != MusicRepeatMode::Off { accent() } else { inactive },
+                    if repeat_mode != MusicRepeatMode::Off { active } else { inactive },
                 )),
                 |player, cx| player.cycle_repeat_mode(cx),
             ))

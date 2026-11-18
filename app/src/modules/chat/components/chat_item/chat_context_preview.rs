@@ -45,9 +45,16 @@ pub struct ChatContextPreviewSession {
 }
 
 impl ChatContextPreviewSession {
-    pub fn new(chat_id: String, all_topics: bool, navigation: Entity<NavigationStore>, topic_id: Option<String>) -> Self {
+    pub fn new(
+        chat_id: String,
+        all_topics: bool,
+        navigation: Entity<NavigationStore>,
+        topic_id: Option<String>,
+        general_topic: bool,
+    ) -> Self {
         let route = match topic_id.filter(|topic_id| !topic_id.is_empty()) {
             Some(topic_id) => RootRoute::ChatTopic { chat_id: Some(chat_id), topic_id: Some(topic_id) },
+            None if general_topic => RootRoute::ChatTopic { chat_id: Some(chat_id), topic_id: None },
             None if all_topics => RootRoute::ForumAll { chat_id: Some(chat_id) },
             None => RootRoute::Chat { chat_id: Some(chat_id) },
         };
@@ -228,15 +235,36 @@ impl ChatContextPreview {
         navigation: Entity<NavigationStore>,
         cx: &mut App,
     ) -> HoldContextMenuControllerPreview {
+        Self::make_preview(chat_id, topic_id, false, available_size, navigation, cx)
+    }
+
+    pub fn make_general_topic(
+        chat_id: &str,
+        available_size: Size<Pixels>,
+        navigation: Entity<NavigationStore>,
+        cx: &mut App,
+    ) -> HoldContextMenuControllerPreview {
+        Self::make_preview(chat_id, None, true, available_size, navigation, cx)
+    }
+
+    fn make_preview(
+        chat_id: &str,
+        topic_id: Option<String>,
+        general_topic: bool,
+        available_size: Size<Pixels>,
+        navigation: Entity<NavigationStore>,
+        cx: &mut App,
+    ) -> HoldContextMenuControllerPreview {
         let is_topic = topic_id.as_deref().is_some_and(|topic_id| !topic_id.is_empty());
         let all_topics = !is_topic
+            && !general_topic
             && ChatServicesStore::shared(cx).update(cx, |services, cx| services.topics_enabled(chat_id, cx));
         let topic_id = topic_id.filter(|_| is_topic);
         let session_navigation = navigation.clone();
         let session_topic = topic_id.clone();
         let session_chat = chat_id.to_owned();
         let session = cx.new(|_| {
-            ChatContextPreviewSession::new(session_chat, all_topics, session_navigation, session_topic)
+            ChatContextPreviewSession::new(session_chat, all_topics, session_navigation, session_topic, general_topic)
         });
         let controller_session = session.clone();
         let controller = cx.new(|_| ChatContextPreviewController {

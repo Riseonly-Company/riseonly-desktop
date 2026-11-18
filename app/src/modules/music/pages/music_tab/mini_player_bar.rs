@@ -143,27 +143,32 @@ impl MiniPlayerBar {
     /// so it asks the same confirmation as the session screen
     pub fn dismiss(cx: &mut App) {
         let player = MusicPlayerState::shared(cx);
-        let needs_confirmation = {
+        let (in_session, is_host) = {
             let player = player.read(cx);
-            player.is_listening_session_host() && player.is_listening_together()
+            (player.listening_session().is_some(), player.is_listening_session_host())
         };
-        if needs_confirmation {
-            NativeConfirmAlert::present_delete(
-                &tr("music_live_close_confirmation_title"),
-                &tr("music_live_close_confirmation_message"),
-                Some(tr("music_live_leave")),
-                None,
-                false,
-                None,
-                None,
-                |cx: &mut App| {
-                    MusicPlayerState::shared(cx).update(cx, |player, cx| player.stop_and_clear(cx));
-                },
-                cx,
-            );
-        } else {
+        if !in_session {
             player.update(cx, |player, cx| player.stop_and_clear(cx));
+            return;
         }
+        let (title, message, confirm) = if is_host {
+            ("music_live_close_confirmation_title", "music_live_close_confirmation_message", "music_live_close")
+        } else {
+            ("music_live_interrupt_leave_title", "desktop_music_player_close_leave_message", "music_live_leave")
+        };
+        NativeConfirmAlert::present_delete(
+            &tr(title),
+            &tr(message),
+            Some(tr(confirm)),
+            None,
+            false,
+            None,
+            None,
+            |cx: &mut App| {
+                MusicPlayerState::shared(cx).update(cx, |player, cx| player.stop_and_clear(cx));
+            },
+            cx,
+        );
     }
 
     fn dismiss_drag(state: &gpui::Entity<MiniPlayerBarState>) -> DragGesture {
@@ -179,11 +184,8 @@ impl MiniPlayerBar {
                 });
             })
             .on_ended(move |value, _, cx| {
-                let needs_settle = f32::from(value.translation.height) <= DISMISS_THRESHOLD || {
-                    let player = MusicPlayerState::shared(cx);
-                    let player = player.read(cx);
-                    player.is_listening_session_host() && player.is_listening_together()
-                };
+                let needs_settle = f32::from(value.translation.height) <= DISMISS_THRESHOLD
+                    || MusicPlayerState::shared(cx).read(cx).listening_session().is_some();
                 if needs_settle {
                     ended.update(cx, |state, cx| state.settle(cx));
                 }

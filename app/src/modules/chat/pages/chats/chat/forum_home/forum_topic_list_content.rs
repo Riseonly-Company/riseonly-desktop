@@ -326,6 +326,12 @@ pub(crate) fn changed_row_span(old: &[String], new: &[String]) -> (std::ops::Ran
     (head..old.len() - tail, new.len() - head - tail)
 }
 
+enum ForumPreviewTarget {
+    All,
+    General,
+    Topic(String),
+}
+
 /// one row of the list, a section hands its header and rows and footer over one by one
 /// so a category isnt built whole before the first frame
 enum ForumTopicListRow {
@@ -824,6 +830,7 @@ impl ForumTopicListParts {
             }),
             Rc::new(move |_: Point<Pixels>, window: &mut Window, cx: &mut App| (tap_parts.on_open_all)(window, cx)),
         )
+        .controller_preview(self.controller_preview(ForumPreviewTarget::All))
         .with_row_divider(&rise_ui::theme(cx).clone())
     }
 
@@ -894,6 +901,7 @@ impl ForumTopicListParts {
                 (tap_parts.on_open_topic)(None, window, cx);
             }),
         )
+        .controller_preview(self.controller_preview(ForumPreviewTarget::General))
         .with_row_divider(&rise_ui::theme(cx).clone())
     }
 
@@ -929,7 +937,7 @@ impl ForumTopicListParts {
         let (tap_parts, tap_topic) = (self.clone(), topic.clone());
         let row_id = format!("forum-topic-{}", topic.id);
         let (typing_chat_id, typing_topic_id) = (snapshot.chat.id.clone(), topic.id.clone());
-        let controller_preview = self.controller_preview(&topic.id);
+        let controller_preview = self.controller_preview(ForumPreviewTarget::Topic(topic.id.clone()));
         Self::hold_row(
             format!("{row_id}-hold"),
             actions,
@@ -953,13 +961,19 @@ impl ForumTopicListParts {
         .with_row_divider(&rise_ui::theme(cx).clone())
     }
 
-    /// the held topic shows its own chat page as the lifted card
-    fn controller_preview(&self, topic_id: &str) -> Option<HoldContextMenuControllerPreviewFactory> {
+    /// the held row shows its own chat page as the lifted card
+    fn controller_preview(&self, target: ForumPreviewTarget) -> Option<HoldContextMenuControllerPreviewFactory> {
         let navigation = self.nav_store.clone()?;
-        let (chat_id, topic_id) = (self.chat_id.clone(), topic_id.to_owned());
+        let chat_id = self.chat_id.clone();
         let factory: HoldContextMenuControllerPreviewFactory =
-            Rc::new(move |size: Size<Pixels>, _: &mut Window, cx: &mut App| {
-                ChatContextPreview::make_with_chat_id(&chat_id, Some(topic_id.clone()), size, navigation.clone(), cx)
+            Rc::new(move |size: Size<Pixels>, _: &mut Window, cx: &mut App| match &target {
+                ForumPreviewTarget::All => ChatContextPreview::make_with_chat_id(&chat_id, None, size, navigation.clone(), cx),
+                ForumPreviewTarget::General => {
+                    ChatContextPreview::make_general_topic(&chat_id, size, navigation.clone(), cx)
+                }
+                ForumPreviewTarget::Topic(topic_id) => {
+                    ChatContextPreview::make_with_chat_id(&chat_id, Some(topic_id.clone()), size, navigation.clone(), cx)
+                }
             });
         Some(factory)
     }

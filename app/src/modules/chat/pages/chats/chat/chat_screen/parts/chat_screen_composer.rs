@@ -31,6 +31,7 @@ use crate::modules::chat::components::chat::message_list::MessageList;
 use crate::modules::chat::components::chat::voice::chat_composer_capture_mode::ChatComposerCaptureMode;
 use crate::modules::chat::components::chat::chat_title_row::ChatTitleRow;
 use crate::modules::chat::shared::message_permissions::MessagePermissions;
+use crate::modules::chat::shared::poll_publicity::PollPublicity;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatPermKey, ChatType};
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::chat::stores::message::message_actions::message_types::GetMessageMessage;
@@ -126,6 +127,7 @@ impl ChatScreen {
             let chat = self.resolved_chat(cx);
             configuration.destination_title = Some(ChatTitleRow::plain_title(&chat, cx));
             configuration.allows_poll = mode != ChatMediaPickerMode::VideoNote && self.accepts_polls(cx);
+            configuration.allows_public_poll = PollPublicity::names_voters(&chat);
             configuration.allows_view_once =
                 mode != ChatMediaPickerMode::VideoNote && chat.r#type == ChatType::Direct && !chat.is_bot_chat();
         }

@@ -3247,6 +3247,10 @@ pub mod modules {
                         #[allow(unused_imports)]
                         pub use riseonly_ui_high::modules::user::pages::profile::settings::customization_settings::*;
                     }
+                    pub mod settings_search {
+                        pub mod settings_search_index;
+                        pub mod settings_search_results;
+                    }
                     pub use self::settings::*;
                     #[allow(unused_imports)]
                     pub use riseonly_ui_chat_input::modules::user::pages::profile::settings::*;

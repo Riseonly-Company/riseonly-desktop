@@ -64,6 +64,8 @@ pub mod pressable_ui;
 mod pressable_ui_tests;
 pub mod qr_code;
 pub mod reorder_grip;
+#[cfg(test)]
+mod reorder_grip_tests;
 pub mod rich_text;
 pub mod rise_frame_rate;
 pub mod rise_symbol;

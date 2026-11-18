@@ -9,6 +9,7 @@ use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition,
 use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatVoiceConnectGateDecision;
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
 use crate::modules::rtc::stores::rtc::rtc_interactions::rtc_interactions::RTCInteractionsStore;
+use crate::modules::rtc::stores::rtc::rtc_services::rtc_services::RTCServicesStore;
 use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 
 pub enum RiseRTCNavigationGate {}
@@ -75,6 +76,11 @@ impl RiseRTCNavigationGate {
                     );
                     match decision {
                         ChatVoiceConnectGateDecision::Allowed => {
+                            if Self::enters_unseen(&target, cx) {
+                                RTCInteractionsStore::shared(cx)
+                                    .update(cx, |interactions, cx| interactions.enter_room(target, cx));
+                                return;
+                            }
                             RTCInteractionsStore::shared(cx)
                                 .update(cx, |interactions, cx| interactions.present_room(target, cx));
                             if let Some(hooks) = rise_rtc_call_window_hooks() {
@@ -92,6 +98,18 @@ impl RiseRTCNavigationGate {
                 cx,
             );
         });
+    }
+
+    fn enters_unseen(target: &RiseRTCRoomTarget, cx: &mut App) -> bool {
+        let Some(hooks) = rise_rtc_call_window_hooks() else {
+            return false;
+        };
+        if (hooks.uses_separate_window)(cx) {
+            return false;
+        }
+        let rtc = RTCServicesStore::shared(cx);
+        let rtc = rtc.read(cx);
+        rtc.room_presentation_target() != Some(target) && !rtc.is_room_presentation_visible()
     }
 
     fn notify_error(title: String, cx: &mut App) {

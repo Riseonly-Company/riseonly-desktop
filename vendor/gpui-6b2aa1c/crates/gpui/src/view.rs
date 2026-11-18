@@ -1205,6 +1205,8 @@ impl<V: View> Element for ViewElement<V> {
                             element.prepaint_at(bounds.origin, window, cx);
                             element
                         });
+                        let mouse_inside = bounds.contains(&window.mouse_position());
+                        window.mouse_inside_at_render.insert(entity_id, mouse_inside);
 
                         let prepaint_end = window.prepaint_index();
                         // Riseonly 0044: a cached view inside replayed moved and listed itself;

@@ -23,6 +23,7 @@ use rise_theme::theme::theme_environment::ThemeRootBoundary;
 use rise_ui::bottom_sheet_ui::bottom_sheet_metrics::BottomSheetMetrics;
 use rise_ui::bottom_sheet_ui::native_bottom_sheet_presentation_host::NativeBottomSheetPresentationHost;
 use rise_ui::keyboard_dismiss::{KeyboardDismissModifiers, ScreenFocus};
+use rise_ui::reorder_grip::ReorderMotion;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::page_refresh::is_page_refresh_keystroke;
@@ -141,6 +142,7 @@ use crate::modules::auth::services::auth_entry_order::AuthEntryOrder;
 use crate::modules::auth::stores::auth_interactions::auth_interactions::AuthInteractionsStore;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::bot::pages::bot_mini_app_sheet::BotMiniAppPresentationHost;
+use crate::modules::chat::components::chat::bubble::poll_voters_sheet::PollVotersSheetHost;
 use crate::modules::chat::components::chat::input_picker::chat_gif_search_portal::ChatGifSearchPortal;
 use crate::modules::chat::components::chat::input_picker::sticker_hold_overlay::StickerHoldOverlay;
 use crate::modules::chat::components::chat::join_requests::join_chat_sheet::JoinChatSheetHost;
@@ -206,7 +208,12 @@ use crate::modules::post::components::repost::repost_overlay::{
     RepostTransitionNamespace, RepostTransitionNamespaceKey,
 };
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
-use crate::modules::rtc::pages::rise_rtc_room_presentation_host::RiseRTCRoomPresentationHost;
+use crate::modules::rtc::pages::rise_rtc_room_presentation_host::{
+    RiseRTCCallWindowContentChanged, RiseRTCCallWindowMode, RiseRTCRoomPresentationHost,
+};
+use crate::modules::rtc::shared::rise_rtc_screen_safe_area::RiseRTCScreenTopInsetKey;
+use rise_platform::user_defaults::UserDefaults;
+use rise_platform::user_defaults_keys::DESKTOP_PANE_ORDER;
 use crate::modules::rtc::stores::rtc::rtc_services::rtc_services::RTCServicesStore;
 use crate::modules::share_extension::entry::share_item_loader::ShareExtensionItem;
 use crate::modules::share_extension::send_handoff::share_send_handoff_host::ShareSendHandoffHost;
@@ -575,7 +582,103 @@ struct ListColumnDrag {
 
 struct ListColumnResizeGhost;
 
+struct AsideColumnDrag;
+
 impl Render for ListColumnResizeGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// a column of the framed window, the person can drag one onto another to swap their places
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum RootPane {
+    List,
+    Centre,
+    Aside,
+}
+
+impl RootPane {
+    const DEFAULT_ORDER: [Self; 3] = [Self::List, Self::Centre, Self::Aside];
+
+    const fn raw_value(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Centre => "centre",
+            Self::Aside => "aside",
+        }
+    }
+
+    const fn group(self) -> &'static str {
+        match self {
+            Self::List => "root-pane-list",
+            Self::Centre => "root-pane-centre",
+            Self::Aside => "root-pane-aside",
+        }
+    }
+
+    fn stored_order() -> [Self; 3] {
+        let Some(stored) = UserDefaults::standard().string(DESKTOP_PANE_ORDER) else {
+            return Self::DEFAULT_ORDER;
+        };
+        let parsed: Vec<Self> = stored
+            .split(',')
+            .filter_map(|raw| Self::DEFAULT_ORDER.into_iter().find(|pane| pane.raw_value() == raw))
+            .collect();
+        match parsed.as_slice() {
+            [first, second, third] if first != second && second != third && first != third => [*first, *second, *third],
+            _ => Self::DEFAULT_ORDER,
+        }
+    }
+
+    fn store_order(order: [Self; 3]) {
+        let raw: Vec<&str> = order.iter().map(|pane| pane.raw_value()).collect();
+        UserDefaults::standard().set(DESKTOP_PANE_ORDER, raw.join(","));
+    }
+
+    fn position(order: &[Self; 3], pane: Self) -> usize {
+        order.iter().position(|candidate| *candidate == pane).unwrap_or(0)
+    }
+
+    fn merged_order(order: [Self; 3], in_row: &[Self], shown: &[Self]) -> [Self; 3] {
+        let mut merged = order;
+        let mut next = shown.iter();
+        for slot in &mut merged {
+            if in_row.contains(slot)
+                && let Some(pane) = next.next()
+            {
+                *slot = *pane;
+            }
+        }
+        merged
+    }
+}
+
+/// where a lifted column sits in the row, its edge distance from the row start
+#[derive(Clone, Copy)]
+struct PaneSlot {
+    inset: Pixels,
+    width: Pixels,
+    gap: Pixels,
+}
+
+const PANE_LIFT_RISE: f32 = 4.0;
+const PANE_GRIP_WIDTH: f32 = 64.0;
+
+/// where a gap splitter sits, measured from the side whose columns all have a known width
+#[derive(Clone, Copy)]
+enum SplitterEdge {
+    FromStart(Pixels),
+    FromEnd(Pixels),
+}
+
+/// a column drag in flight, the column itself is in pane_press
+#[derive(Clone, Copy)]
+struct RootPaneDrag;
+
+struct RootPaneDragGhost;
+
+impl Render for RootPaneDragGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
     }
@@ -755,6 +858,7 @@ struct RootHosts {
     profile_highlight_sheets_host: Entity<ProfileHighlightSheetsHost>,
     comments_sheet_host: Entity<CommentsSheetHost>,
     post_likes_sheet_host: Entity<PostLikesSheetHost>,
+    poll_voters_sheet_host: Entity<PollVotersSheetHost>,
     people_picker_host: Entity<PeoplePickerHost>,
     blocking_loader_host: Entity<BlockingLoaderHost>,
     premium_badge_picker_popover_host: Entity<PremiumBadgePickerPopoverHost>,
@@ -858,11 +962,18 @@ pub struct RootView {
     pack_aside_fits: bool,
     sticker_pack_opened_on: Option<(MainTab, Vec<RootRoute>)>,
     music_queue_has_items: bool,
+    in_app_call_key: Option<String>,
+    in_app_call_nav: Option<(MainTab, Vec<RootRoute>)>,
     pane_layout: PaneLayout,
     list_width_scope: SharedString,
     list_width: Option<Pixels>,
     list_drag: Option<ListColumnDrag>,
     list_drag_ceiling: Pixels,
+    pane_order: [RootPane; 3],
+    pane_motion: ReorderMotion<RootPane>,
+    pane_press: Option<(RootPane, Pixels)>,
+    pane_strides: [(RootPane, f32); 3],
+    panes_in_row: Vec<RootPane>,
     palette: Option<Entity<CommandPalette>>,
     _palette_subscription: Option<Subscription>,
     focus_handle: FocusHandle,
@@ -922,6 +1033,7 @@ impl RootView {
         let sticker_pack_store = StickerPackSheetStore::shared(cx);
         let music_player = MusicPlayerState::shared(cx);
         let music_queue_has_items = !music_player.read(cx).queue.is_empty();
+        let call_host = hosts.rise_rtc_room_presentation_host.clone();
 
         let theme = rise_ui::theme(cx as &App);
         let pane_layout = PanePolicy::from_shell_metrics(theme.shell)
@@ -958,9 +1070,12 @@ impl RootView {
                 if view.nav_change_moves_stack_only(&nav_store, cx) {
                     view.motion_frame_pending = true;
                 }
+                view.minimize_in_app_call_on_navigation(&nav_store, cx);
                 cx.notify();
                 view.state_did_change(cx);
             }),
+            cx.subscribe(&call_host, |view, _, _: &RiseRTCCallWindowContentChanged, cx| view.in_app_call_did_change(cx)),
+            cx.observe_global::<RiseRTCCallWindowMode>(|view, cx| view.in_app_call_did_change(cx)),
             cx.observe(&push_deep_link_store, |view, _, cx| view.observed_state_did_change(cx)),
             cx.observe(&achievements_interactions, |view, _, cx| view.observed_state_did_change(cx)),
             cx.observe(&rtc_services, |view, _, cx| view.observed_state_did_change(cx)),
@@ -1033,6 +1148,7 @@ impl RootView {
                     cx.notify();
                 }
             }),
+            cx.observe(&hosts.music_player_bar_presence, |_, _, cx| cx.notify()),
             cx.observe_window_bounds(window, |_, _, cx| cx.notify()),
             cx.observe_global::<RiseAppLifecycle>(|view, cx| view.scene_phase_did_change(cx)),
             cx.observe_global::<LanguageStore>(|_, cx| cx.notify()),
@@ -1099,11 +1215,18 @@ impl RootView {
             pack_aside_fits: false,
             sticker_pack_opened_on: None,
             music_queue_has_items,
+            in_app_call_key: None,
+            in_app_call_nav: None,
             pane_layout,
             list_width_scope: SharedString::default(),
             list_width: None,
             list_drag: None,
             list_drag_ceiling: gpui::px(0.0),
+            pane_order: RootPane::stored_order(),
+            pane_motion: ReorderMotion::new(),
+            pane_press: None,
+            pane_strides: RootPane::DEFAULT_ORDER.map(|pane| (pane, 0.0)),
+            panes_in_row: Vec::new(),
             palette: None,
             _palette_subscription: None,
             focus_handle: cx.focus_handle(),
@@ -1142,6 +1265,7 @@ impl RootView {
             profile_highlight_sheets_host: cx.new(ProfileHighlightSheetsHost::new),
             comments_sheet_host: cx.new(|_| CommentsSheetHost),
             post_likes_sheet_host: cx.new(|_| PostLikesSheetHost),
+            poll_voters_sheet_host: cx.new(|_| PollVotersSheetHost),
             people_picker_host: cx.new(|cx| PeoplePickerHost::new(PeoplePickerHostContext::Root, window, cx)),
             blocking_loader_host: cx.new(|cx| BlockingLoaderHost::new(window, cx)),
             premium_badge_picker_popover_host: cx.new(PremiumBadgePickerPopoverHost::new),
@@ -2492,8 +2616,18 @@ impl RootView {
                 });
                 self.switch_tab_and_push(MainTab::Profile, RootRoute::MyBugReports, cx);
             }
+            PushDeepLink::MyReport { report_id } => {
+                self.switch_tab_and_pop_to_or_push(MainTab::Profile, RootRoute::MyBugReports, cx);
+                BugReportInteractionsStore::shared(cx)
+                    .update(cx, |reports, cx| reports.open_linked_report(&report_id, cx));
+            }
             PushDeepLink::SparksWallet => {
                 self.switch_tab_and_push(MainTab::Profile, RootRoute::SparksWallet, cx);
+            }
+            PushDeepLink::Achievement { achievement_id } => {
+                UserAchievementsInteractionsStore::shared(cx)
+                    .update(cx, |store, cx| store.open_earned_achievement(achievement_id, cx));
+                self.switch_tab_and_pop_to_or_push(MainTab::Profile, RootRoute::Achievements { user_id: None }, cx);
             }
             PushDeepLink::AdminConsole { url } => {
                 rise_platform::open_url::open_url(&url, cx);
@@ -2939,6 +3073,7 @@ impl RootView {
                 | RootRoute::MapJourneyComposer
                 | RootRoute::MapJourney { .. }
                 | RootRoute::MapFriends
+                | RootRoute::MapProfile
                 | RootRoute::SignUp
                 | RootRoute::SignIn
         )
@@ -3332,9 +3467,12 @@ impl RootView {
         });
         self.drop_closed_map_pages(section, cx);
         let context = self.resolve_side_panel_context(cx);
-        let header_overlays =
-            matches!(context, Some(RootSidePanelContext::Aside(_))) && self.aside.read(cx).shows_docked_comments(cx);
-        self.side_panel.update(cx, |side_panel, cx| side_panel.set_header_overlays(header_overlays, cx));
+        let header_overlays = matches!(context, Some(RootSidePanelContext::Aside(_)));
+        let header_blurred = header_overlays && !self.aside.read(cx).shows_docked_comments(cx);
+        self.side_panel.update(cx, |side_panel, cx| {
+            side_panel.set_header_overlays(header_overlays, cx);
+            side_panel.set_header_blurred(header_blurred, cx);
+        });
         if self.side_panel_context == context {
             return;
         }
@@ -3378,6 +3516,44 @@ impl RootView {
             self.aside.update(cx, |aside, cx| aside.reset_to_default(cx));
             cx.notify();
         }
+    }
+
+    fn in_app_call_did_change(&mut self, cx: &mut Context<Self>) {
+        let key = self.hosts.rise_rtc_room_presentation_host.read(cx).in_app_call_key(cx);
+        if key == self.in_app_call_key {
+            return;
+        }
+        self.in_app_call_nav = key.as_ref().map(|_| {
+            let nav = self.nav_store.read(cx);
+            (nav.current_tab, nav.path.clone())
+        });
+        self.in_app_call_key = key;
+        cx.notify();
+    }
+
+    fn minimize_in_app_call_on_navigation(&mut self, nav_store: &Entity<NavigationStore>, cx: &mut Context<Self>) {
+        let Some((tab, path)) = self.in_app_call_nav.as_ref() else {
+            return;
+        };
+        let nav = nav_store.read(cx);
+        if nav.current_tab == *tab && nav.path == *path {
+            return;
+        }
+        self.in_app_call_nav = None;
+        self.hosts.rise_rtc_room_presentation_host.update(cx, |host, cx| host.minimize_in_app_call(cx));
+    }
+
+    fn in_app_call_pane(&self, framed: bool, gap: Pixels, theme: &rise_theme::AppTheme, window: &Window, cx: &App) -> Div {
+        let top_inset = f32::from(self.screen_top_inset(window, cx));
+        let host = self.hosts.rise_rtc_room_presentation_host.clone();
+        let content = host.read(cx).in_app_call_content(host.downgrade(), cx);
+        let body = div().relative().size_full().overflow_hidden().flex().justify_center().child(
+            div().h_full().w_full().max_w(theme.shell.call_max_width).child(
+                env_scope::<RiseRTCScreenTopInsetKey>(top_inset).child(div().size_full().child(content)),
+            ),
+        );
+        let room = Self::pane(body, framed, Self::pane_radius(theme), gap, theme).h_full().w_full();
+        div().flex_1().min_w_0().h_full().flex().child(room)
     }
 
     fn screen_top_inset(&self, window: &Window, cx: &App) -> Pixels {
@@ -3681,7 +3857,7 @@ impl RootView {
         let centre_width = (columns.centre - gap * pane_gaps as f32).max(gpui::px(0.0));
         let slides_over = slides_over.map(|panel_width| {
             let room = centre_width - policy.detail_min_width;
-            if room >= policy.aside_min_width { panel_width.min(room) } else { panel_width }
+            if room >= policy.aside_min_width { panel_width.min(room) } else { panel_width.min(centre_width) }
         });
         let aside_column = columns.aside.or(slides_over);
         self.side_panel.update(cx, |side_panel, cx| side_panel.set_column_width(aside_column, cx));
@@ -3752,7 +3928,7 @@ impl RootView {
             div()
                 .id("root-aside-slide-over")
                 .absolute()
-                .top_0()
+                .top(top_inset)
                 .bottom_0()
                 .when(rtl, |panel| panel.left_0())
                 .when(!rtl, |panel| panel.right_0())
@@ -3817,9 +3993,41 @@ impl RootView {
         let row = div().flex();
         let mut row = if rtl { row.flex_row_reverse() } else { row.flex_row() }.flex_1().min_w_0().h_full();
         if framed {
-            row = row.gap(gap).pt(gap).pb(gap);
+            row = row.pt(gap).pb(gap);
             row = if rtl { row.pl(gap) } else { row.pr(gap) };
         }
+        let order = if framed { self.displayed_pane_order() } else { RootPane::DEFAULT_ORDER };
+        let mut panes: Vec<(RootPane, AnyElement, Option<Pixels>)> = Vec::new();
+        let mut floating: Option<AnyElement> = None;
+        let aside_leads = RootPane::position(&order, RootPane::Aside) < RootPane::position(&order, RootPane::Centre);
+        let aside_in_row = columns.aside.is_some() && shows_aside && self.in_app_call_key.is_none();
+        let docks = framed && self.in_app_call_key.is_none();
+        let pane_width = |pane: RootPane| match pane {
+            RootPane::List => columns.list.unwrap_or_default(),
+            RootPane::Centre => centre_width,
+            RootPane::Aside => columns.aside.filter(|_| aside_in_row).unwrap_or_default(),
+        };
+        let in_row = |pane: RootPane| match pane {
+            RootPane::List => columns.list.is_some(),
+            RootPane::Centre => true,
+            RootPane::Aside => aside_in_row,
+        };
+        self.pane_strides = RootPane::DEFAULT_ORDER.map(|pane| (pane, f32::from(pane_width(pane) + gap)));
+        self.panes_in_row = self.pane_order.iter().copied().filter(|pane| in_row(*pane)).collect();
+        let slot = |pane: RootPane| PaneSlot {
+            inset: order
+                .iter()
+                .take_while(|candidate| **candidate != pane)
+                .filter(|candidate| in_row(**candidate))
+                .map(|candidate| pane_width(*candidate) + gap)
+                .fold(gpui::px(0.0), |sum, stride| sum + stride),
+            width: pane_width(pane),
+            gap,
+        };
+        self.side_panel.update(cx, |panel, cx| {
+            panel.set_grip_trailing(aside_leads != rtl, cx);
+            panel.set_grip_outside(aside_in_row, cx);
+        });
         if let Some(list_width) = columns.list {
             let has_settings_list = settings_list_page.is_some();
             let list = div()
@@ -3839,7 +4047,6 @@ impl RootView {
                 .children(root_in_list)
                 .children(settings_list_page)
                 .when(has_settings_list, |list| list.child(Self::x1418_list_probe()))
-                .child(self.list_column_grip(list_width, rtl, &theme, cx))
                 .on_drag_move(cx.listener(|view, event: &DragMoveEvent<ListColumnDrag>, _window, cx| {
                     view.resize_list_to(event.event.position.x, cx);
                 }))
@@ -3848,56 +4055,283 @@ impl RootView {
                     MouseButton::Left,
                     cx.listener(|view, _: &MouseUpEvent, _window, cx| view.end_list_resize(cx)),
                 );
-            row = row.child(Self::pane(list, framed, radius, gap, &theme));
+            let (list, lifted) = self.dockable(Self::pane(list, framed, radius, gap, &theme), RootPane::List, docks, slot(RootPane::List), &theme, window, cx);
+            floating = floating.or(lifted);
+            panes.push((RootPane::List, list, Some(list_width)));
             if !framed {
-                row = row.child(BlockUi::divider(&theme));
+                panes.push((RootPane::List, BlockUi::divider(&theme).into_any_element(), Some(theme.shell.column_divider)));
             }
         }
-        row = row.child(Self::pane(centre, framed, radius, gap, &theme));
-        if let Some(aside_width) = columns.aside.filter(|_| shows_aside) {
+        if self.in_app_call_key.is_some() {
+            panes.push((RootPane::Centre, self.in_app_call_pane(framed, gap, &theme, window, cx).into_any_element(), None));
+        } else {
+            let (centre, lifted) = self.dockable(Self::pane(centre, framed, radius, gap, &theme), RootPane::Centre, docks, slot(RootPane::Centre), &theme, window, cx);
+            floating = floating.or(lifted);
+            panes.push((RootPane::Centre, centre, Some(centre_width)));
+        }
+        if let Some(aside_width) = columns.aside.filter(|_| aside_in_row) {
             let aside = div()
                 .relative()
                 .h_full()
                 .flex_none()
-                .when(rtl, |aside| aside.pt(top_inset))
+                .w(aside_width)
+                .pt(top_inset)
                 .child(self.side_panel_element(aside_width));
-            row = row.child(Self::pane(aside, framed, radius, gap, &theme));
+            let (aside, lifted) = self.dockable(Self::pane(aside, framed, radius, gap, &theme), RootPane::Aside, docks, slot(RootPane::Aside), &theme, window, cx);
+            floating = floating.or(lifted);
+            panes.push((RootPane::Aside, aside, Some(aside_width)));
         }
-        row
+        panes.sort_by_key(|(pane, _, _)| RootPane::position(&order, *pane));
+        let kinds: Vec<RootPane> = panes.iter().map(|(pane, _, _)| *pane).collect();
+        let widths: Vec<Option<Pixels>> = panes.iter().map(|(_, _, width)| *width).collect();
+        let centre_at = kinds.iter().position(|pane| *pane == RootPane::Centre).unwrap_or(0);
+        let gap_before = |index: usize| index > 0 && kinds.get(index - 1) != kinds.get(index);
+        let end_pad = if framed { gap } else { gpui::px(0.0) };
+        let panes_move = self.pane_motion.is_running(RiseClock::monotonic());
+        let mut splitters: Vec<AnyElement> = Vec::new();
+        for (index, (pane, element, _)) in panes.into_iter().enumerate() {
+            if gap_before(index) {
+                row = row.child(div().flex_none().h_full().w(gap));
+                if !panes_move {
+                    let owner_leads = centre_at >= index;
+                    let owner = if owner_leads { kinds[index - 1] } else { pane };
+                    let edge = if owner_leads {
+                        let span = widths[..index].iter().map(|width| width.unwrap_or_default()).fold(gpui::px(0.0), |sum, width| sum + width);
+                        let gaps = (1..index).filter(|earlier| gap_before(*earlier)).count() as f32;
+                        SplitterEdge::FromStart(span + gap * gaps)
+                    } else {
+                        let span = widths[index..].iter().map(|width| width.unwrap_or_default()).fold(gpui::px(0.0), |sum, width| sum + width);
+                        let gaps = (index + 1..kinds.len()).filter(|later| gap_before(*later)).count() as f32;
+                        SplitterEdge::FromEnd(end_pad + span + gap * gaps)
+                    };
+                    splitters.push(self.pane_splitter(owner, owner_leads == rtl, edge, columns.list, gap, &theme, cx).into_any_element());
+                }
+            }
+            row = row.child(element);
+        }
+        let holes = if docks {
+            let viewport = window.viewport_size().width;
+            (0..kinds.len())
+                .filter_map(|index| {
+                    let width = widths[index]?;
+                    let span = widths[..index].iter().map(|width| width.unwrap_or_default()).fold(gpui::px(0.0), |sum, width| sum + width);
+                    let gaps = (1..=index).filter(|earlier| gap_before(*earlier)).count() as f32;
+                    let middle = rail_width + span + gap * gaps + width * 0.5;
+                    let middle = if rtl { viewport - middle } else { middle };
+                    Some((middle - gpui::px(PANE_GRIP_WIDTH * 0.5), middle + gpui::px(PANE_GRIP_WIDTH * 0.5)))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.title_bar.update(cx, |bar, cx| bar.set_drag_holes(holes, cx));
+        row.relative()
+            .children(splitters)
+            .children(floating)
+            .when(self.pane_motion.dragging().is_some(), |row| row.cursor_grabbing())
+            .on_drag_move(cx.listener(|view, event: &DragMoveEvent<AsideColumnDrag>, _window, cx| {
+                let pointer_x = event.event.position.x;
+                view.side_panel.update(cx, |panel, cx| panel.resize_to_pointer(pointer_x, cx));
+            }))
+            .on_drag_move(cx.listener(|view, event: &DragMoveEvent<RootPaneDrag>, _window, cx| {
+                view.drag_pane(event.event.position.x, cx);
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|view, _: &MouseUpEvent, _window, cx| view.end_column_gestures(cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|view, _: &MouseUpEvent, _window, cx| view.end_column_gestures(cx)))
     }
 
-    fn list_column_grip(
+    fn end_column_gestures(&mut self, cx: &mut Context<Self>) {
+        self.side_panel.update(cx, |panel, cx| panel.end_resize(cx));
+        self.end_pane_drag(cx);
+    }
+
+    fn displayed_pane_order(&self) -> [RootPane; 3] {
+        if self.pane_motion.dragging().is_none() {
+            return self.pane_order;
+        }
+        RootPane::merged_order(self.pane_order, &self.panes_in_row, &self.pane_motion.shown_order(&self.panes_in_row))
+    }
+
+    fn drag_pane(&mut self, pointer_x: Pixels, cx: &mut Context<Self>) {
+        let Some((pane, start_x)) = self.pane_press else {
+            return;
+        };
+        let direction = if LayoutDirection::current().is_right_to_left() { -1.0 } else { 1.0 };
+        let translation = f32::from(pointer_x - start_x) * direction;
+        let strides = self.pane_strides;
+        let stride = move |candidate: &RootPane| {
+            strides.iter().find(|(pane, _)| pane == candidate).map_or(0.0, |(_, stride)| *stride)
+        };
+        let reduce_motion = rise_ui::swiftui::environment::reduce_motion(cx);
+        let base = self.panes_in_row.clone();
+        self.pane_motion.drag(&pane, translation, &base, stride, RiseClock::monotonic(), reduce_motion);
+        cx.notify();
+    }
+
+    fn end_pane_drag(&mut self, cx: &mut Context<Self>) {
+        self.pane_press = None;
+        let reduce_motion = rise_ui::swiftui::environment::reduce_motion(cx);
+        let Some(shown) = self.pane_motion.end(RiseClock::monotonic(), reduce_motion) else {
+            return;
+        };
+        let order = RootPane::merged_order(self.pane_order, &self.panes_in_row, &shown);
+        if order != self.pane_order {
+            self.pane_order = order;
+            RootPane::store_order(order);
+        }
+        cx.notify();
+    }
+
+    /// a framed column lifts out by the grip at its top and follows the pointer, the others slide aside
+    /// a double click on the grip puts every column back
+    #[allow(clippy::too_many_arguments)]
+    fn dockable(
         &self,
-        list_width: Pixels,
-        rtl: bool,
+        pane_element: Div,
+        pane: RootPane,
+        docks: bool,
+        slot: PaneSlot,
+        theme: &rise_theme::AppTheme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> (AnyElement, Option<AnyElement>) {
+        if !docks {
+            return (pane_element.into_any_element(), None);
+        }
+        let dragged = self.pane_motion.dragging() == Some(&pane);
+        let others_move = self.pane_motion.dragging().is_some_and(|moving| *moving != pane);
+        let lift = self.pane_motion.lift(&pane, window);
+        let offset = self.pane_motion.offset(&pane, window);
+        let scale = window.scale_factor();
+        let snap = move |value: f32| gpui::px((value * scale).round() / scale);
+        let bar = theme.text.secondary;
+        let grip = div()
+            .absolute()
+            .top(gpui::px(2.0))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .id(SharedString::new_static(pane.group()))
+                    .w(gpui::px(PANE_GRIP_WIDTH))
+                    .h(gpui::px(12.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .occlude()
+                    .when(dragged, |grip| grip.cursor_grabbing())
+                    .when(!dragged, |grip| grip.cursor_grab())
+                    .tooltip_label(tr("desktop_pane_drag_hint"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, event: &MouseDownEvent, _, _| view.pane_press = Some((pane, event.position.x))),
+                    )
+                    .on_click(cx.listener(|view, event: &ClickEvent, _, cx| {
+                        if event.click_count() == 2 {
+                            view.reset_pane_order(cx);
+                        }
+                    }))
+                    .on_drag(RootPaneDrag, |_, _, _, cx| cx.new(|_| RootPaneDragGhost))
+                    .child(
+                        div()
+                            .w(gpui::px(40.0))
+                            .h(gpui::px(4.0))
+                            .rounded_full()
+                            .bg(bar.opacity(if dragged { 0.45 } else { 0.0 }))
+                            .group_hover(pane.group(), move |style| style.bg(bar.opacity(0.45))),
+                    ),
+            );
+        let pane_element = pane_element.group(pane.group()).when(!others_move, |element| element.child(grip));
+        let rtl = LayoutDirection::current().is_right_to_left();
+        if !dragged && lift <= 0.0 {
+            let shifted = pane_element
+                .when(rtl, |element| element.right(snap(offset)))
+                .when(!rtl, |element| element.left(snap(offset)));
+            return (shifted.into_any_element(), None);
+        }
+        let rise = snap(PANE_LIFT_RISE * lift);
+        let inset = slot.inset + snap(offset);
+        let lifted = div()
+            .absolute()
+            .top(slot.gap - rise)
+            .bottom(slot.gap + rise)
+            .w(slot.width)
+            .when(rtl, |float| float.right(inset))
+            .when(!rtl, |float| float.left(inset))
+            .child(pane_element.shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0.0, 0.0, 0.0, 0.08 + 0.22 * lift),
+                offset: gpui::point(gpui::px(0.0), gpui::px(1.0 + 13.0 * lift)),
+                blur_radius: gpui::px(6.0 + 30.0 * lift),
+                spread_radius: gpui::px(0.0),
+                inset: false,
+            }]));
+        let hole = div().flex_none().h_full().w(slot.width);
+        (hole.into_any_element(), Some(lifted.into_any_element()))
+    }
+
+    fn reset_pane_order(&mut self, cx: &mut Context<Self>) {
+        self.pane_press = None;
+        self.pane_motion.reset();
+        if self.pane_order == RootPane::DEFAULT_ORDER {
+            cx.notify();
+            return;
+        }
+        self.pane_order = RootPane::DEFAULT_ORDER;
+        RootPane::store_order(self.pane_order);
+        self.columns_fresh = true;
+        cx.notify();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pane_splitter(
+        &self,
+        owner: RootPane,
+        flipped: bool,
+        edge: SplitterEdge,
+        list_width: Option<Pixels>,
+        gap: Pixels,
         theme: &rise_theme::AppTheme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        div()
-            .id("root-list-column-grip")
+    ) -> impl IntoElement + use<> {
+        let reach = theme.panel.grip_width;
+        let leading = LayoutDirection::current().is_right_to_left();
+        let hitbox = div()
+            .id(("root-pane-splitter", owner as usize))
             .absolute()
             .top_0()
             .bottom_0()
-            .when(rtl, |grip| grip.left_0())
-            .when(!rtl, |grip| grip.right_0())
-            .w(theme.panel.grip_width)
+            .w(gap + reach)
+            .map(|hitbox| match edge {
+                SplitterEdge::FromStart(inset) if leading => hitbox.right(inset - reach * 0.5),
+                SplitterEdge::FromStart(inset) => hitbox.left(inset - reach * 0.5),
+                SplitterEdge::FromEnd(inset) if leading => hitbox.left(inset - reach * 0.5),
+                SplitterEdge::FromEnd(inset) => hitbox.right(inset - reach * 0.5),
+            })
             .occlude()
-            .cursor_col_resize()
-            .when(self.list_drag.is_some(), |grip| grip.bg(theme.primary._100))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
-                    view.begin_list_resize(event, list_width, rtl, cx);
+            .cursor_col_resize();
+        let hitbox = match (owner, list_width) {
+            (RootPane::List, Some(list_width)) => hitbox
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
+                        view.begin_list_resize(event, list_width, flipped, cx);
+                    }),
+                )
+                .on_drag(ListColumnDrag { start_x: gpui::px(0.0), start_width: list_width, rtl: flipped }, |_, _, _, cx| {
+                    cx.new(|_| ListColumnResizeGhost)
                 }),
-            )
-            .on_drag(
-                ListColumnDrag {
-                    start_x: gpui::px(0.0),
-                    start_width: list_width,
-                    rtl,
-                },
-                |_, _, _, cx| cx.new(|_| ListColumnResizeGhost),
-            )
+            _ => hitbox
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+                        view.side_panel.update(cx, |panel, cx| panel.begin_resize(event, cx));
+                    }),
+                )
+                .on_drag(AsideColumnDrag, |_, _, _, cx| cx.new(|_| ListColumnResizeGhost)),
+        };
+        hitbox
     }
 
     fn begin_list_resize(&mut self, event: &MouseDownEvent, list_width: Pixels, rtl: bool, cx: &mut Context<Self>) {
@@ -4186,6 +4620,7 @@ impl RootView {
             host(&hosts.comments_sheet_host),
             layer(RiseQRCodeModalHost::new()),
             host(&hosts.post_likes_sheet_host),
+            host(&hosts.poll_voters_sheet_host),
             layer(CommentPhotoPickerHost::new()),
             host(&hosts.map_photo_picker_host),
             host(&hosts.shorts_more_sheet_host),

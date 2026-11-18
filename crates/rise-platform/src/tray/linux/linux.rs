@@ -220,6 +220,7 @@ fn wire_properties(properties: &MenuProperties, names: &[String]) -> HashMap<Str
             let value = match property {
                 MenuProperty::Text(text) => Value::from(text.as_str()),
                 MenuProperty::Number(number) => Value::from(*number),
+                MenuProperty::Flag(flag) => Value::from(*flag),
             };
             Some(((*name).to_owned(), OwnedValue::try_from(value).ok()?))
         })

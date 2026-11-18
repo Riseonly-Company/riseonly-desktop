@@ -31,6 +31,7 @@ impl AppDelegate {
         RiseRTCCallSystemCoordinator::shared(cx).update(cx, |coordinator, cx| coordinator.start(cx));
 
         RiseDiagnostics::shared().install();
+        RiseDiagnostics::start_main_thread_beats(cx);
 
         AuthServicesStore::shared(cx);
         RiseMapRecorder::shared(cx).update(cx, |recorder, cx| recorder.resume_after_launch(cx));

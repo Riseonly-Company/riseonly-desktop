@@ -15,6 +15,10 @@ unsafe extern "C" {
 pub(super) struct NativeDeviceInfo;
 
 impl DeviceInfoSource for NativeDeviceInfo {
+    fn os_details(&self) -> OsDetails {
+        OsDetails { build: sysctl_string(c"kern.osversion").ok(), ..OsDetails::default() }
+    }
+
     fn hardware_model(&self) -> Result<HardwareModel, DeviceInfoUnavailable> {
         let identifier = sysctl_string(c"hw.model").map_err(|detail| {
             DeviceInfoUnavailable::SystemRefused {

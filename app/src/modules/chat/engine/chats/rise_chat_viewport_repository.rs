@@ -24,6 +24,7 @@ pub struct RiseChatViewportSnapshotRow {
     pub stamp: RiseConversationEntityStamp,
     pub chat: ChatInfo,
     pub content_version: i64,
+    pub geometry_version: i64,
 }
 
 /// page local payload window
@@ -41,6 +42,18 @@ fn chat_hash_value(chat: &ChatInfo) -> i64 {
     let mut hasher = DefaultHasher::new();
     format!("{chat:?}").hash(&mut hasher);
     hasher.finish() as i64
+}
+
+fn chat_geometry_version(chat: &ChatInfo) -> i64 {
+    let mut shape = chat.clone();
+    shape.participant.is_online = false;
+    shape.participant.last_seen = None;
+    shape.unread_count = 0;
+    shape.unread_mentions_count = 0;
+    shape.unread_replies_count = 0;
+    shape.unread_reactions_count = 0;
+    shape.has_live_voice = false;
+    chat_hash_value(&shape)
 }
 
 impl RiseChatRepository {
@@ -306,6 +319,7 @@ impl RiseChatRepository {
                 continue;
             }
             let content_version = chat_hash_value(&chat);
+            let geometry_version = chat_geometry_version(&chat);
             rows.push(RiseChatViewportSnapshotRow {
                 local_id: item.entity.local_id.clone(),
                 position: RiseEntityViewPosition::new(item.position_key.clone(), item.entity.local_id.clone()),
@@ -315,6 +329,7 @@ impl RiseChatRepository {
                 },
                 chat,
                 content_version,
+                geometry_version,
             });
         }
         Ok(rows)

@@ -115,8 +115,11 @@ impl RiseRTCStageListenerRow {
                 ),
             )
             .child(spacer_min_w(4.0))
-            .when(deafened, |row| row.children(IconUi::sized(RiseSymbol::DEAFENED, px(12.0), secondary, false)))
-            .when(muted, |row| row.children(IconUi::sized("mic.slash.fill", px(12.0), secondary, true)))
+            .when(deafened, |row| {
+                let color = if self.participant.server_deafened { theme.primary._100 } else { secondary };
+                row.children(IconUi::sized(RiseSymbol::DEAFENED, px(12.0), color, false))
+            })
+            .when(muted, |row| row.children(IconUi::sized("mic.slash.fill", px(12.0), theme.primary._100, true)))
             .when(!self.is_self, |row| {
                 let id = self.child_id("muted-for-me");
                 row.child(RiseRTCListenerVolumeContent::new(

@@ -5,6 +5,7 @@ use gpui::{App, Global};
 use rise_i18n::tr;
 
 use crate::core::widgets::notifier::notifier_upload_progress::NotifierUploadProgress;
+use crate::modules::music::shared::utils::music::music_local_folder_import::MusicLocalFolderImport;
 
 /// static banner and download maps of the upload notifier
 #[derive(Default)]
@@ -22,7 +23,7 @@ impl MusicTrackUploadNotifier {
 
     /// a retry after the network came back keeps the banner and its percent, no step back
     pub fn begin(temp_id: &str, cx: &mut App) {
-        if temp_id.is_empty() {
+        if temp_id.is_empty() || Self::owned_by_folder(temp_id, cx) {
             return;
         }
         let state = cx.default_global::<MusicTrackUploadNotifierState>();
@@ -49,6 +50,11 @@ impl MusicTrackUploadNotifier {
     }
 
     pub fn upload(temp_id: &str, completed: i64, total: i64, cx: &mut App) {
+        if total > 0 && Self::owned_by_folder(temp_id, cx) {
+            let fraction = completed as f64 / total as f64;
+            MusicLocalFolderImport::shared(cx).update(cx, |import, cx| import.member_progress(temp_id, fraction, cx));
+            return;
+        }
         let state = cx.default_global::<MusicTrackUploadNotifierState>();
         let Some(banner) = state.banners.get(temp_id).cloned() else {
             return;
@@ -66,12 +72,18 @@ impl MusicTrackUploadNotifier {
     }
 
     pub fn succeed(temp_id: &str, title: impl Into<String>, content: Option<String>, cx: &mut App) {
+        if Self::settle_folder_member(temp_id, true, cx) {
+            return;
+        }
         if let Some(banner) = Self::take(temp_id, cx) {
             banner.succeed(title, content, cx);
         }
     }
 
     pub fn fail(temp_id: &str, title: impl Into<String>, content: Option<String>, cx: &mut App) {
+        if Self::settle_folder_member(temp_id, false, cx) {
+            return;
+        }
         if let Some(banner) = Self::take(temp_id, cx) {
             banner.fail(title, content, cx);
         }
@@ -79,18 +91,34 @@ impl MusicTrackUploadNotifier {
 
     /// caller shows its own outcome or has none (cancel, account switch)
     pub fn finish(temp_id: &str, cx: &mut App) {
+        if Self::settle_folder_member(temp_id, false, cx) {
+            return;
+        }
         if let Some(banner) = Self::take(temp_id, cx) {
             banner.finish(cx);
         }
     }
 
     pub fn finish_all(cx: &mut App) {
+        MusicLocalFolderImport::shared(cx).update(cx, |import, cx| import.cancel_for_account_change(cx));
         let state = cx.default_global::<MusicTrackUploadNotifierState>();
         let all: Vec<Rc<NotifierUploadProgress>> = state.banners.drain().map(|(_, banner)| banner).collect();
         state.downloads.clear();
         for banner in all {
             banner.finish(cx);
         }
+    }
+
+    fn owned_by_folder(temp_id: &str, cx: &mut App) -> bool {
+        MusicLocalFolderImport::shared(cx).read(cx).owns(temp_id)
+    }
+
+    fn settle_folder_member(temp_id: &str, succeeded: bool, cx: &mut App) -> bool {
+        if !Self::owned_by_folder(temp_id, cx) {
+            return false;
+        }
+        MusicLocalFolderImport::shared(cx).update(cx, |import, cx| import.member_settled(temp_id, succeeded, cx));
+        true
     }
 
     fn take(temp_id: &str, cx: &mut App) -> Option<Rc<NotifierUploadProgress>> {

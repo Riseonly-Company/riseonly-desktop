@@ -115,7 +115,9 @@ fn main() {
     ]);
     builder.define("WEBRTC_APM_DEBUG_DUMP", "0");
 
-    println!("cargo:rustc-link-search=native={}", webrtc_lib.to_str().unwrap());
+    let link_dir =
+        if target_os == "linux" { isolate_ffmpeg_symbols(&webrtc_lib) } else { webrtc_lib.clone() };
+    println!("cargo:rustc-link-search=native={}", link_dir.to_str().unwrap());
 
     for (key, value) in webrtc_sys_build::webrtc_defines() {
         let value = value.as_deref();
@@ -332,6 +334,51 @@ fn main() {
     if target_os.as_str() == "android" {
         copy_libwebrtc_jar(&PathBuf::from(Path::new(&webrtc_dir)));
     }
+}
+
+const FFMPEG_PREFIXES: [&str; 13] = [
+    "av_", "avcodec_", "avdevice_", "avfilter_", "avformat_", "avio_", "avpriv_", "avsubtitle_",
+    "avutil_", "swr_", "swresample_", "sws_", "swscale_",
+];
+
+fn isolate_ffmpeg_symbols(webrtc_lib: &Path) -> PathBuf {
+    println!("cargo:rerun-if-env-changed=NM");
+    println!("cargo:rerun-if-env-changed=OBJCOPY");
+    let archive = webrtc_lib.join("libwebrtc.a");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap()).join("webrtc-isolated");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let nm = env::var("NM").unwrap_or_else(|_| "nm".to_owned());
+    let listed = Command::new(&nm)
+        .args(["-g", "--defined-only", "--format=posix"])
+        .arg(&archive)
+        .output()
+        .unwrap_or_else(|error| panic!("{nm} could not list {}: {error}", archive.display()));
+    if !listed.status.success() {
+        panic!("{nm} failed on {}: {}", archive.display(), String::from_utf8_lossy(&listed.stderr));
+    }
+    let mut renamed: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .filter(|line| !line.ends_with(':'))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| FFMPEG_PREFIXES.iter().any(|prefix| name.starts_with(prefix)))
+        .map(|name| format!("{name} lk_webrtc_{name}\n"))
+        .collect();
+    renamed.sort();
+    renamed.dedup();
+    let map = out_dir.join("ffmpeg-symbols.map");
+    std::fs::write(&map, renamed.concat()).unwrap();
+    let objcopy = env::var("OBJCOPY").unwrap_or_else(|_| "objcopy".to_owned());
+    let isolated = out_dir.join("libwebrtc.a");
+    let status = Command::new(&objcopy)
+        .arg(format!("--redefine-syms={}", map.display()))
+        .arg(&archive)
+        .arg(&isolated)
+        .status()
+        .unwrap_or_else(|error| panic!("{objcopy} could not rewrite {}: {error}", archive.display()));
+    if !status.success() {
+        panic!("{objcopy} failed to rename the FFmpeg symbols of {}", archive.display());
+    }
+    out_dir
 }
 
 fn copy_libwebrtc_jar(webrtc_dir: &PathBuf) {

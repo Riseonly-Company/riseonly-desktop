@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -10,6 +11,7 @@ use gpui::{
     ParentElement, PathBuilder, Pixels, Render, RenderOnce, Size, StyleRefinement, Styled, Subscription, Task, WeakEntity, Window, black,
     canvas, div, point, px, size, white,
 };
+use rise_canon::RiseLimits;
 use rise_core::foundation::foundation_url::Url;
 use rise_i18n::tr;
 use rise_media::video::av_player::{
@@ -22,6 +24,7 @@ use rise_ui::swiftui::progress_view::progress_view;
 use rise_ui::swiftui::shapes::{SwiftUiShapes, pass_through};
 use rise_ui::{IconUi, MainText};
 
+use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::lib::rise_call_app_volume::RiseCallAppVolume;
 use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, RiseSubscription};
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
@@ -38,6 +41,7 @@ use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStor
 use crate::modules::chat::stores::message::message_actions::message_types::RemoteMediaURL;
 use crate::modules::music::shared::utils::music::music_external_audio_owner::MusicExternalAudioOwner;
 use crate::modules::music::shared::utils::music::music_listening_interruption_gate::MusicListeningInterruptionGate;
+use crate::modules::music::shared::utils::music::music_output_volume::MusicOutputVolume;
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
 use crate::modules::post::components::post::post_music_playback_controller::PostMusicPlaybackController;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
@@ -137,6 +141,7 @@ pub struct ShortsPlaybackController {
     player: Option<WeakEntity<AVPlayer>>,
     player_layer_view: Option<SharedElementPlayerLayerView>,
     is_held: bool,
+    ended_count: u64,
 }
 
 /// event when set_held changed the hold
@@ -148,6 +153,11 @@ impl EventEmitter<ShortsPlaybackHoldChanged> for ShortsPlaybackController {}
 pub struct ShortsPlaybackTimeChanged;
 
 impl EventEmitter<ShortsPlaybackTimeChanged> for ShortsPlaybackController {}
+
+/// event when the video reached its end
+pub struct ShortsPlaybackEnded;
+
+impl EventEmitter<ShortsPlaybackEnded> for ShortsPlaybackController {}
 
 impl ShortsPlaybackController {
     pub fn new() -> Self {
@@ -196,6 +206,15 @@ impl ShortsPlaybackController {
         if !same {
             cx.notify();
         }
+    }
+
+    pub fn ended_count(&self) -> u64 {
+        self.ended_count
+    }
+
+    pub fn mark_ended(&mut self, cx: &mut Context<Self>) {
+        self.ended_count = self.ended_count.wrapping_add(1);
+        cx.emit(ShortsPlaybackEnded);
     }
 
     pub fn set_current_time(&mut self, current_time: f64, cx: &mut Context<Self>) {
@@ -264,10 +283,12 @@ struct ShortsFeedPlayerProps {
     paused: bool,
     playback: Option<Entity<ShortsPlaybackController>>,
     gravity_override: Option<AVLayerVideoGravity>,
+    page_size: Option<Size<Pixels>>,
     draws_opaque_background: bool,
     initial_aspect: Option<f32>,
     corner_radius: f32,
     loops: bool,
+    holds_at_end: bool,
     on_ended: Option<ShortsFeedPlayerAction>,
     on_aspect: Option<ShortsFeedPlayerAspect>,
     on_poster_aspect: Option<ShortsFeedPlayerAspect>,
@@ -275,8 +296,10 @@ struct ShortsFeedPlayerProps {
     persists_post_media_to_disk: bool,
     post_image_cache_policy: CleverImageCachePolicy,
     releases_player_on_disappear: bool,
-    on_audio_declined: Option<ShortsFeedPlayerAction>,
 }
+
+static FILL_MAX_CROP: LazyLock<f32> =
+    LazyLock::new(|| RiseLimits::client_value("shorts_fill_max_crop_percent") as f32 / 100.0);
 
 #[derive(IntoElement)]
 pub struct ShortsFeedPlayer {
@@ -285,8 +308,6 @@ pub struct ShortsFeedPlayer {
 }
 
 impl ShortsFeedPlayer {
-    pub const FILL_ASPECT_LIMIT: f32 = 0.6;
-
     pub fn new(id: impl Into<ElementId>, url: impl Into<String>, thumbnail_url: Option<String>, is_active: bool) -> Self {
         Self {
             id: id.into(),
@@ -301,10 +322,12 @@ impl ShortsFeedPlayer {
                 paused: false,
                 playback: None,
                 gravity_override: None,
+                page_size: None,
                 draws_opaque_background: true,
                 initial_aspect: None,
                 corner_radius: 0.0,
                 loops: true,
+                holds_at_end: false,
                 on_ended: None,
                 on_aspect: None,
                 on_poster_aspect: None,
@@ -312,17 +335,29 @@ impl ShortsFeedPlayer {
                 persists_post_media_to_disk: true,
                 post_image_cache_policy: CleverImageCachePolicy::Standard,
                 releases_player_on_disappear: false,
-                on_audio_declined: None,
             },
         }
     }
 
-    pub fn gravity(for_aspect: f32) -> AVLayerVideoGravity {
-        if for_aspect <= Self::FILL_ASPECT_LIMIT {
-            AVLayerVideoGravity::ResizeAspectFill
-        } else {
-            AVLayerVideoGravity::ResizeAspect
+    /// fills the page only when the crop stays within the canon share, else fits with bars
+    pub fn fills(aspect: f32, page: Size<Pixels>) -> bool {
+        let (width, height) = (f32::from(page.width), f32::from(page.height));
+        if !aspect.is_finite() || aspect <= 0.0 || width <= 0.0 || height <= 0.0 {
+            return false;
         }
+        let page_aspect = width / height;
+        let crop = if aspect > page_aspect { 1.0 - page_aspect / aspect } else { 1.0 - aspect / page_aspect };
+        crop <= *FILL_MAX_CROP
+    }
+
+    /// video gravity for the page shape, one rule for players, photos and flights
+    pub fn gravity(for_aspect: f32, page: Size<Pixels>) -> AVLayerVideoGravity {
+        if Self::fills(for_aspect, page) { AVLayerVideoGravity::ResizeAspectFill } else { AVLayerVideoGravity::ResizeAspect }
+    }
+
+    pub fn page_size(mut self, value: Size<Pixels>) -> Self {
+        self.props.page_size = Some(value);
+        self
     }
 
     pub fn shows_thumbnail_while_loading(mut self, value: bool) -> Self {
@@ -380,6 +415,11 @@ impl ShortsFeedPlayer {
         self
     }
 
+    pub fn holds_at_end(mut self, value: bool) -> Self {
+        self.props.holds_at_end = value;
+        self
+    }
+
     pub fn on_ended(mut self, action: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.props.on_ended = Some(Rc::new(action));
         self
@@ -415,10 +455,6 @@ impl ShortsFeedPlayer {
         self
     }
 
-    pub fn on_audio_declined(mut self, action: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        self.props.on_audio_declined = Some(Rc::new(action));
-        self
-    }
 }
 
 impl RenderOnce for ShortsFeedPlayer {
@@ -458,6 +494,7 @@ struct ShortsFeedPlayerState {
     landing_task: Option<Task<()>>,
     video_aspect: Option<f32>,
     gate: PlaybackGate,
+    held_at_end: bool,
     replay_count: i64,
     watch_emitted: bool,
     is_preparing_player: bool,
@@ -519,6 +556,7 @@ impl ShortsFeedPlayerState {
             landing_task: None,
             video_aspect: None,
             gate: PlaybackGate::default(),
+            held_at_end: false,
             replay_count: 0,
             watch_emitted: false,
             is_preparing_player: false,
@@ -566,7 +604,9 @@ impl ShortsFeedPlayerState {
         let old_is_active = self.props.is_active;
         let old_paused = self.props.paused;
         let old_is_muted = self.props.is_muted;
+        let old_holds_at_end = self.props.holds_at_end;
         let url_changed = self.props.url != props.url;
+        let old_gravity = self.current_gravity();
         let layout_changed = self.props.gravity_override != props.gravity_override
             || self.props.draws_opaque_background != props.draws_opaque_background
             || self.props.corner_radius != props.corner_radius
@@ -576,7 +616,7 @@ impl ShortsFeedPlayerState {
             || self.props.post_image_cache_policy != props.post_image_cache_policy;
         self.props = props;
         self.observe_hold(cx);
-        if layout_changed {
+        if layout_changed || old_gravity != self.current_gravity() {
             cx.notify();
         }
         if !self.is_appeared {
@@ -612,6 +652,9 @@ impl ShortsFeedPlayerState {
             }
             self.sync_playback(cx);
         }
+        if old_holds_at_end && !self.props.holds_at_end && self.held_at_end && self.gate.should_play {
+            self.play(cx);
+        }
         if url_changed {
             self.emit_video_watch_if_needed(cx);
             self.teardown(cx);
@@ -637,6 +680,9 @@ impl ShortsFeedPlayerState {
             self.unmuted_while_paused = !muted && !should_play;
             if !muted && should_play {
                 self.activate_playback_audio(false, cx);
+            }
+            if muted {
+                MusicOutputVolume::duck(&self.external_audio_owner.raw_value, false, cx);
             }
             self.push_music_state(cx);
         }
@@ -690,12 +736,19 @@ impl ShortsFeedPlayerState {
     /// aspect from the caller first,
     /// then the poster,
     /// else fill the page since most reels are 9:16
+    fn gravity_for(&self, aspect: f32) -> AVLayerVideoGravity {
+        match self.props.page_size {
+            Some(page) => ShortsFeedPlayer::gravity(aspect, page),
+            None => AVLayerVideoGravity::ResizeAspect,
+        }
+    }
+
     fn current_gravity(&self) -> AVLayerVideoGravity {
         if let Some(gravity_override) = self.props.gravity_override {
             return gravity_override;
         }
         match self.video_aspect.or(self.props.initial_aspect).or(self.poster_aspect) {
-            Some(aspect) => ShortsFeedPlayer::gravity(aspect),
+            Some(aspect) => self.gravity_for(aspect),
             None if self.props.draws_opaque_background => AVLayerVideoGravity::ResizeAspectFill,
             None => AVLayerVideoGravity::ResizeAspect,
         }
@@ -752,6 +805,7 @@ impl ShortsFeedPlayerState {
     }
 
     fn invalidate_external_audio(&self, cx: &mut App) {
+        MusicOutputVolume::duck(&self.external_audio_owner.raw_value, false, cx);
         let token = self.external_audio_owner.clone();
         MusicListeningInterruptionGate::shared(cx).update(cx, |gate, cx| gate.invalidate_prompt(token, cx));
         let owner = self.external_audio_owner.clone();
@@ -1042,6 +1096,14 @@ impl ShortsFeedPlayerState {
     }
 
     fn item_did_play_to_end(&mut self, player: &Entity<AVPlayer>, cx: &mut Context<Self>) {
+        if let Some(playback) = self.props.playback.clone() {
+            playback.update(cx, |playback, cx| playback.mark_ended(cx));
+        }
+        if self.props.holds_at_end {
+            self.held_at_end = true;
+            self.pause(cx);
+            return;
+        }
         if self.props.loops {
             self.replay_count += 1;
             let should_play = self.gate.should_play;
@@ -1125,7 +1187,7 @@ impl ShortsFeedPlayerState {
         let Some(player) = self.player.clone() else {
             return;
         };
-        if !self.gate.should_play {
+        if !self.gate.should_play || self.held_at_end {
             return;
         }
         let stuck = {
@@ -1205,8 +1267,6 @@ impl ShortsFeedPlayerState {
         let Some(overlay) = self.props.music_overlay.clone() else {
             return;
         };
-        let is_playing = is_playing
-            && MusicListeningInterruptionGate::shared(cx).update(cx, |gate, cx| gate.allows_external_audio_now(cx));
         cx.defer(move |cx| {
             PostMusicPlaybackController::shared(cx).update(cx, |controller, cx| {
                 controller.sync_to_video(
@@ -1280,6 +1340,12 @@ impl ShortsFeedPlayerState {
     }
 
     fn play(&mut self, cx: &mut Context<Self>) {
+        if self.held_at_end {
+            self.held_at_end = false;
+            if let Some(player) = self.player.clone() {
+                player.update(cx, |player, cx| player.seek(0.0, 0.0, 0.0, None, cx));
+            }
+        }
         if !self.props.is_muted {
             self.activate_playback_audio(!self.unmuted_while_paused, cx);
         }
@@ -1293,59 +1359,16 @@ impl ShortsFeedPlayerState {
         if let Some(player) = self.player.clone() {
             player.update(cx, |player, cx| player.pause(cx));
         }
+        MusicOutputVolume::duck(&self.external_audio_owner.raw_value, false, cx);
     }
 
-    fn set_player_muted(&self, muted: bool, cx: &mut App) {
-        if let Some(player) = self.player.clone() {
-            player.update(cx, |player, cx| player.set_is_muted(muted, cx));
-        }
-    }
-
-    fn activate_playback_audio(&mut self, autoplay: bool, cx: &mut Context<Self>) {
-        let retry: Rc<dyn Fn(&mut App)> = {
-            let weak = cx.weak_entity();
-            Rc::new(move |cx| {
-                weak.update(cx, |this, cx| {
-                    if !this.should_play(cx) || this.props.is_muted {
-                        return;
-                    }
-                    this.activate_playback_audio(false, cx);
-                    this.set_player_muted(this.props.is_muted, cx);
-                })
-                .ok();
-            })
-        };
-        let on_cancel: Rc<dyn Fn(&mut App)> = {
-            let weak = cx.weak_entity();
-            Rc::new(move |cx| {
-                weak.update(cx, |this, cx| {
-                    this.set_player_muted(true, cx);
-                    this.audio_declined(cx);
-                })
-                .ok();
-            })
-        };
-        let token = self.external_audio_owner.clone();
-        let allowed = MusicListeningInterruptionGate::shared(cx)
-            .update(cx, |gate, cx| gate.request_external_playback(Some(token), autoplay, retry, Some(on_cancel), cx));
-        if !allowed {
-            self.set_player_muted(true, cx);
-            if autoplay && MusicListeningInterruptionGate::shared(cx).read(cx).prompt().is_none() {
-                self.audio_declined(cx);
-            }
-            return;
-        }
-        let owner = self.external_audio_owner.clone();
-        MusicPlayerState::shared(cx).update(cx, |state, cx| state.suspend_for_external_audio(owner, true, cx));
-    }
-
-    fn audio_declined(&self, cx: &mut Context<Self>) {
-        if let Some(on_audio_declined) = self.props.on_audio_declined.clone() {
-            self.deliver(move |window, cx| on_audio_declined(window, cx), cx);
-        }
+    /// desktop plays a reel over the music and over a call, it asks nothing and mutes nothing
+    fn activate_playback_audio(&mut self, _autoplay: bool, cx: &mut Context<Self>) {
+        MusicOutputVolume::duck(&self.external_audio_owner.raw_value, true, cx);
     }
 
     fn teardown(&mut self, cx: &mut Context<Self>) {
+        self.held_at_end = false;
         self.setup_generation = self.setup_generation.wrapping_add(1);
         self.setup_task = None;
         self.landing_task = None;
@@ -1412,7 +1435,7 @@ impl ShortsFeedPlayerState {
     fn cover(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let poster = RemoteMediaURL::display_source(&self.props.url, self.props.thumbnail_url.as_deref());
         let settled_gravity = self.props.gravity_override.or_else(|| {
-            self.video_aspect.or(self.props.initial_aspect).or(self.poster_aspect).map(ShortsFeedPlayer::gravity)
+            self.video_aspect.or(self.props.initial_aspect).or(self.poster_aspect).map(|aspect| self.gravity_for(aspect))
         });
         let content_mode = if settled_gravity == Some(AVLayerVideoGravity::ResizeAspectFill) {
             ContentMode::Fill

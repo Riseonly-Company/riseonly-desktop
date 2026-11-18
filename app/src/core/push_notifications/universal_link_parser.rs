@@ -260,6 +260,14 @@ impl UniversalLinkParser {
             return Some(RiseonlyPublicLink::MapInvite { token });
         }
 
+        if routes.contains(&RouteKind::MyReport) {
+            if segments.len() != 2 {
+                return None;
+            }
+            let report_id = RiseonlyUniversalLink::canonical_resource_id(&segments[1])?;
+            return Some(RiseonlyPublicLink::MyReport { report_id });
+        }
+
         if routes.contains(&RouteKind::StickerPackInvite) {
             if segments.len() != 2 {
                 return None;

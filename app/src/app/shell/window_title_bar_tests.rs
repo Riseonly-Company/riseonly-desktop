@@ -8,9 +8,9 @@ use rise_theme::ShellMetrics;
 
 use crate::app::router::navigation_types::{MainTab, RootRoute};
 
-use super::window_title_bar::draws_under_window_controls;
+use super::window_title_bar::{controls_dock_in_rail, drag_segments, draws_under_window_controls};
 use super::window_title_bar::{
-    LINUX_MENU_BAR_KEYSTROKES, WINDOWS_MENU_BAR_KEYSTROKES, drag_moves_window, granted_chrome,
+    WINDOWS_MENU_BAR_KEYSTROKES, drag_moves_window, granted_chrome,
     linux_caption_icon, menu_bar_keystrokes, rail_control_layout, shell_chrome,
     strip_handles_double_click, windows_caption_font, windows_caption_glyph,
 };
@@ -180,10 +180,10 @@ fn a_window_that_cannot_grow_shows_no_maximize_button() {
 }
 
 #[test]
-fn only_a_client_decorated_linux_strip_starts_a_window_move() {
+fn the_strip_moves_the_window_where_the_app_owns_the_titlebar() {
     assert!(
-        !drag_moves_window(HostOs::MacOs, DecorationMode::ServerSide),
-        "AppKit keeps its own titlebar drag"
+        drag_moves_window(HostOs::MacOs, DecorationMode::ServerSide),
+        "the shell strip owns the macOS titlebar drag"
     );
     assert!(
         !drag_moves_window(HostOs::Windows, DecorationMode::ServerSide),
@@ -197,8 +197,8 @@ fn only_a_client_decorated_linux_strip_starts_a_window_move() {
 }
 
 #[test]
-fn macos_leaves_the_double_click_to_appkit() {
-    assert!(!strip_handles_double_click(HostOs::MacOs));
+fn every_strip_handles_its_own_double_click() {
+    assert!(strip_handles_double_click(HostOs::MacOs));
     assert!(strip_handles_double_click(HostOs::Windows));
     assert!(strip_handles_double_click(HostOs::Linux));
 }
@@ -213,17 +213,13 @@ fn the_menu_keys_exist_only_without_a_system_menu_bar() {
         menu_bar_keystrokes(HostOs::Windows, false),
         &WINDOWS_MENU_BAR_KEYSTROKES
     );
-    assert_eq!(
-        menu_bar_keystrokes(HostOs::Linux, false),
-        &LINUX_MENU_BAR_KEYSTROKES
-    );
+    assert!(menu_bar_keystrokes(HostOs::Linux, false).is_empty());
 }
 
 #[test]
 fn only_windows_opens_the_menu_on_a_lone_alt() {
     assert!(WINDOWS_MENU_BAR_KEYSTROKES.contains(&"alt"));
     assert!(WINDOWS_MENU_BAR_KEYSTROKES.contains(&"f10"));
-    assert_eq!(LINUX_MENU_BAR_KEYSTROKES, ["f10"]);
 }
 
 #[test]
@@ -304,4 +300,22 @@ fn the_gaps_give_way_before_the_buttons_shrink() {
     let windows = rail_control_layout(ControlLayout::for_host(HostOs::Windows), 3, 90.0);
     assert_eq!(windows.button_width, 30.0);
     assert_eq!(windows.gap, 0.0);
+}
+
+#[test]
+fn only_macos_keeps_its_window_buttons_in_the_rail() {
+    assert!(controls_dock_in_rail(HostOs::MacOs));
+    assert!(!controls_dock_in_rail(HostOs::Windows));
+    assert!(!controls_dock_in_rail(HostOs::Linux));
+}
+
+#[test]
+fn the_drag_strip_leaves_a_hole_for_each_grip() {
+    let px = gpui::px;
+    let holes = vec![(px(500.0), px(564.0)), (px(100.0), px(164.0)), (px(-10.0), px(20.0))];
+    assert_eq!(
+        drag_segments(px(800.0), &holes),
+        vec![(px(20.0), px(100.0)), (px(164.0), px(500.0)), (px(564.0), px(800.0))]
+    );
+    assert_eq!(drag_segments(px(800.0), &[]), vec![(px(0.0), px(800.0))]);
 }

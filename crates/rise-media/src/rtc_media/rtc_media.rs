@@ -417,17 +417,27 @@ pub const fn speaker_flush_interval(under_pressure: bool) -> Duration {
 pub struct RemotePlayout {
     pub deafened: bool,
     pub gains: HashMap<String, f64>,
+    pub stream_gains: HashMap<String, f64>,
 }
 
 impl RemotePlayout {
     /// volume a remote audio track of this user plays at
     /// deafen beats every gain, a person turned up to 200% must not be the one exception to i hear nobody
     pub fn volume_for(&self, user_id: Option<&str>) -> f64 {
-        if self.deafened {
+        Self::gain_in(&self.gains, self.deafened, user_id)
+    }
+
+    /// volume of the sound of this users screen share, set apart from their voice
+    pub fn stream_volume_for(&self, user_id: Option<&str>) -> f64 {
+        Self::gain_in(&self.stream_gains, self.deafened, user_id)
+    }
+
+    fn gain_in(gains: &HashMap<String, f64>, deafened: bool, user_id: Option<&str>) -> f64 {
+        if deafened {
             return 0.0;
         }
         user_id
-            .and_then(|id| self.gains.get(id))
+            .and_then(|id| gains.get(id))
             .copied()
             .filter(|gain| gain.is_finite() && *gain >= 0.0)
             .unwrap_or(1.0)
@@ -435,7 +445,7 @@ impl RemotePlayout {
 
     /// whether participant metadata has to be read at all, an ordinary room moves nobody
     pub fn resolves_per_listener(&self) -> bool {
-        !self.deafened && !self.gains.is_empty()
+        !self.deafened && (!self.gains.is_empty() || !self.stream_gains.is_empty())
     }
 }
 
@@ -1237,6 +1247,7 @@ pub struct PlayoutMixer {
 #[derive(Debug, Default)]
 struct MixerTrack {
     user_id: Option<String>,
+    is_stream: bool,
     queue: std::collections::VecDeque<f32>,
 }
 
@@ -1254,10 +1265,20 @@ impl PlayoutMixer {
     }
 
     pub fn add_track(&mut self, key: &str, user_id: Option<String>) {
+        self.insert_track(key, user_id, false);
+    }
+
+    /// track of a screen share sound, it plays at the stream volume and not the voice one
+    pub fn add_stream_track(&mut self, key: &str, user_id: Option<String>) {
+        self.insert_track(key, user_id, true);
+    }
+
+    fn insert_track(&mut self, key: &str, user_id: Option<String>, is_stream: bool) {
         self.tracks.insert(
             key.to_owned(),
             MixerTrack {
                 user_id,
+                is_stream,
                 queue: std::collections::VecDeque::new(),
             },
         );
@@ -1297,7 +1318,9 @@ impl PlayoutMixer {
     pub fn mix_into(&mut self, out: &mut [f32], playout: &RemotePlayout) {
         out.fill(0.0);
         for track in self.tracks.values_mut() {
-            let volume = playout.volume_for(track.user_id.as_deref()) as f32;
+            let user_id = track.user_id.as_deref();
+            let volume =
+                if track.is_stream { playout.stream_volume_for(user_id) } else { playout.volume_for(user_id) } as f32;
             let take = out.len().min(track.queue.len());
             for (slot, sample) in out.iter_mut().zip(track.queue.drain(..take)) {
                 *slot += sample * volume;

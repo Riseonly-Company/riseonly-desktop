@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{App, Context, Entity, Task};
@@ -34,6 +35,7 @@ use crate::modules::music::shared::utils::music::featured_profile_track_store::{
 use crate::modules::music::shared::utils::music::music_audio_effect_settings::MusicAudioEffectKind;
 use crate::modules::music::shared::utils::music::music_liked_tracks_queue_continuation::MusicLikedTracksQueueContinuation;
 use crate::modules::music::shared::utils::music::music_local_state::MusicLocalState;
+use crate::modules::music::shared::utils::music::music_local_folder_import::MusicLocalFolderImport;
 use crate::modules::music::shared::utils::music::music_local_track_draft_store::{
     MusicLocalTrackDraftCreationObserver, MusicLocalTrackDraftStore,
 };
@@ -1162,6 +1164,11 @@ impl MusicInteractionsStore {
                 cx,
             );
         });
+    }
+
+    pub fn import_local_folder(&mut self, folder: PathBuf, playlist_id: &str, cx: &mut Context<Self>) {
+        let playlist_id = playlist_id.to_owned();
+        MusicLocalFolderImport::shared(cx).update(cx, |import, cx| import.start(folder, playlist_id, cx));
     }
 
     pub fn clear_local_track_creation_observer(&mut self, temp_id: &str, cx: &mut Context<Self>) {

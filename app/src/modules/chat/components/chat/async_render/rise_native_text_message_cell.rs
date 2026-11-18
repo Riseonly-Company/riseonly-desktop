@@ -34,6 +34,9 @@ use rise_ui::swiftui::transition::TransitionModifiers;
 use rise_ui::view_anchor_probe::{ViewAnchorProbe, ViewAnchorProbeExt};
 use rise_ui::view_screen_snapshot::ViewScreenSource;
 
+use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_types::{
+    RiseManualListTextSweepRole, RiseManualListTextSweepSlot,
+};
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::{
     HoldContextMenuActionHandler, HoldContextMenuEmojiHandler, HoldContextMenuPresenter, HoldContextMenuRequest,
     HoldContextMenuRequestID, HoldContextMenuSourceLift,
@@ -158,6 +161,7 @@ struct RiseNativeTextMessageBubbleSource {
     allows_text_selection: bool,
     can_double_tap: Option<RiseNativeTextMessageCanDoubleTap>,
     selection: Rc<RefCell<TextSelection>>,
+    swept: Rc<Cell<bool>>,
     focus_handle: FocusHandle,
 }
 
@@ -174,6 +178,7 @@ impl RiseNativeTextMessageBubbleSource {
             allows_text_selection: false,
             can_double_tap: None,
             selection: Rc::new(RefCell::new(TextSelection::default())),
+            swept: Rc::new(Cell::new(false)),
             focus_handle: cx.focus_handle(),
         }
     }
@@ -227,11 +232,64 @@ impl RiseNativeTextMessageBubbleSource {
         }
     }
 
+    fn sweep_item_id(layout: &AsyncTextBubblePreparedLayout) -> String {
+        format!("msg-{}", layout.seed.id)
+    }
+
+    fn apply_text_sweep(
+        layout: &AsyncTextBubblePreparedLayout,
+        selection: &Rc<RefCell<TextSelection>>,
+        swept: &Cell<bool>,
+        origin: Point<Pixels>,
+        cx: &App,
+    ) {
+        let text = &layout.seed.text;
+        let item_id = Self::sweep_item_id(layout);
+        let Some(sweep) = RiseManualListTextSweepSlot::current(cx) else {
+            if swept.replace(false) {
+                selection.borrow_mut().clear();
+            }
+            return;
+        };
+        match sweep.role(&item_id) {
+            Some(RiseManualListTextSweepRole::Full) => {
+                let mut selection = selection.borrow_mut();
+                if selection.range() != (0..text.len()) {
+                    selection.select_all(text);
+                }
+                swept.set(true);
+            }
+            Some(RiseManualListTextSweepRole::Focus) => {
+                let index = text_index_at(layout, sweep.pointer - origin);
+                let from = if sweep.downward { 0 } else { text.len() };
+                let mut selection = selection.borrow_mut();
+                selection.press(text, from, 1, false);
+                selection.drag_to(text, index);
+                selection.release();
+                swept.set(true);
+                if let Some(selected) = selection.selected_text(text) {
+                    sweep.parts.borrow_mut().insert(item_id, selected.to_owned());
+                }
+            }
+            Some(RiseManualListTextSweepRole::Anchor) => {
+                if let Some(selected) = selection.borrow().selected_text(text) {
+                    sweep.parts.borrow_mut().insert(item_id, selected.to_owned());
+                }
+            }
+            None => {
+                if swept.replace(false) {
+                    selection.borrow_mut().clear();
+                }
+            }
+        }
+    }
+
     fn install_selection_listeners(
         hitbox: &Hitbox,
         prepared_layout: &Arc<AsyncTextBubblePreparedLayout>,
         origin: &Rc<Cell<Point<Pixels>>>,
         selection: &Rc<RefCell<TextSelection>>,
+        swept: &Rc<Cell<bool>>,
         focus_handle: &FocusHandle,
         can_double_tap: Option<RiseNativeTextMessageCanDoubleTap>,
         window: &mut Window,
@@ -240,6 +298,7 @@ impl RiseNativeTextMessageBubbleSource {
             let hitbox = hitbox.clone();
             let layout = prepared_layout.clone();
             let selection = selection.clone();
+            let swept = swept.clone();
             let focus = focus_handle.clone();
             let origin = origin.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
@@ -256,6 +315,7 @@ impl RiseNativeTextMessageBubbleSource {
                     return;
                 }
                 mark_selectable_text_press(event.position, cx);
+                swept.set(false);
                 let click_count =
                     if can_double_tap.as_ref().is_some_and(|can| can(cx)) { 1 } else { event.click_count };
                 let index = text_index_at(&layout, event.position - origin.get());
@@ -417,15 +477,17 @@ impl Render for RiseNativeTextMessageBubbleSource {
             {
                 let layout = prepared_layout.clone();
                 let selection = self.selection.clone();
+                let swept = self.swept.clone();
                 let focus_handle = self.focus_handle.clone();
                 let can_double_tap = self.can_double_tap.clone();
                 let allows_text_selection = self.allows_text_selection;
                 let (border_width, border_color) = (self.border_width, self.border_color);
-                move |bounds, (hitbox, origin): (Hitbox, Rc<Cell<Point<Pixels>>>), window, _cx| {
+                move |bounds, (hitbox, origin): (Hitbox, Rc<Cell<Point<Pixels>>>), window, cx| {
                     Self::paint_border(corners, border_width, border_color, bounds, window);
                     if !allows_text_selection {
                         return;
                     }
+                    Self::apply_text_sweep(&layout, &selection, &swept, origin.get(), cx);
                     for rect in selection_highlight_rects(&layout, selection.borrow().range()) {
                         window.paint_quad(fill(rect + bounds.origin, selection_color));
                     }
@@ -435,6 +497,7 @@ impl Render for RiseNativeTextMessageBubbleSource {
                         &layout,
                         &origin,
                         &selection,
+                        &swept,
                         &focus_handle,
                         can_double_tap,
                         window,
@@ -448,6 +511,7 @@ impl Render for RiseNativeTextMessageBubbleSource {
 
         let copied = self.selection.clone();
         let copied_layout = prepared_layout.clone();
+        let copied_item_id = Self::sweep_item_id(&prepared_layout);
         let selected_all = self.selection.clone();
         let selected_all_layout = prepared_layout.clone();
         div()
@@ -458,6 +522,13 @@ impl Render for RiseNativeTextMessageBubbleSource {
             .track_focus(&self.focus_handle)
             .key_context(input_actions::KEY_CONTEXT)
             .on_action(move |_: &input_actions::Copy, _window, cx| {
+                let swept_text = RiseManualListTextSweepSlot::current(cx)
+                    .filter(|sweep| sweep.role(&copied_item_id).is_some())
+                    .and_then(|sweep| sweep.copy_text());
+                if let Some(text) = swept_text {
+                    UIPasteboard::general().set_string(&text, cx);
+                    return;
+                }
                 match copied.borrow().selected_text(&copied_layout.seed.text) {
                     Some(selected) => UIPasteboard::general().set_string(selected, cx),
                     None => cx.propagate(),

@@ -13,7 +13,7 @@ use crate::core::rise_engine_bridge::rise_engine_app_runtime::RiseColdOpenTrace;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::modules::chat::components::chat::async_render::chat_message_render_snapshot::{ChatMessageRenderEntryKind, ChatMessageRenderPreparationSeed, ChatMessageRenderRequestKey, ChatMessageRenderRequestPolicy, ChatMessageRenderRequestPolicyAction, ChatMessageRenderSnapshot};
 use crate::modules::chat::components::chat::async_render::chat_performance_trace::ChatPerformanceTrace;
-use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_types::{RiseManualListScrollAnimationPolicy, RiseManualListSelectionItem, RiseManualListSelectionLayout, RiseManualListSelectionPresentation, RiseManualListSelectionPresentationOnToggle, RiseManualListTransaction, RiseManualListTransactionAnchor, RiseManualListTransactionJumpAnimation, RiseManualListTransactionUpdateAnimation};
+use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_types::{RiseManualListDragSelectionStart, RiseManualListTextSource, RiseManualListScrollAnimationPolicy, RiseManualListSelectionItem, RiseManualListSelectionLayout, RiseManualListSelectionPresentation, RiseManualListSelectionPresentationOnToggle, RiseManualListTransaction, RiseManualListTransactionAnchor, RiseManualListTransactionJumpAnimation, RiseManualListTransactionUpdateAnimation};
 use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_view::RiseManualListView;
 use crate::modules::chat::components::chat::message_list::MessageList;
 use crate::modules::chat::components::chat::async_render::async_text_bubble_predisplay::AsyncTextBubblePredisplayCache;
@@ -257,16 +257,41 @@ impl RiseMessageManualListView {
     #[allow(clippy::too_many_arguments)]
     pub fn apply_selection_presentation(
         &mut self,
-        snapshot: &ChatMessageRenderSnapshot,
+        snapshot: &Arc<ChatMessageRenderSnapshot>,
         chat: &ChatInfo,
         allows_message_selection: bool,
         message_selection_active: bool,
         selected_message_ids: &HashSet<String>,
         tint_color: Hsla,
         on_toggle_message_selection: Option<RiseMessageListViewToggleSelectionHandler>,
+        on_begin_message_selection: Option<RiseMessageListViewToggleSelectionHandler>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let drag_start = on_begin_message_selection
+            .filter(|_| allows_message_selection && !message_selection_active)
+            .map(|callback| {
+                let snapshot = snapshot.clone();
+                Rc::new(move |item_id: &str, window: &mut Window, cx: &mut App| {
+                    let message = snapshot
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == item_id && entry.kind == ChatMessageRenderEntryKind::Message)
+                        .and_then(|entry| entry.message.clone());
+                    if let Some(message) = message {
+                        callback(&message, window, cx);
+                    }
+                }) as RiseManualListDragSelectionStart
+            });
+        let text_snapshot = snapshot.clone();
+        let text_source: RiseManualListTextSource = Rc::new(move |item_id: &str| {
+            let message = text_snapshot.entries.iter().find(|entry| entry.id == item_id)?.message.clone()?;
+            Some((message.sender_name.clone(), message.text.clone()))
+        });
+        self.list_view.update(cx, |list_view, _| {
+            list_view.set_drag_selection_start(drag_start);
+            list_view.set_text_source(Some(text_source));
+        });
         if !allows_message_selection || !message_selection_active {
             self.list_view.update(cx, |list_view, cx| {
                 list_view.apply_selection_presentation(RiseManualListSelectionPresentation::inactive(), window, cx);

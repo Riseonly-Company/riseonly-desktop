@@ -24,12 +24,11 @@ impl PostFeedMediaPrefetchPolicy {
 
     pub const AVATAR_PIXEL_DIMENSION: i64 = 120;
 
-    pub const POSTER_PIXEL_DIMENSION: Option<i64> = None;
+    pub const POSTER_PIXEL_DIMENSION: Option<i64> = Some(1536);
 
-    pub const PHOTO_PIXEL_DIMENSION: Option<i64> = Some(2048);
+    pub const PHOTO_PIXEL_DIMENSION: Option<i64> = Some(1536);
 
-    /// memory bucket of one gallery slide, the one its warm-up decoded
-    /// posters full size, photos capped
+    /// memory bucket of one gallery slide, 1536 px fills the 600 point column on retina
     pub fn slide_pixel_dimension(is_video: bool) -> Option<i64> {
         if is_video {
             Self::POSTER_PIXEL_DIMENSION

@@ -286,6 +286,7 @@ pub enum RootRoute {
     MapJourneyComposer,
     MapJourney { post_id: i64 },
     MapFriends,
+    MapProfile,
     MapSettings,
     MapSettingsSection(MapSettingsSection),
 }
@@ -315,7 +316,10 @@ impl RootRoute {
                 RisePostProfileKind::Riffs => {
                     return RootRoute::ShortViewer { post: post.clone(), origin, sound_track_id: None };
                 }
-                RisePostProfileKind::Reposts | RisePostProfileKind::Mentions | RisePostProfileKind::Favorites => {
+                RisePostProfileKind::Reposts
+                | RisePostProfileKind::Mentions
+                | RisePostProfileKind::Favorites
+                | RisePostProfileKind::Liked => {
                     return if post.is_riff {
                         RootRoute::ShortViewer { post: post.clone(), origin, sound_track_id: None }
                     } else {
@@ -612,6 +616,7 @@ impl RootRoute {
             RootRoute::MapJourneyComposer => "MapJourneyComposer",
             RootRoute::MapJourney { .. } => "MapJourney",
             RootRoute::MapFriends => "MapFriends",
+            RootRoute::MapProfile => "MapProfile",
             RootRoute::MapSettings => "MapSettings",
             RootRoute::MapSettingsSection(section) => return format!("MapSettings.{}", section.raw_value()),
         };

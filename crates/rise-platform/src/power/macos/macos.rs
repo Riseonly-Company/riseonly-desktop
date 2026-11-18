@@ -149,6 +149,7 @@ fn internal_battery(description: &NSDictionary<NSString, AnyObject>) -> Option<B
     Some(BatteryReading {
         percent,
         state: BatteryState::from_power_source(on_external_power, is_charged),
+        present: Some(true),
     })
 }
 

@@ -35,6 +35,7 @@ use crate::modules::media_picker::shared::media_picker_recent_files::{
 use crate::modules::media_picker::ui::media_picker_header_icon_button::MediaPickerHeaderIconButton;
 use crate::modules::media_picker::ui::media_picker_session::MediaPickerAudioDraft;
 use crate::modules::media_picker::ui::media_picker_sheet::MediaPickerSheet;
+use crate::modules::media_picker::ui::media_picker_screen::MediaPickerScreen;
 
 /// no matched geometry here so the search field grows out of the magnifier slot
 /// the close button slides across the header, one spring over the measured header width
@@ -215,7 +216,7 @@ impl MediaPickerDocumentSourcePage {
         .absolute()
         .size_full();
 
-        div().w_full().px(px(14.0)).py(px(10.0)).bg(theme.bg._100).child(
+        div().w_full().px(px(14.0)).py(px(10.0)).child(
             div()
                 .relative()
                 .w_full()
@@ -312,22 +313,24 @@ impl RenderOnce for MediaPickerDocumentSourcePage {
         };
 
         let header = self.header(&theme, &state, window, cx);
-        vstack(0.0)
+        div()
+            .relative()
             .size_full()
             .bg(theme.bg._100)
-            .child(header)
             .child(
-                div().flex_1().min_h_0().w_full().child(
-                    scroll_view(self.child_id("scroll")).child(
+                div().absolute().inset_0().child(
+                    scroll_view(self.child_id("scroll")).size_full().child(
                         vstack(18.0)
                             .w_full()
-                            .pt(px(10.0))
+                            .pt(px(MediaPickerScreen::SOURCE_PAGE_HEADER_HEIGHT + 10.0))
                             .pb(px(108.0))
                             .child(GroupedBtns::new(self.child_id("choose"), vec![self.choose_button(&theme)]))
                             .child(recent_section),
                     ),
                 ),
             )
+            .child(MediaPickerScreen::header_chrome_layer(MediaPickerScreen::SOURCE_PAGE_CHROME_EXTENT, theme.bg._100, cx))
+            .child(div().absolute().top_0().left_0().right_0().child(header))
     }
 }
 

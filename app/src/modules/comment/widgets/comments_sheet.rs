@@ -18,13 +18,13 @@ use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_i18n::tr;
 use rise_platform::haptics::{ImpactStyle, impact};
 use rise_platform::pasteboard::UIPasteboard;
-use rise_theme::{AppTheme, ShellMetrics, ThemeStore};
+use rise_theme::{AppTheme, ThemeStore};
 use rise_ui::IconUi;
 use rise_ui::bottom_sheet_ui::bottom_sheet_metrics::BottomSheetMetrics;
 use rise_ui::context_menu_ui::{ContextMenuItem, ContextMenuUi};
 use rise_ui::hold_context_menu_ui::hold_context_menu_types::{HoldContextMenuAction, HoldContextMenuAlignment};
 use rise_ui::main_text::{MainText, TextAlignT};
-use rise_ui::page_header_toolbar_button::PageHeaderMetrics;
+use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
 use rise_ui::rise_symbol::RiseSymbol;
 use rise_ui::scroll_edge_blur_ui::{ScrollEdgeBlurFalloff, ScrollEdgeBlurUi};
 use rise_ui::scroll_chrome_shadow_ui::{
@@ -136,6 +136,7 @@ struct CommentsSheetState {
     picker_lift: f32,
     content_width: f32,
     thread_presence: Animated<f32>,
+    thread_close_jumps: bool,
     presented_root: Option<GetCommentsResponse>,
     thread_close_spec: Option<MotionSpec>,
     sort_menu_presented: Rc<Cell<bool>>,
@@ -166,6 +167,7 @@ impl CommentsSheetState {
             picker_lift: 0.0,
             content_width: 1.0,
             thread_presence: Animated::new(0.0),
+            thread_close_jumps: false,
             presented_root: None,
             thread_close_spec: None,
             sort_menu_presented: Rc::new(Cell::new(false)),
@@ -186,7 +188,7 @@ impl CommentsSheetState {
         let target = if root.is_some() { 1.0 } else { 0.0 };
         if *self.thread_presence.target() != target {
             let spec = self.thread_close_spec.take().unwrap_or_else(|| spring(0.34, 0.88));
-            if docked {
+            if docked || std::mem::take(&mut self.thread_close_jumps) {
                 self.thread_presence.jump(target);
             } else {
                 self.thread_presence.set_in(target, spec, now, cx);
@@ -220,31 +222,50 @@ impl CommentsSheet {
     const HANDLE_CLEARANCE: f32 =
         BottomSheetMetrics::HANDLE_TOP_PADDING + BottomSheetMetrics::HANDLE_HEIGHT + BottomSheetMetrics::HANDLE_BOTTOM_PADDING;
     const HEADER_FADE: f32 = 12.0;
+    const TITLE_ROW_HEIGHT: f32 = 20.0;
+    const SUBTITLE_ROW_HEIGHT: f32 = 14.0;
+    const SUBTITLE_GAP: f32 = 1.0;
+    const HEADER_BOTTOM_PADDING: f32 = 6.0;
     const FOOTER_BLUR_RADIUS: f32 = 20.0;
     const FOOTER_TINT_SOLID_END: f32 = 0.35;
+    const THREAD_BACK_FINISH: f64 = 0.28;
 
     /// space above the header, the handle band of the sheet
     /// in the right panel there is no handle so the header row is centred on the back arrow and
     /// the cross
     fn top_clearance(docked: bool) -> f32 {
-        if docked { (ShellMetrics::WINDOW_DRAG_HEIGHT - Self::HEADER_HEIGHT) / 2.0 } else { Self::HANDLE_CLEARANCE }
-    }
-
-    fn header_button_insets(docked: bool, theme: &AppTheme, cx: &App) -> (f32, f32) {
-        if !docked {
-            return (14.0, 14.0);
+        if docked {
+            PageHeaderMetrics::TOP_INSET + (PageHeaderMetrics::TOOLBAR_BUTTON_SIZE - Self::HEADER_HEIGHT) / 2.0
+        } else {
+            Self::HANDLE_CLEARANCE
         }
-        let shell = &theme.shell;
-        let padding = f32::from(shell.rail_padding);
-        let button = f32::from(shell.rail_icon_size + shell.rail_padding) + f32::from(shell.rail_item_gap);
-        let steps_back = comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.steps_back)(cx));
-        let leading = if steps_back { padding + button } else { padding };
-        (leading, padding + button)
     }
 
-    /// where the list starts, under the top clearance and the header
+    fn header_button_insets(docked: bool, cx: &App) -> (f32, f32) {
+        if !docked {
+            return (PageHeaderMetrics::EDGE_INSET, PageHeaderMetrics::EDGE_INSET);
+        }
+        let edge = PageHeaderMetrics::BAR_EDGE_INSET;
+        let panel_button = PageHeaderMetrics::TOOLBAR_BUTTON_SIZE + PageHeaderMetrics::BUTTON_GAP;
+        let steps_back = comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.steps_back)(cx));
+        let leading = if steps_back { edge + panel_button } else { edge };
+        (leading, edge + panel_button)
+    }
+
+    /// centre of the title, on the line of the panel buttons when docked
+    fn title_line(docked: bool) -> f32 {
+        Self::top_clearance(docked) + Self::HEADER_HEIGHT / 2.0
+    }
+
+    /// where the list starts, under the header row and the subtitle hanging below the title
     fn list_top(docked: bool) -> f32 {
-        Self::HEADER_HEIGHT + Self::top_clearance(docked)
+        let row_bottom = Self::HEADER_HEIGHT + Self::top_clearance(docked);
+        let subtitle_bottom = Self::title_line(docked)
+            + Self::TITLE_ROW_HEIGHT / 2.0
+            + Self::SUBTITLE_GAP
+            + Self::SUBTITLE_ROW_HEIGHT
+            + Self::HEADER_BOTTOM_PADDING;
+        row_bottom.max(subtitle_bottom)
     }
 
     /// a desktop window has no home indicator gutter under its content
@@ -1064,7 +1085,7 @@ impl CommentsSheet {
             HeaderLeading::Close if scope.docked => None,
             HeaderLeading::Close => {
                 let scope = scope.clone();
-                Some(Self::flat_header_button("comments-sheet-close", "xmark", 15.0, theme, move |window, cx| {
+                Some(Self::flat_header_button("comments-sheet-close", "xmark", 15.0, move |window, cx| {
                     if let Some(presentation_override) = &scope.presentation_override {
                         presentation_override.set(false, window, cx);
                     } else {
@@ -1072,40 +1093,45 @@ impl CommentsSheet {
                     }
                 }))
             }
+            HeaderLeading::Back
+                if scope.docked && comments_sheet_aside_hooks().is_some_and(|hooks| (hooks.steps_back)(cx)) =>
+            {
+                None
+            }
             HeaderLeading::Back => {
                 let scope = scope.clone();
-                Some(Self::flat_header_button("comments-sheet-back", "chevron.backward", 16.0, theme, move |_, cx| {
+                Some(Self::flat_header_button("comments-sheet-back", "chevron.backward", 16.0, move |_, cx| {
                     Self::close_thread_page(&scope.state, &scope.interactions, cx);
                 }))
             }
         };
         let clearance = Self::top_clearance(scope.docked);
-        let (leading_inset, trailing_inset) = Self::header_button_insets(scope.docked, theme, cx);
+        let (leading_inset, trailing_inset) = Self::header_button_insets(scope.docked, cx);
         div()
             .relative()
             .w_full()
-            .h(px(Self::HEADER_HEIGHT + clearance))
-            .child(Self::header_chrome(clearance, theme))
+            .h(px(Self::list_top(scope.docked)))
+            .child(Self::header_chrome(Self::list_top(scope.docked), theme))
             .child(
                 div()
                     .absolute()
-                    .top(px(clearance))
+                    .top(px(Self::title_line(scope.docked) - Self::TITLE_ROW_HEIGHT / 2.0))
                     .left_0()
                     .right_0()
-                    .h(px(Self::HEADER_HEIGHT))
                     .flex()
-                    .items_center()
                     .justify_center()
                     .child(
-                    vstack(1.0)
+                    vstack(Self::SUBTITLE_GAP)
                         .items_center()
                         .max_w(px(210.0))
                         .child(
-                            MainText::new(title)
-                                .px(16.0)
-                                .tac(TextAlignT::Center)
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .number_of_lines(1),
+                            div().h(px(Self::TITLE_ROW_HEIGHT)).flex().items_center().child(
+                                MainText::new(title)
+                                    .px(16.0)
+                                    .tac(TextAlignT::Center)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .number_of_lines(1),
+                            ),
                         )
                         .when(!subtitle.is_empty(), |column| {
                             column.child(
@@ -1138,29 +1164,20 @@ impl CommentsSheet {
         id: &'static str,
         system_image: &'static str,
         font_size: f32,
-        theme: &AppTheme,
         action: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> PlainButton {
-        plain(id)
-            .on_press(action)
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(PageHeaderMetrics::TOOLBAR_BUTTON_SIZE))
-            .rounded_full()
-            .bg(theme.bg._100)
-            .children(IconUi::sized(system_image, px(font_size), theme.text.primary, false))
+    ) -> PageHeaderIconButton {
+        PageHeaderIconButton::new(id, system_image, action).font_size(font_size)
     }
 
     /// header chrome, a blur of the rows under the handle band and header
     /// thins out over a short soft edge
     /// no blur available means the tint stays near opaque
-    fn header_chrome(clearance: f32, theme: &AppTheme) -> Div {
-        let plate = Self::HEADER_HEIGHT + clearance;
-        let height = plate + Self::HEADER_FADE;
+    fn header_chrome(plate: f32, theme: &AppTheme) -> Div {
+        let (height, solid_end) = ScrollEdgeBlurFalloff::header_band(plate, Self::HEADER_FADE);
         div().absolute().top_0().left_0().right_0().h(px(height)).child(
             ScrollEdgeBlurUi::new()
-                .solid_end(plate / height)
+                .solid_end(solid_end)
+                .fit_height(height)
                 .tint_peak(ScrollEdgeBlurFalloff::header_tint_peak(theme.bg._100.l < 0.5)),
         )
     }
@@ -1545,7 +1562,33 @@ impl CommentsSheet {
             Self::cancel_thread_back(&scope.state, cx);
             return;
         }
-        Self::close_thread_page(&scope.state, &scope.interactions, cx);
+        Self::finish_thread_back(scope, cx);
+    }
+
+    /// a swipe past the threshold plays the replies page out to the right, then the thread closes
+    fn finish_thread_back(scope: &Rc<CommentsSheetScope>, cx: &mut App) {
+        let now = RiseClock::monotonic();
+        scope.state.update(cx, |state, cx| {
+            let width = state.content_width.max(0.0);
+            state.thread_back_motion.offset.set_in(width, spring(Self::THREAD_BACK_FINISH, 0.9), now, cx);
+            cx.notify();
+        });
+        let state = scope.state.clone();
+        let interactions = scope.interactions.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_secs_f64(Self::THREAD_BACK_FINISH)).await;
+            let _ = cx.update(|cx| {
+                if interactions.read(cx).thread_root().is_some() {
+                    state.update(cx, |state, _| state.thread_close_jumps = true);
+                    interactions.update(cx, |interactions, cx| interactions.close_thread(cx));
+                }
+                state.update(cx, |state, cx| {
+                    state.thread_back_motion.offset.jump(0.0);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     fn cancel_thread_back(state: &Entity<CommentsSheetState>, cx: &mut App) {

@@ -11,6 +11,9 @@ workspace="$(cd "$desktop/.." && pwd)"
 [ -d "$workspace/riseonly-tools" ] || { echo "riseonly-tools is not checked out beside riseonly-desktop" >&2; exit 2; }
 
 dockerfile="$desktop/scripts/ci/toolchain/Dockerfile"
+case "$cache" in
+    target-linux*) dockerfile="$desktop/scripts/ci/toolchain/Dockerfile.linux" ;;
+esac
 rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$desktop/rust-toolchain.toml")
 toolchain=$( (cat "$dockerfile"; echo "$rust") | sha256sum | cut -c1-12)
 image="riseonly-desktop-toolchain:$toolchain"
@@ -32,7 +35,7 @@ if [ "$(free_gb)" -lt "$min_free" ]; then
 fi
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
-    docker build --quiet --build-arg "RUST_TOOLCHAIN=$rust" --tag "$image" "$(dirname "$dockerfile")" >/dev/null
+    docker build --quiet --build-arg "RUST_TOOLCHAIN=$rust" --tag "$image" --file "$dockerfile" "$(dirname "$dockerfile")" >/dev/null
 fi
 
 forward=()

@@ -1,6 +1,6 @@
 use gpui::{App, IntoElement, ParentElement, RenderOnce, Styled, Window, div};
 use rise_media::map_view::{InputModifiers, MapInput, MapKey};
-use rise_ui::page_header_toolbar_button::PageHeaderIconButton;
+use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
 
 use crate::modules::map::components::globe::map_globe_camera_link::MapGlobeCameraLink;
 use crate::modules::map::stores::map_interactions::map_interactions::MapInteractionsStore;
@@ -13,6 +13,11 @@ pub struct MapZoomButtons;
 impl MapZoomButtons {
     pub fn new() -> Self {
         Self
+    }
+
+    /// height of the plus and minus pair
+    pub fn height(cx: &App) -> f32 {
+        PageHeaderMetrics::TOOLBAR_BUTTON_SIZE * 2.0 + f32::from(rise_ui::theme(cx).spacing._400)
     }
 
     /// one zoom level over the globe or the flat map, whichever is shown
@@ -37,11 +42,11 @@ impl MapZoomButtons {
 }
 
 impl RenderOnce for MapZoomButtons {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap(rise_ui::theme(cx).spacing._400)
             .child(PageHeaderIconButton::new("map-zoom-in", "plus", |window, cx| Self::zoom(1.0, window, cx)).font_size(16.0))
             .child(PageHeaderIconButton::new("map-zoom-out", "minus", |window, cx| Self::zoom(-1.0, window, cx)).font_size(16.0))
     }

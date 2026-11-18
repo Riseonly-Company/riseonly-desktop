@@ -6,6 +6,7 @@ use rise_ui::guide_anchor_ui::guide_scroll_host::GuideScrollHost;
 
 use crate::app::router::navigation_types::MainTab;
 use crate::core::widgets::notifier::notifier_host::NotifierWindowPresenter;
+use crate::modules::search::stores::search_interactions::search_interactions::SearchInteractionsStore;
 use crate::modules::shorts::stores::shorts::shorts_interactions::shorts_interactions::ShortsInteractionsStore;
 
 thread_local! {
@@ -20,6 +21,7 @@ impl MainTabScrollToTop {
 
     /// the open tab tapped again
     /// posts feed goes to top and refreshes, riffs goes back to the first riff with a fresh feed
+    /// search goes to top and focuses its field
     pub fn reselect(tab: MainTab, window: &mut Window, cx: &mut App) {
         match tab {
             MainTab::Shorts => {
@@ -27,6 +29,10 @@ impl MainTabScrollToTop {
             }
             MainTab::Posts => {
                 Self::perform(true, window, cx);
+            }
+            MainTab::GlobalSearch => {
+                Self::perform(false, window, cx);
+                SearchInteractionsStore::shared(cx).update(cx, |interactions, cx| interactions.tab_reselected(cx));
             }
             _ => {
                 Self::perform(false, window, cx);

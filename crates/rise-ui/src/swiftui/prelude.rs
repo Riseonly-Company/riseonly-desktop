@@ -5,7 +5,7 @@ pub use crate::error_text_ui::system_red;
 pub use crate::swiftui::accessibility::AccessibilityActionModifiers;
 pub use crate::swiftui::binding::*;
 pub use crate::swiftui::button_style::{
-    BorderedStyle, ButtonAction, PlainButton, SystemButton, button_chrome, plain, system_button,
+    BorderedStyle, ButtonAction, PlainButton, SystemButton, button_chrome, plain, row_hover_fill, system_button,
 };
 pub use crate::swiftui::dismiss::*;
 pub use crate::swiftui::drag_gesture::{

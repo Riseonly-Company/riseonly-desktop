@@ -12,6 +12,7 @@ use rise_core::foundation::foundation_url::Url;
 use rise_core::foundation::ns_cache::NSCache;
 use rise_theme::theme::theme_store::ThemeStore;
 use rise_ui::IconUi;
+use rise_ui::image_ui::render_image_atlas::RenderImageAtlas;
 use rise_ui::swiftui::alpha_shadow::AlphaShadowModifiers;
 use rise_ui::swiftui::blur::blur_aware_image_source;
 use rise_ui::swiftui::lifecycle::use_task;
@@ -423,10 +424,13 @@ impl CleverRemoteCachedImage {
             },
         );
 
-        if is_loaded_identity && let Some(ui_image) = ui_image {
-            resizable_image(ui_image, self.content_mode, self.corners)
-        } else if let Some(immediate_image) = immediate_image {
-            resizable_image(immediate_image, self.content_mode, self.corners)
+        let shown = if is_loaded_identity { ui_image } else { None }.or(immediate_image);
+        if let Some(shown) = shown {
+            if RenderImageAtlas::is_ready(&shown, window, cx) {
+                resizable_image(shown, self.content_mode, self.corners)
+            } else {
+                div().size_full().bg(self.placeholder).clever_corners(self.corners).into_any_element()
+            }
         } else if is_loaded_identity && did_fail {
             let mut placeholder = div()
                 .size_full()
@@ -551,8 +555,10 @@ impl LocalFileImageView {
         );
 
         match ui_image {
-            Some(ui_image) => resizable_image(ui_image, self.content_mode, self.corners),
-            None => div().size_full().bg(self.placeholder).clever_corners(self.corners).into_any_element(),
+            Some(ui_image) if RenderImageAtlas::is_ready(&ui_image, window, cx) => {
+                resizable_image(ui_image, self.content_mode, self.corners)
+            }
+            _ => div().size_full().bg(self.placeholder).clever_corners(self.corners).into_any_element(),
         }
     }
 }
@@ -617,8 +623,10 @@ impl PhotoAssetImageView {
         );
 
         match ui_image.or(immediate_image) {
-            Some(ui_image) => resizable_image(ui_image, self.content_mode, self.corners),
-            None => div().size_full().bg(self.placeholder).clever_corners(self.corners).into_any_element(),
+            Some(ui_image) if RenderImageAtlas::is_ready(&ui_image, window, cx) => {
+                resizable_image(ui_image, self.content_mode, self.corners)
+            }
+            _ => div().size_full().bg(self.placeholder).clever_corners(self.corners).into_any_element(),
         }
     }
 }

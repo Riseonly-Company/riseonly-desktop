@@ -118,6 +118,7 @@ pub struct RiseChatViewport {
     pending_advance: bool,
     epoch: Option<String>,
     versions: HashMap<String, i64>,
+    geometry_versions: HashMap<String, i64>,
     indices: HashMap<String, usize>,
     last_remote_attempt: Option<String>,
     remote_failures: i32,
@@ -154,6 +155,7 @@ impl RiseChatViewport {
             pending_advance: false,
             epoch: None,
             versions: HashMap::new(),
+            geometry_versions: HashMap::new(),
             indices: HashMap::new(),
             last_remote_attempt: None,
             remote_failures: 0,
@@ -215,6 +217,10 @@ impl RiseChatViewport {
         chat.is_pinned.hash(&mut hash);
         chat.unread_count.hash(&mut hash);
         hash.finish() as i64
+    }
+
+    pub fn geometry_version(&self, chat: &ChatInfo) -> i64 {
+        self.geometry_versions.get(&chat.id).copied().unwrap_or_else(|| self.content_version(chat))
     }
 
     pub fn cache_detail(&self, chat: &ChatInfo, cx: &mut App) {
@@ -398,6 +404,7 @@ impl RiseChatViewport {
         self.visible_ids.clear();
         self.committed_snapshot = None;
         self.versions.clear();
+        self.geometry_versions.clear();
         self.last_remote_attempt = None;
         self.remote_retry = None;
         self.remote_failures = 0;
@@ -517,7 +524,11 @@ impl RiseChatViewport {
         }
         if let Some(old) = self.snapshot(cx)
             && old.rows.len() == next.rows.len()
-            && old.rows.iter().zip(&next.rows).all(|(old, next)| old.local_id == next.local_id && old.stamp == next.stamp)
+            && old
+                .rows
+                .iter()
+                .zip(&next.rows)
+                .all(|(old, next)| old.local_id == next.local_id && old.content_version == next.content_version)
             && old.has_before == next.has_before
             && old.has_after == next.has_after
             && old.has_remote_after == next.has_remote_after
@@ -527,6 +538,7 @@ impl RiseChatViewport {
         }
         let chats: Vec<ChatInfo> = next.rows.iter().map(|row| row.chat.clone()).collect();
         self.versions = next.rows.iter().map(|row| (row.chat.id.clone(), row.content_version)).collect();
+        self.geometry_versions = next.rows.iter().map(|row| (row.chat.id.clone(), row.geometry_version)).collect();
         self.indices = next.rows.iter().enumerate().map(|(index, row)| (row.chat.id.clone(), index)).collect();
         self.committed_snapshot = Some(Rc::new(next));
         RiseConversationPresentation::shared(cx)

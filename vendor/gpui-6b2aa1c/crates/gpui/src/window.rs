@@ -10,7 +10,7 @@ use crate::{
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
+    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformImageUploader,
     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
     Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
@@ -1700,6 +1700,7 @@ pub struct Window {
     modifiers: Modifiers,
     capslock: Capslock,
     scale_factor: f32,
+    zoom: f32,
     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
@@ -1720,6 +1721,9 @@ pub struct Window {
     /// change flips `is_hovered` only for a hitbox under the mouse at that moment; the others
     /// read hover the same way under either modality and are dropped.
     hover_modality_readers: RefCell<FxHashSet<(EntityId, HitboxId)>>,
+    /// Riseonly 0126: whether the mouse was inside each cached view when it last rendered, so a
+    /// view replayed moved under a still mouse renders again when that changed.
+    pub(crate) mouse_inside_at_render: FxHashMap<EntityId, bool>,
     /// Riseonly 0087: views that read the window active status while drawing; an activation
     /// change notifies them instead of refreshing the window.
     activation_readers: RefCell<FxHashSet<EntityId>>,
@@ -2043,11 +2047,12 @@ impl Window {
 
         let display_id = platform_window.display().map(|display| display.id());
         let sprite_atlas = platform_window.sprite_atlas();
-        let mouse_position = platform_window.mouse_position();
+        let zoom = cx.window_zoom;
+        let mouse_position = unzoom_point(platform_window.mouse_position(), zoom);
         let modifiers = platform_window.modifiers();
         let capslock = platform_window.capslock();
-        let content_size = platform_window.content_size();
-        let scale_factor = platform_window.scale_factor();
+        let content_size = unzoom_size(platform_window.content_size(), zoom);
+        let scale_factor = platform_window.scale_factor() * zoom;
         let appearance = platform_window.appearance();
         let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
         let invalidator = WindowInvalidator::new();
@@ -2500,6 +2505,7 @@ impl Window {
             modifiers,
             capslock,
             scale_factor,
+            zoom,
             bounds_observers: SubscriberSet::new(),
             appearance,
             appearance_observers: SubscriberSet::new(),
@@ -2513,6 +2519,7 @@ impl Window {
             last_input_modality: InputModality::Mouse,
             modality_readers: RefCell::new(FxHashSet::default()),
             hover_modality_readers: RefCell::new(FxHashSet::default()),
+            mouse_inside_at_render: FxHashMap::default(),
             activation_readers: RefCell::new(FxHashSet::default()),
             refreshing: false,
             draw_count: 0,
@@ -3122,8 +3129,8 @@ impl Window {
     /// the platform window, then notifies observers. Normally called automatically
     /// by the platform's resize callback, but exposed publicly for test infrastructure.
     pub fn bounds_changed(&mut self, cx: &mut App) {
-        let scale_factor = self.platform_window.scale_factor();
-        let viewport_size = self.platform_window.content_size();
+        let scale_factor = self.platform_window.scale_factor() * self.zoom;
+        let viewport_size = unzoom_size(self.platform_window.content_size(), self.zoom);
         let display_id = self.platform_window.display().map(|display| display.id());
         // Riseonly 0066: a move that keeps the size, the scale and the display draws nothing new,
         // yet the refresh rendered every cached view again on each move event (X1553). Bounds
@@ -3134,7 +3141,7 @@ impl Window {
         self.scale_factor = scale_factor;
         self.viewport_size = viewport_size;
         self.display_id = display_id;
-        self.mouse_position = self.platform_window.mouse_position();
+        self.mouse_position = unzoom_point(self.platform_window.mouse_position(), self.zoom);
 
         if reshaped {
             self.refresh();
@@ -3224,7 +3231,8 @@ impl Window {
 
     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
     pub fn show_window_menu(&self, position: Point<Pixels>) {
-        self.platform_window.show_window_menu(position)
+        self.platform_window
+            .show_window_menu(point(position.x * self.zoom, position.y * self.zoom))
     }
 
     /// Handle window movement for Linux and macOS.
@@ -3238,7 +3246,7 @@ impl Window {
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);
-        self.platform_window.set_client_inset(inset);
+        self.platform_window.set_client_inset(inset * self.zoom);
     }
 
     /// Returns the client_inset value by [`Self::set_client_inset`].
@@ -3318,6 +3326,32 @@ impl Window {
     /// be rendered as two pixels on screen.
     pub fn scale_factor(&self) -> f32 {
         self.scale_factor
+    }
+
+    /// Riseonly 0124: logical pixels of this window per platform point, see [`App::set_window_zoom`].
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
+    pub(crate) fn set_zoom(&mut self, zoom: f32, cx: &mut App) {
+        if self.zoom == zoom {
+            return;
+        }
+        self.zoom = zoom;
+        self.bounds_changed(cx);
+    }
+
+    /// Window content bounds in platform points, what the platform wants back for an ime panel.
+    pub fn zoomed_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        Bounds {
+            origin: point(bounds.origin.x * self.zoom, bounds.origin.y * self.zoom),
+            size: size(bounds.size.width * self.zoom, bounds.size.height * self.zoom),
+        }
+    }
+
+    /// A platform point inside the window in this window's logical pixels.
+    pub fn unzoomed_point(&self, position: Point<Pixels>) -> Point<Pixels> {
+        unzoom_point(position, self.zoom)
     }
 
     /// Overrides the display scale factor for tests.
@@ -3671,6 +3705,7 @@ impl Window {
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
         self.retain_live_hover_modality_readers();
+        self.recheck_moved_hover(cx);
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
         let mut focus_before_listeners = self.focus;
@@ -4845,6 +4880,32 @@ impl Window {
     /// under the mouse again. Dropped once per frame, the set stays bounded by the live hitboxes
     /// that were drawn under the mouse, even when the modality never changes (mouse-only use).
     /// A cached view replays its hitboxes with the same ids, so its pairs survive reuse.
+    /// Riseonly 0126: a scroll under a still mouse moves cached rows without a mouse event; a row
+    /// replayed with the hover it rendered under the old position renders again.
+    fn recheck_moved_hover(&mut self, cx: &mut App) {
+        let mouse = self.mouse_position;
+        let mut stale: SmallVec<[EntityId; 4]> = SmallVec::new();
+        for (entity_id, bounds) in &self.rendered_frame.moved_views {
+            let inside = bounds.contains(&mouse);
+            if self.mouse_inside_at_render.get(entity_id).copied() != Some(inside) {
+                self.mouse_inside_at_render.insert(*entity_id, inside);
+                stale.push(*entity_id);
+            }
+        }
+        if self.mouse_inside_at_render.len() > 4 * self.rendered_frame.cached_views.len() + 64 {
+            let live: FxHashSet<EntityId> =
+                self.rendered_frame.cached_views.iter().map(|(entity_id, _)| *entity_id).collect();
+            self.mouse_inside_at_render.retain(|entity_id, _| live.contains(entity_id));
+        }
+        if !stale.is_empty() {
+            cx.defer(move |cx| {
+                for entity_id in stale {
+                    cx.notify(entity_id);
+                }
+            });
+        }
+    }
+
     fn retain_live_hover_modality_readers(&mut self) {
         let mut readers = self.hover_modality_readers.borrow_mut();
         if readers.is_empty() {
@@ -7314,6 +7375,11 @@ impl Window {
         found
     }
 
+    /// The off thread tile writer of this window's sprite atlas, none where tiles are written in paint (Riseonly 0122).
+    pub fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
+        self.sprite_atlas.image_uploader()
+    }
+
     /// Removes an image from the sprite atlas.
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         self.image_drops += 1;
@@ -7757,6 +7823,7 @@ impl Window {
         // Handlers may set this to true by calling `prevent_default`.
         self.default_prevented = false;
 
+        let event = if self.zoom == 1.0 { event } else { unzoom_input(event, self.zoom) };
         let event = match event {
             // Track the mouse position with our own state, since accessing the platform
             // API for the mouse position can only occur on the main thread.
@@ -10225,5 +10292,70 @@ mod tests {
             })
             .unwrap();
         assert_eq!(b_focus_count.get(), 1);
+    }
+}
+
+fn unzoom_point(position: Point<Pixels>, zoom: f32) -> Point<Pixels> {
+    point(position.x / zoom, position.y / zoom)
+}
+
+fn unzoom_size(content: Size<Pixels>, zoom: f32) -> Size<Pixels> {
+    size(content.width / zoom, content.height / zoom)
+}
+
+/// Riseonly 0124: platform positions and pixel scroll deltas in this window's logical pixels.
+fn unzoom_input(event: PlatformInput, zoom: f32) -> PlatformInput {
+    let at = |position: Point<Pixels>| unzoom_point(position, zoom);
+    match event {
+        PlatformInput::MouseDown(event) => PlatformInput::MouseDown(crate::MouseDownEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::MouseUp(event) => PlatformInput::MouseUp(crate::MouseUpEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::MousePressure(event) => PlatformInput::MousePressure(crate::MousePressureEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::MouseMove(event) => PlatformInput::MouseMove(crate::MouseMoveEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::MouseExited(event) => PlatformInput::MouseExited(crate::MouseExitEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::ScrollWheel(event) => PlatformInput::ScrollWheel(crate::ScrollWheelEvent {
+            position: at(event.position),
+            delta: match event.delta {
+                crate::ScrollDelta::Pixels(delta) => crate::ScrollDelta::Pixels(at(delta)),
+                lines => lines,
+            },
+            ..event
+        }),
+        PlatformInput::Pinch(event) => PlatformInput::Pinch(crate::PinchEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::Touch(event) => PlatformInput::Touch(crate::TouchEvent {
+            position: at(event.position),
+            ..event
+        }),
+        PlatformInput::FileDrop(drop) => PlatformInput::FileDrop(match drop {
+            FileDropEvent::Entered { position, paths } => FileDropEvent::Entered {
+                position: at(position),
+                paths,
+            },
+            FileDropEvent::Pending { position } => FileDropEvent::Pending {
+                position: at(position),
+            },
+            FileDropEvent::Submit { position } => FileDropEvent::Submit {
+                position: at(position),
+            },
+            other => other,
+        }),
+        other => other,
     }
 }

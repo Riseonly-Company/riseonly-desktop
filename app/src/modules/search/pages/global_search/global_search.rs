@@ -307,6 +307,8 @@ pub struct GlobalSearch {
     threads_use_grid: bool,
     mounted_tabs: HashSet<SearchResultsTab>,
     search_focus_requests: u64,
+    seen_field_focus_request: u64,
+    is_on_top: bool,
     query_edited_by_field: bool,
     mount_window_generation: u64,
     scroll_anchors: Rc<RefCell<SearchScrollAnchorStore>>,
@@ -325,8 +327,21 @@ impl GlobalSearch {
         let initial_query = initial_query.into();
         let hold_context_menu = HoldContextMenuPresenter::shared(cx);
         let pager_live_state = cx.new(|_| AnimatedTabsPagerLiveState::new());
+        let search_service = SearchServicesStore::shared(cx);
+        let seen_field_focus_request = search_service.read(cx).field_focus_request();
         let subscriptions = vec![
             observe_menu_lock(&hold_context_menu, cx),
+            cx.observe(&search_service, |view: &mut Self, service, cx| {
+                let request = service.read(cx).field_focus_request();
+                if request == view.seen_field_focus_request {
+                    return;
+                }
+                view.seen_field_focus_request = request;
+                if view.is_on_top && view.initial_query.is_empty() {
+                    view.search_focus_requests += 1;
+                    cx.notify();
+                }
+            }),
             cx.observe(&pager_live_state, |view, live, cx| {
                 let anchor = live.read(cx).resolved_mount_anchor(view.active_index());
                 if anchor != view.observed_mount_anchor {
@@ -348,6 +363,8 @@ impl GlobalSearch {
             threads_use_grid: false,
             mounted_tabs: HashSet::from(HASHTAG_TABS),
             search_focus_requests: 0,
+            seen_field_focus_request,
+            is_on_top: false,
             query_edited_by_field: false,
             mount_window_generation: 0,
             scroll_anchors: Rc::new(RefCell::new(SearchScrollAnchorStore::default())),
@@ -388,6 +405,7 @@ impl GlobalSearch {
     }
 
     fn screen_did_appear(&mut self, cx: &mut Context<Self>) {
+        self.is_on_top = true;
         if self.query.is_empty() && !self.initial_query.is_empty() {
             self.query = self.initial_query.clone();
         }
@@ -875,6 +893,7 @@ impl Render for GlobalSearch {
             })
             .on_disappear(("global-search-disappear", entity_id), move |_, cx| {
                 let _ = disappear_view.update(cx, |view, _| {
+                    view.is_on_top = false;
                     view.mount_window_generation = view.mount_window_generation.wrapping_add(1);
                 });
             })

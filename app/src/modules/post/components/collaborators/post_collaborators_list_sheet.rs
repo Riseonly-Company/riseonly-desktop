@@ -22,6 +22,7 @@ use crate::core::ui::hold_context_menu_ui::hold_context_menu_container::HoldCont
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
 use crate::core::ui::premium_badge::PremiumBadge;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::modules::post::components::collaborators::post_collaborators_presenter::PostCollaboratorsPresenter;
 use crate::modules::post::engine::rise_post_content_presentation::RisePostContentPresentation;
 use crate::modules::post::engine::rise_post_engine_models::PostCollaboratorsSnapshot;
@@ -530,8 +531,12 @@ impl PostCollaboratorsListSheetParts {
                     .name(SharedString::from(user.name.clone()))
                     .user_id(SharedString::from(user.id.clone()))
                     .size(UserRelationshipRowMetrics::AVATAR_SIZE)
-                    .show_story_ring(false)
-                    .open_story_on_press(false),
+                    .open_story_on_press(false)
+                    .gift_worn_frame(
+                        ElementId::Name(format!("post-collaborator-frame-{}", user.id).into()),
+                        Some(user.id.clone()),
+                        UserRelationshipRowMetrics::AVATAR_SIZE,
+                    ),
             )
             .child(names)
             .child(spacer_min_w(0.0));

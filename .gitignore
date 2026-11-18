@@ -33,3 +33,9 @@ vendor/ffmpeg/
 
 # rlottie source, fetched by scripts/vendor-rlottie.sh against a pinned hash
 vendor/rlottie/
+
+# Noto Sans CJK Regular (Linux fallback face), fetched by scripts/vendor-noto-cjk.sh against a pinned hash
+vendor/noto-cjk/
+
+# Noto Sans Thai, Devanagari, Bengali, Tamil, Georgian, Hebrew, Arabic Regular (Linux fallback faces), fetched by scripts/vendor-noto-fallback.sh against pinned hashes
+vendor/noto-fallback/

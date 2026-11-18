@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnchoredPositionMode, App, BoxShadow, Bounds, Context, DispatchPhase, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, PathBuilder, Pixels, Render, RenderOnce, ScrollDelta, ScrollWheelEvent,
@@ -9,6 +10,8 @@ use gpui::{
 };
 use rise_core::foundation::foundation_date::{Date, RiseClock, TimeInterval};
 use rise_core::foundation::foundation_uuid::Uuid;
+use rise_platform::HostOs;
+use rise_platform::window_chrome;
 use rise_theme::{AppTheme, ThemeStore, alpha};
 use rise_ui::icon_ui::IconUi;
 use rise_ui::liquid_chrome::{LiquidChrome, LiquidChromeModifiers};
@@ -29,7 +32,7 @@ use crate::core::widgets::notifier::notifier_progress::{
     NotifierProgressLiveRing, NotifierProgressStore, NotifierProgressStoreEntry, NotifierProgressTitle,
 };
 use crate::core::widgets::notifier::notifier_store::{
-    NotifierAuthor, NotifierConfig, NotifierIcon, NotifierStore, NotifierUndoPolicy,
+    NotifierAuthor, NotifierBannerPosition, NotifierConfig, NotifierIcon, NotifierStore, NotifierUndoPolicy,
 };
 
 const STACK_SPACING: f32 = 8.0;
@@ -45,6 +48,8 @@ const WHEEL_IDLE_END: Duration = Duration::from_millis(120);
 const ISLAND_MAX_WIDTH: f32 = 560.0;
 const ISLAND_MIN_WIDTH: f32 = 300.0;
 const ISLAND_SIDE_PADDING: f32 = 14.0;
+const BANNER_WIDTH: f32 = 360.0;
+const BANNER_CORNER_RADIUS: f32 = 18.0;
 const GLYPH_SIDE: f32 = 30.0;
 const CLOSE_BUTTON_SIDE: f32 = 20.0;
 const CLOSE_BUTTON_OUTSET: f32 = 6.0;
@@ -272,6 +277,17 @@ pub struct NotifierHost {
 }
 
 impl NotifierHost {
+    /// a notification banner at the side the person picked, sliding in from that edge like a system banner
+    fn placed_banner(island: impl IntoElement, position: NotifierBannerPosition, hidden: f32, opacity: f32) -> gpui::Div {
+        let travel = px(TRANSITION_TRAVEL * hidden);
+        let row = div().w_full().flex().relative().opacity(opacity).child(island);
+        match position {
+            NotifierBannerPosition::TopRight => row.justify_end().left(travel),
+            NotifierBannerPosition::TopLeft => row.justify_start().left(-travel),
+            NotifierBannerPosition::TopCenter => row.justify_center().top(-travel),
+        }
+    }
+
     pub const LAYER_PRIORITY: usize = 2011;
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -327,6 +343,7 @@ impl NotifierHost {
             }),
             cx.observe(&host_stack, |_, _, cx| cx.notify()),
             cx.observe(&progress, |_, _, cx| cx.notify()),
+            cx.observe_global::<NotifierBannerPosition>(|_, cx| cx.notify()),
             cx.on_release(move |host: &mut Self, cx: &mut App| {
                 let token = host.token;
                 let is_overlay = host.is_overlay;
@@ -402,6 +419,30 @@ impl NotifierHost {
         ThemeStore::shared(cx).read(cx).current_theme().shell.window_drag_height
     }
 
+    fn banner_top(position: NotifierBannerPosition, window: &Window, cx: &mut App) -> f32 {
+        let shell = ThemeStore::shared(cx).read(cx).current_theme().shell;
+        let margin = f32::from(shell.overlay_margin);
+        if window.is_fullscreen() {
+            return margin;
+        }
+        let host = HostOs::current();
+        let strip = f32::from(shell.window_drag_height);
+        let band = window_chrome::controls_band_height(host, window_chrome::granted_decorations(window), strip);
+        let under_controls = match host {
+            HostOs::MacOs => position == NotifierBannerPosition::TopLeft,
+            HostOs::Windows | HostOs::Linux => band > 0.0 && position != NotifierBannerPosition::TopCenter,
+        };
+        if !under_controls {
+            return margin;
+        }
+        let lights = f32::from(shell.traffic_light_origin().y) + window_chrome::ControlLayout::for_host(host).button_height;
+        let cleared = match host {
+            HostOs::MacOs => strip.max(lights / cx.window_zoom()),
+            HostOs::Windows | HostOs::Linux => band,
+        };
+        cleared + f32::from(shell.rail_outer_inset)
+    }
+
     fn island(&self, item: &NotifierConfig, cx: &mut Context<Self>) -> NotifierIsland {
         let id = item.id;
         let store = self.store.clone();
@@ -409,6 +450,7 @@ impl NotifierHost {
         let undo_store = store.clone();
         let hover_store = store.clone();
         NotifierIsland {
+            banner: item.is_in_app_notification(),
             config: item.clone(),
             progress: self.progress.read(cx).entry(id).cloned(),
             progress_store: self.progress.clone(),
@@ -475,18 +517,29 @@ impl Render for NotifierHost {
             return div().id("notifier-host").size_full().child(bounds_probe);
         }
 
+        let position = NotifierBannerPosition::current(cx);
         let mut top = vstack(STACK_SPACING).w_full();
+        let mut banners = vstack(STACK_SPACING).w_full();
         for item in &items {
             let appear = self.appearances.get(&item.id).map_or(1.0, |appearance| appearance.frame_value(now, window));
-            top = top.child(Self::placed(self.island(item, cx), -TRANSITION_TRAVEL * (1.0 - appear), appear));
+            if item.is_in_app_notification() {
+                banners = banners.child(Self::placed_banner(self.island(item, cx), position, 1.0 - appear, appear));
+            } else {
+                top = top.child(Self::placed(self.island(item, cx), -TRANSITION_TRAVEL * (1.0 - appear), appear));
+            }
         }
         for departing in &self.departing {
             let gone = departing.progress.frame_value(now, window);
-            top = top.child(Self::placed(self.island(&departing.config, cx), -TRANSITION_TRAVEL * gone, 1.0 - gone));
+            if departing.config.is_in_app_notification() {
+                banners = banners.child(Self::placed_banner(self.island(&departing.config, cx), position, gone, 1.0 - gone));
+            } else {
+                top = top.child(Self::placed(self.island(&departing.config, cx), -TRANSITION_TRAVEL * gone, 1.0 - gone));
+            }
         }
 
         let window_size = window.viewport_size();
         let window_top = f32::from(Self::window_drag_band(cx)) + EDGE_PADDING;
+        let banner_top = Self::banner_top(position, window, cx);
         if !self.appearances.is_empty() || !self.departing.is_empty() {
             let appear: Vec<f32> = self.appearances.values().map(|appearance| appearance.value(now)).collect();
             tracing::warn!(
@@ -514,24 +567,29 @@ impl Render for NotifierHost {
         }
         if self.is_overlay || self.is_window_scoped {
             let window_width = f32::from(window_size.width);
-            let (top_shift, centre_shift) = self.host_bounds.map_or((window_top, 0.0), |bounds| {
+            let (top_shift, centre_shift, left_shift) = self.host_bounds.map_or((window_top, 0.0, 0.0), |bounds| {
                 let host_centre = f32::from(bounds.left()) + f32::from(bounds.size.width) / 2.0;
-                (window_top - f32::from(bounds.top()), window_width / 2.0 - host_centre)
+                (window_top - f32::from(bounds.top()), window_width / 2.0 - host_centre, -f32::from(bounds.left()))
             });
+            let banner_shift = banner_top - (window_top - top_shift);
             return div()
                 .id("notifier-host")
+                .relative()
                 .size_full()
                 .flex()
                 .flex_col()
                 .child(top.relative().top(px(top_shift)).left(px(centre_shift)))
+                .child(banners.absolute().top(px(banner_shift)).left(px(left_shift)).w(px(window_width)))
                 .child(bounds_probe);
         }
         let islands = div()
+            .relative()
             .w(window_size.width)
             .h(window_size.height)
             .flex()
             .flex_col()
-            .child(top.relative().top(px(window_top)));
+            .child(top.relative().top(px(window_top)))
+            .child(banners.absolute().top(px(banner_top)).left_0().w(window_size.width));
         div()
             .id("notifier-host")
             .size_full()
@@ -550,6 +608,7 @@ impl Render for NotifierHost {
 
 #[derive(IntoElement)]
 struct NotifierIsland {
+    banner: bool,
     config: NotifierConfig,
     progress: Option<NotifierProgressStoreEntry>,
     progress_store: Entity<NotifierProgressStore>,
@@ -583,6 +642,9 @@ impl NotifierIsland {
     }
 
     fn corner_radius(&self) -> f32 {
+        if self.banner {
+            return BANNER_CORNER_RADIUS;
+        }
         if self.has_button() {
             return 26.0;
         }
@@ -980,10 +1042,14 @@ impl RenderOnce for NotifierIsland {
                 )
         });
 
+        let banner = self.banner;
         div()
             .id(ElementId::Name(format!("notifier-island-hit-{}", island_id.uuid_string()).into()))
-            .min_w(px(ISLAND_MIN_WIDTH + ISLAND_SIDE_PADDING * 2.0))
-            .max_w(px(ISLAND_MAX_WIDTH + ISLAND_SIDE_PADDING * 2.0))
+            .when(banner, |hit| hit.w(px(BANNER_WIDTH + ISLAND_SIDE_PADDING * 2.0)))
+            .when(!banner, |hit| {
+                hit.min_w(px(ISLAND_MIN_WIDTH + ISLAND_SIDE_PADDING * 2.0))
+                    .max_w(px(ISLAND_MAX_WIDTH + ISLAND_SIDE_PADDING * 2.0))
+            })
             .px(px(ISLAND_SIDE_PADDING))
             .occlude()
             .child(

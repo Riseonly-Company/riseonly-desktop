@@ -7,7 +7,7 @@ use rise_platform::gpui_shim::full_screen_keystrokes_on;
 use gpui::{Keystroke, Modifiers};
 
 use super::app_menu_bar::{
-    AppMenuBarKey, adjacent_section, menu_bar_key, mnemonic_candidates, mnemonic_of,
+    AppMenuBarKey, adjacent_section, draws_in_window_menu_bar, menu_bar_key, mnemonic_candidates, mnemonic_of,
     section_for_mnemonic,
 };
 use super::app_menu::{
@@ -256,4 +256,30 @@ fn titles_sharing_a_letter_take_turns() {
     assert_eq!(section_for_mnemonic(&mnemonics, &['f'], Some(3)), Some(1));
     assert_eq!(section_for_mnemonic(&mnemonics, &['x'], None), None);
     assert_eq!(section_for_mnemonic(&[], &['f'], None), None);
+}
+
+#[test]
+fn only_windows_draws_the_menu_in_the_window() {
+    assert!(draws_in_window_menu_bar(HostOs::Windows, false));
+    assert!(!draws_in_window_menu_bar(HostOs::Linux, false));
+    assert!(!draws_in_window_menu_bar(HostOs::MacOs, false));
+    for host in [HostOs::MacOs, HostOs::Linux, HostOs::Windows] {
+        assert!(!draws_in_window_menu_bar(host, true), "{host:?}");
+    }
+}
+
+#[gpui::test]
+fn linux_keeps_every_menu_command_without_the_menu_bar(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        install_app_menu(cx);
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        for command in commands_on(HostOs::Linux) {
+            if command == AppMenuCommand::Zoom {
+                continue;
+            }
+            let action = command.action().expect("every linux command has an action");
+            assert!(keymap.bindings_for_action(action.as_ref()).next().is_some(), "{command:?}");
+        }
+    });
 }

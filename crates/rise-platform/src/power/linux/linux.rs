@@ -163,7 +163,7 @@ impl PowerSource for NativePower {
         let what = PowerReadingKind::Battery;
         let connection = read_bus().map_err(|error| refused(what, error))?;
         let reading = display_device(&connection).map_err(|error| refused(what, error))?;
-        Ok(reading.unwrap_or(BatteryReading::NO_BATTERY))
+        Ok(reading.unwrap_or(BatteryReading::UNKNOWN))
     }
 
     fn watch(&self, sink: ChangeSink) -> Result<PowerWatch, PowerUnavailable> {

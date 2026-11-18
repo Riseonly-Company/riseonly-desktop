@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use gpui::{
-    App, Bounds, DragMoveEvent, ElementId, MouseButton, MouseDownEvent, MouseMoveEvent, FontWeight, Hsla, ImageSource, IntoElement, ObjectFit, Pixels, Render,
+    AnyElement, App, BACKDROP_BLUR_SUPPORTED, Bounds, DragMoveEvent, ElementId, MouseButton, MouseDownEvent, MouseMoveEvent, FontWeight, Hsla, ImageSource, IntoElement, ObjectFit, Pixels, Render,
     RenderOnce, SharedString, Subscription, Window, black, img, px, red, size, transparent_black, white,
 };
 use parking_lot::Mutex;
@@ -98,6 +98,27 @@ impl ChatInputPickerMetrics {
     pub const STRIP_SHADOW_PEAK: f32 = 0.92;
     pub const STRIP_SHADOW_SOLID_END: f32 = 0.12;
 
+    /// grid rows go on under the pack strip only where a real blur covers them
+    pub fn grid_paints_under_strip() -> bool {
+        BACKDROP_BLUR_SUPPORTED
+    }
+
+    /// the grid as laid out, clipped at the strip bottom where no blur covers the rows under the strip
+    pub fn grid_below_strip(grid: AnyElement) -> AnyElement {
+        if Self::grid_paints_under_strip() {
+            return grid;
+        }
+        div()
+            .absolute()
+            .top(px(Self::TOP_STRIP_HEIGHT))
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .overflow_hidden()
+            .child(div().absolute().top(px(-Self::TOP_STRIP_HEIGHT)).left_0().right_0().bottom_0().child(grid))
+            .into_any_element()
+    }
+
     /// band of the blur below the pack strip, growing with the first pixels scrolled under it
     /// zero at rest, so nothing but the panel shows behind the strip
     pub fn strip_edge_blur_height(scroll_top: gpui::ListOffset) -> f32 {
@@ -118,7 +139,7 @@ impl ChatInputPickerMetrics {
             return None;
         }
         let dark = theme.bg._100.l < 0.5;
-        let height = Self::TOP_STRIP_HEIGHT + band;
+        let height = Self::TOP_STRIP_HEIGHT;
         let progress = band / Self::STRIP_EDGE_BLUR_HEIGHT;
         let shadow = ScrollEdgeBlurFalloff::mask_image(theme.bg._100.opacity(Self::STRIP_SHADOW_PEAK * progress), Self::STRIP_SHADOW_SOLID_END);
         Some(
@@ -128,12 +149,13 @@ impl ChatInputPickerMetrics {
                 .left_0()
                 .right_0()
                 .h(px(height))
-                .child(
+                .children(Self::grid_paints_under_strip().then(|| {
                     ScrollEdgeBlurUi::new()
                         .solid_end(0.0)
+                        .fit_height(height)
                         .max_radius(ScrollEdgeBlurFalloff::EDGE_RADIUS * progress)
-                        .tint_peak(ScrollEdgeBlurFalloff::header_tint_peak(dark) * progress),
-                )
+                        .tint_peak(ScrollEdgeBlurFalloff::header_tint_peak(dark) * progress)
+                }))
                 .child(
                     pass_through()
                         .absolute()

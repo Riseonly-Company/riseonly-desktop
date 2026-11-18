@@ -10,6 +10,7 @@ use super::background_portal::*;
 use crate::gpui_shim::PlatformSupport;
 use crate::host_os::HostOs;
 use crate::system_activity::freedesktop_activity::{missing_bus_detail, session_bus_socket};
+use crate::url_scheme::scheme_desktop_entry::{APPIMAGE_VARIABLE, launch_path};
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
@@ -54,13 +55,20 @@ pub(super) fn availability(_config: &AutostartConfig) -> PlatformSupport {
 }
 
 pub(super) fn state(config: &AutostartConfig) -> Result<AutostartState, AutostartError> {
-    read_desktop_entry_state(&directory()?, config)
+    read_desktop_entry_state(&directory()?, &lasting(config))
+}
+
+fn lasting(config: &AutostartConfig) -> AutostartConfig {
+    let mut lasting = config.clone();
+    lasting.executable = launch_path(std::env::var_os(APPIMAGE_VARIABLE).as_deref(), &config.executable);
+    lasting
 }
 
 pub(super) fn set_enabled(
     config: &AutostartConfig,
     enabled: bool,
 ) -> Result<PlatformSupport, AutostartError> {
+    let config = &lasting(config);
     let directory = directory()?;
     if !sandbox().needs_portal() {
         return apply_desktop_entry(&directory, config, enabled);
@@ -79,7 +87,7 @@ pub(super) fn set_enabled(
     let record = directory.clone();
     let request_config = config.clone();
     let started = std::thread::Builder::new().name("rise-autostart-portal".into()).spawn(move || {
-        let answer = zbus::block_on(request_background(&request_config, enabled));
+        let answer = crate::dbus_block_on::block_on(request_background(&request_config, enabled));
         let outcome = match answer {
             Ok(outcome) => outcome,
             Err(error) => {

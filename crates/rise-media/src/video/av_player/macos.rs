@@ -633,6 +633,7 @@ impl PictureTap {
                     None => return,
                     Some(false) => {
                         attached.alpha = Some(false);
+                        compose_upright(&current);
                         return;
                     }
                     Some(true) => self.last = None,
@@ -641,6 +642,9 @@ impl PictureTap {
         }
         self.output = None;
         let alpha = item_has_alpha(&current);
+        if alpha == Some(false) {
+            compose_upright(&current);
+        }
         match attach_output(&current, alpha == Some(true)) {
             Ok(output) => self.output = Some(ItemOutput { item: current, output, alpha }),
             Err(error) => tracing::warn!(target: "riseonly", %error, "clip video output unavailable"),
@@ -914,7 +918,7 @@ impl PlaybackEngine for MacPlayback {
     fn copy_pixel_buffer(&mut self) -> Option<AVPlayerPixelBuffer> {
         let current = self.current.as_ref()?;
         let buffer = self.tap.copy_uncopied_picture(&self.player)?;
-        let clockwise_quarter_turns = video_track_transform(&current.item).map_or(0, |transform| transform.clockwise_quarter_turns());
+        let clockwise_quarter_turns = output_quarter_turns(&current.item);
         Some(AVPlayerPixelBuffer::new(Box::new(MacPixelBuffer { buffer, clockwise_quarter_turns })))
     }
 
@@ -1018,6 +1022,36 @@ impl PlaybackEngine for MacPlayback {
             return None;
         }
         Some(size(presented.width as f32, presented.height as f32))
+    }
+}
+
+/// quarter turns left in the output pictures, none once a composition turns them upright
+fn output_quarter_turns(item: &AnyObject) -> u8 {
+    let composed: Option<Retained<AnyObject>> = unsafe { msg_send![item, videoComposition] };
+    if composed.is_some() {
+        return 0;
+    }
+    video_track_transform(item).map_or(0, |transform| transform.clockwise_quarter_turns())
+}
+
+/// turns a rotated track upright with a composition so the surface draws its pictures as they are
+fn compose_upright(item: &AnyObject) {
+    if output_quarter_turns(item) == 0 {
+        return;
+    }
+    let Ok(composition_class) = class(c"AVVideoComposition") else {
+        return;
+    };
+    unsafe {
+        let asset: Option<Retained<AnyObject>> = msg_send![item, asset];
+        let Some(asset) = asset else {
+            return;
+        };
+        let composition: Option<Retained<AnyObject>> =
+            msg_send![composition_class, videoCompositionWithPropertiesOfAsset: &*asset];
+        if let Some(composition) = composition {
+            let _: () = msg_send![item, setVideoComposition: &*composition];
+        }
     }
 }
 

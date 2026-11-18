@@ -16,6 +16,7 @@ use objc2_foundation::{NSArray, NSData, NSError, NSSet, NSString, NSURL};
 use parking_lot::Mutex;
 
 use crate::gpui_shim::PlatformSupport;
+use crate::host_os::HostOs;
 use crate::notifications::*;
 
 const SILENT: bool = cfg!(debug_assertions);
@@ -471,6 +472,19 @@ fn enqueue(job: Job) -> PlatformSupport {
         Some(Ok(())) => PlatformSupport::Performed,
         Some(Err(_)) | None => PlatformSupport::Unsupported,
     }
+}
+
+pub(super) fn open_settings(app: &mut gpui::App) -> PlatformSupport {
+    let url = match objc2_foundation::NSBundle::mainBundle().bundleIdentifier() {
+        Some(bundle) => format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={bundle}"),
+        None => notification_settings_url(HostOs::MacOs).unwrap_or_default().to_owned(),
+    };
+    app.open_url(&url);
+    PlatformSupport::Performed
+}
+
+pub(super) fn settings_reachable() -> bool {
+    true
 }
 
 pub(super) fn host_precondition_met() -> bool {

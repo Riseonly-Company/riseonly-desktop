@@ -79,6 +79,7 @@ use crate::modules::user::pages::profile::settings::language_settings::language_
 use crate::modules::user::pages::profile::settings::customization_settings::settings::launch_animation_settings::launch_animation_settings::LaunchAnimationSettings;
 use crate::modules::music::pages::settings::local_music_tracks::LocalMusicTracks;
 use crate::modules::map::pages::map_friends::map_friends_page::MapFriendsPage;
+use crate::modules::map::pages::map_friends::map_profile_page::MapProfilePage;
 use crate::modules::map::pages::world_map::map_journey_page::MapJourneyComposerPage;
 use crate::modules::map::pages::world_map::map_journey_page::MapJourneyPage;
 use crate::modules::map::pages::map_settings::map_settings_page::MapSettingsPage;
@@ -566,6 +567,7 @@ fn route_content(
         RootRoute::MapJourney { post_id } => held(screen, cx, |cx| MapJourneyPage::new(*post_id, window, cx)),
         RootRoute::WorldMap => held(screen, cx, |cx| WorldMapPage::new(None, true, window, cx)),
         RootRoute::MapFriends => held(screen, cx, MapFriendsPage::new),
+        RootRoute::MapProfile => held(screen, cx, MapProfilePage::new),
         RootRoute::MapSettings => held(screen, cx, MapSettingsPage::new),
         RootRoute::MapSettingsSection(section) => {
             held(screen, cx, |cx| MapSettingsSectionPage::new(*section, cx))

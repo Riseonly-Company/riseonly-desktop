@@ -57,8 +57,7 @@ impl GiftProfileEffectView {
 impl RenderOnce for GiftProfileEffectView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let motion_style = env::<GiftMotionStyleKey>(cx);
-        let playback =
-            window.use_keyed_state((self.id.clone(), "playback"), cx, |_, cx| GiftCosmeticPlayback::new(cx));
+        let playback = GiftCosmeticPlayback::keyed((self.id.clone(), "playback"), window, cx);
         let plays_per_appearance = !self.once && motion_style == GiftMotionStyle::OncePerAppearance;
         let surface = self.media.as_ref().map(|media| {
             let motion = if self.once {

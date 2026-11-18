@@ -46,6 +46,73 @@ pub(crate) const KEYRING_LABEL: &str = "zed-github-account";
 const FILE_PICKER_PORTAL_MISSING: &str =
     "Couldn't open file picker due to missing xdg-desktop-portal implementation.";
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
+type DialogTool = (&'static str, Vec<OsString>);
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+fn open_dialog_tools(title: &str, multiple: bool, directories: bool) -> Vec<DialogTool> {
+    let start = env::var_os("HOME").unwrap_or_else(|| OsString::from("."));
+    let mut zenity = vec![OsString::from("--file-selection"), OsString::from(format!("--title={title}"))];
+    let mut kdialog = Vec::new();
+    if directories {
+        zenity.push(OsString::from("--directory"));
+        kdialog.extend([OsString::from("--getexistingdirectory"), start]);
+    } else {
+        kdialog.extend([OsString::from("--getopenfilename"), start]);
+        if multiple {
+            zenity.extend([OsString::from("--multiple"), OsString::from("--separator=\n")]);
+            kdialog.extend([OsString::from("--multiple"), OsString::from("--separate-output")]);
+        }
+    }
+    kdialog.extend([OsString::from("--title"), OsString::from(title)]);
+    vec![("zenity", zenity), ("kdialog", kdialog)]
+}
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+fn save_dialog_tools(target: &Path) -> Vec<DialogTool> {
+    let mut filename = OsString::from("--filename=");
+    filename.push(target.as_os_str());
+    vec![
+        ("zenity", vec![OsString::from("--file-selection"), OsString::from("--save"), filename]),
+        ("kdialog", vec![OsString::from("--getsavefilename"), target.as_os_str().to_owned()]),
+    ]
+}
+
+/// asks zenity then kdialog when the portal has no file chooser, none means neither ran
+#[cfg(any(feature = "wayland", feature = "x11"))]
+fn run_dialog_tools(tools: Vec<DialogTool>) -> oneshot::Receiver<Option<Option<Vec<PathBuf>>>> {
+    let (answer, answered) = oneshot::channel();
+    let spawned = std::thread::Builder::new().name("file-dialog-tool".into()).spawn(move || {
+        for (tool, arguments) in tools {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "a thread of its own waits for the dialog"
+            )]
+            let Ok(output) = new_std_command(tool).args(&arguments).output() else {
+                continue;
+            };
+            if output.status.success() {
+                let paths = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(PathBuf::from)
+                    .collect();
+                let _ = answer.send(Some(Some(paths)));
+                return;
+            }
+            if output.status.code() == Some(1) {
+                let _ = answer.send(Some(None));
+                return;
+            }
+        }
+        let _ = answer.send(None);
+    });
+    if let Err(error) = spawned {
+        log::warn!("no thread for the file dialog tool: {error}");
+    }
+    answered
+}
+
 // Riseonly: a session that ends (log out, shut down) reaches a Linux process only as signals: systemd
 // sends the session scope SIGTERM and SIGHUP right after it, and their default action kills the
 // process with the loop still running, so on_quit never runs. The handler only writes to a pipe,
@@ -510,11 +577,15 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                 {
                     Ok(request) => request,
                     Err(err) => {
-                        let result = match err {
-                            ashpd::Error::PortalNotFound(_) => anyhow!(FILE_PICKER_PORTAL_MISSING),
-                            err => err.into(),
+                        let tools = open_dialog_tools(title, options.multiple, options.directories);
+                        let result = match run_dialog_tools(tools).await.ok().flatten() {
+                            Some(picked) => Ok(picked),
+                            None => Err(match err {
+                                ashpd::Error::PortalNotFound(_) => anyhow!(FILE_PICKER_PORTAL_MISSING),
+                                err => err.into(),
+                            }),
                         };
-                        let _ = done_tx.send(Err(result));
+                        let _ = done_tx.send(result);
                         return;
                     }
                 };
@@ -555,6 +626,10 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
             .spawn({
                 let directory = directory.to_owned();
                 let suggested_name = suggested_name.map(|s| s.to_owned());
+                let fallback_target = match suggested_name.as_deref() {
+                    Some(name) => directory.join(name),
+                    None => directory.clone(),
+                };
 
                 async move {
                     let mut request_builder =
@@ -572,13 +647,17 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                     let request = match request_builder.send().await {
                         Ok(request) => request,
                         Err(err) => {
-                            let result = match err {
-                                ashpd::Error::PortalNotFound(_) => {
-                                    anyhow!(FILE_PICKER_PORTAL_MISSING)
-                                }
-                                err => err.into(),
+                            let tools = save_dialog_tools(&fallback_target);
+                            let result = match run_dialog_tools(tools).await.ok().flatten() {
+                                Some(picked) => Ok(picked.and_then(|paths| paths.into_iter().next())),
+                                None => Err(match err {
+                                    ashpd::Error::PortalNotFound(_) => {
+                                        anyhow!(FILE_PICKER_PORTAL_MISSING)
+                                    }
+                                    err => err.into(),
+                                }),
                             };
-                            let _ = done_tx.send(Err(result));
+                            let _ = done_tx.send(result);
                             return;
                         }
                     };

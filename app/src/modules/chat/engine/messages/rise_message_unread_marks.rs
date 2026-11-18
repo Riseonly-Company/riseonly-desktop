@@ -246,6 +246,8 @@ struct RiseUnreadMarksRepositoryState {
     recently_consumed_reactions: HashMap<String, ConsumedMark>,
     consumption_clock: u64,
     loading_clock: u64,
+    seen_rows: HashMap<String, u64>,
+    seen_clock: u64,
 }
 
 impl RiseUnreadMarksRepositoryState {
@@ -364,6 +366,70 @@ impl RiseUnreadMarksRepositoryState {
             updated.push(self.store(next));
         }
         updated
+    }
+
+    fn note_seen(&mut self, message_ids: &[String]) {
+        for id in message_ids.iter().filter(|id| !id.is_empty()) {
+            self.seen_clock = self.seen_clock.wrapping_add(1);
+            self.seen_rows.insert(id.clone(), self.seen_clock);
+        }
+        if self.seen_rows.len() <= RECENTLY_CONSUMED_LIMIT {
+            return;
+        }
+        let overflow = self.seen_rows.len() - RECENTLY_CONSUMED_LIMIT;
+        let mut by_age: Vec<(String, u64)> = self.seen_rows.iter().map(|(id, clock)| (id.clone(), *clock)).collect();
+        by_age.sort_by_key(|(_, clock)| *clock);
+        for (id, _) in by_age.into_iter().take(overflow) {
+            self.seen_rows.remove(&id);
+        }
+    }
+
+    fn consume_seen_replies(
+        &mut self,
+        ids: Vec<String>,
+        scopes: &[RiseMessageScope],
+        updated: Vec<RiseUnreadMarksSnapshot>,
+    ) -> RiseUnreadMarksRealtimeOutcome {
+        let candidates: Vec<RiseUnreadMarkCandidate> = ids
+            .iter()
+            .map(|id| RiseUnreadMarkCandidate {
+                message_id: id.clone(),
+                is_mentioned_you: false,
+                has_unread_reactions: false,
+                is_replied_you: false,
+            })
+            .collect();
+        if let Some(scope) = scopes.iter().find(|scope| self.snapshots.contains_key(*scope)).cloned()
+            && let Some(consumed) = self.consume(&scope, &candidates)
+        {
+            let replacements: HashMap<RiseMessageScope, RiseUnreadMarksSnapshot> =
+                consumed.snapshots.into_iter().map(|snapshot| (snapshot.scope.clone(), snapshot)).collect();
+            let snapshots =
+                updated.into_iter().map(|snapshot| replacements.get(&snapshot.scope).cloned().unwrap_or(snapshot)).collect();
+            return RiseUnreadMarksRealtimeOutcome {
+                applies_to_chat_row: true,
+                snapshots,
+                consumption: Some(consumed.consumption),
+            };
+        }
+        let no_ledger = scopes.iter().all(|scope| !self.snapshots.contains_key(scope));
+        let Some(chat_scope) = scopes.last().filter(|_| no_ledger).cloned() else {
+            return RiseUnreadMarksRealtimeOutcome { applies_to_chat_row: true, snapshots: updated, consumption: None };
+        };
+        for id in &ids {
+            self.remember_consumed(id, RiseUnreadMarkKind::Reply);
+        }
+        RiseUnreadMarksRealtimeOutcome {
+            applies_to_chat_row: true,
+            snapshots: updated,
+            consumption: Some(RiseUnreadMarksConsumption {
+                scope: chat_scope,
+                mention_ids: Vec::new(),
+                reply_ids: ids,
+                reaction_ids: Vec::new(),
+                reactions_cleared: 0,
+            }),
+        }
     }
 
     fn consume(&mut self, scope: &RiseMessageScope, candidates: &[RiseUnreadMarkCandidate]) -> Option<RiseUnreadMarksConsumed> {
@@ -515,10 +581,15 @@ impl RiseUnreadMarksRepository {
             state.snapshots.clear();
             state.loading.clear();
             state.assumed_empty.clear();
+            state.seen_rows.clear();
             state.recently_consumed_mentions.clear();
             state.recently_consumed_replies.clear();
             state.recently_consumed_reactions.clear();
         });
+    }
+
+    pub async fn note_seen(&self, message_ids: &[String]) {
+        self.state.with(|state| state.note_seen(message_ids));
     }
 
     pub async fn install_empty(&self, scope: &RiseMessageScope) -> RiseUnreadMarksSnapshot {
@@ -955,8 +1026,7 @@ impl RiseUnreadMarksRepository {
                 }
                 updated.push(state.store(snapshot));
             }
-            if (change.kind == RiseUnreadMarkKind::Reaction || change.kind == RiseUnreadMarkKind::Reply)
-                && change.change == REALTIME_CHANGE_ADDED
+            if change.change == REALTIME_CHANGE_ADDED
                 && let Some(visible_scope) = visible_scope.as_ref()
             {
                 let changed_ids: HashSet<&String> = change.message_ids.iter().collect();
@@ -982,6 +1052,17 @@ impl RiseUnreadMarksRepository {
                         snapshots,
                         consumption: Some(consumed.consumption),
                     };
+                }
+            }
+            if change.kind == RiseUnreadMarkKind::Reply && change.change == REALTIME_CHANGE_ADDED {
+                let seen: Vec<String> = change
+                    .message_ids
+                    .iter()
+                    .filter(|id| state.seen_rows.contains_key(*id) && !state.recently_consumed_replies.contains_key(*id))
+                    .cloned()
+                    .collect();
+                if !seen.is_empty() {
+                    return state.consume_seen_replies(seen, &scopes, updated);
                 }
             }
             RiseUnreadMarksRealtimeOutcome { applies_to_chat_row: true, snapshots: updated, consumption: None }

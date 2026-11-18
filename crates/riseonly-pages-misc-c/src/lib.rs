@@ -2337,6 +2337,7 @@ pub mod modules {
             pub mod rise_rtc_group_voice_settings_screen;
             pub mod rise_rtc_room_presentation_host;
             pub mod rise_rtc_room_screen;
+            pub mod tray_call_hooks_install;
             #[allow(unused_imports)]
             pub use riseonly_ui_chat_input::modules::rtc::pages::*;
             #[allow(unused_imports)]

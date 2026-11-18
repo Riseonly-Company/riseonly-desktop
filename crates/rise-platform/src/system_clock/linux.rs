@@ -23,7 +23,7 @@ impl SystemClockSource for NativeSystemClock {
         std::thread::Builder::new()
             .name("rise-system-clock".into())
             .spawn(move || {
-                let ended = zbus::block_on(async move {
+                let ended = crate::dbus_block_on::block_on(async move {
                     let follow = std::pin::pin!(follow_time_zone(&sink));
                     match select(follow, stopped).await {
                         Either::Left((ended, _)) => ended,

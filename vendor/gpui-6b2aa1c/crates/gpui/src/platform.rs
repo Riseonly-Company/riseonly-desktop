@@ -1314,6 +1314,19 @@ pub trait PlatformAtlas {
     fn contains(&self, _key: &AtlasKey) -> bool {
         false
     }
+
+    /// Uploads tiles of this atlas from any thread, none where tiles are only written in paint (Riseonly 0122).
+    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
+        None
+    }
+}
+
+/// Writes image tiles into an atlas off the main thread so the paint that draws them copies nothing (Riseonly 0122).
+pub trait PlatformImageUploader: Send + Sync {
+    /// Writes the tile of key unless the atlas already holds it.
+    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]);
+    /// Whether the atlas holds the tile of key.
+    fn is_resident(&self, key: &AtlasKey) -> bool;
 }
 
 #[doc(hidden)]
@@ -1502,7 +1515,11 @@ impl PlatformInputHandler {
 
     pub fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
         self.cx
-            .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
+            .update(|window, cx| {
+                self.handler
+                    .bounds_for_range(range_utf16, window, cx)
+                    .map(|bounds| window.zoomed_bounds(bounds))
+            })
             .ok()
             .flatten()
     }
@@ -1554,9 +1571,10 @@ impl PlatformInputHandler {
     pub fn selected_bounds(&mut self, window: &mut Window, cx: &mut App) -> Option<Bounds<Pixels>> {
         let marked_range = self.handler.marked_text_range(window, cx);
         let selection = self.handler.selected_text_range(true, window, cx)?;
-        Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
+        let bounds = Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
             self.handler.bounds_for_range(range, window, cx)
-        })
+        })?;
+        Some(window.zoomed_bounds(bounds))
     }
 
     pub fn ime_candidate_bounds(&mut self) -> Option<Bounds<Pixels>> {
@@ -1570,7 +1588,10 @@ impl PlatformInputHandler {
     #[allow(unused)]
     pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
         self.cx
-            .update(|window, cx| self.handler.character_index_for_point(point, window, cx))
+            .update(|window, cx| {
+                let point = window.unzoomed_point(point);
+                self.handler.character_index_for_point(point, window, cx)
+            })
             .ok()
             .flatten()
     }

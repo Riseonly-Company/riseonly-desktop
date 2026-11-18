@@ -11,6 +11,7 @@ use rise_ui::switch_ui::SwitchUi;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::scroll_view::scroll_view;
 
+use crate::core::widgets::notifier::notifier_store::NotifierBannerPosition;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::widgets::wrappers::list_shell_ui::{ListShellScrollUnderChromeModifiers, SettingsWrapperUi};
@@ -175,6 +176,18 @@ impl NotificationSettings {
                     })
             })
             .collect();
+        let banner_position = NotifierBannerPosition::current(cx);
+        let banner_positions = NotifierBannerPosition::ALL
+            .into_iter()
+            .map(|position| {
+                GroupedBtn::new(position.raw_value(), tr(position.title_key()))
+                    .selected(position == banner_position)
+                    .callback(move |window, cx| {
+                        NotifierBannerPosition::set(position, cx);
+                        window.refresh();
+                    })
+            })
+            .collect();
         let master_flag = canon_notification_flag(notify::ALL_ENABLED);
         let music_flag = canon_notification_flag(notify::MUSIC_ENABLED);
         let mute_all_profiles_flag = canon_notification_flag(notify::MUTE_ALL_PROFILES);
@@ -183,7 +196,7 @@ impl NotificationSettings {
             .w_full()
             .pt(px(12.0))
             .when(system_denied, |column| {
-                if rise_platform::notifications::notification_settings_url(rise_platform::HostOs::current()).is_some() {
+                if rise_platform::notifications::can_open_notification_settings() {
                     column.child(
                         GroupedBtns::new(
                             "notification-system-group",
@@ -230,6 +243,11 @@ impl NotificationSettings {
                 GroupedBtns::new("notification-categories-group", categories)
                     .title(tr("notification_settings_categories").to_uppercase()),
             ))
+            .child(
+                GroupedBtns::new("notification-banner-position-group", banner_positions)
+                    .title(tr("desktop_notification_banner_section").to_uppercase())
+                    .end_group_title(tr("desktop_notification_banner_footer")),
+            )
             .child(GroupedBtns::new(
                 "notification-language-group",
                 vec![Self::push_row(

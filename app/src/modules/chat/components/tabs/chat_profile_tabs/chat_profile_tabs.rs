@@ -17,7 +17,7 @@ use rise_theme::ThemeStore;
 use rise_ui::animated_tabs_ui::animated_tabs_types::{AnimatedTabsMetrics, TabHeaderConfig};
 use rise_ui::hold_context_menu_ui::hold_context_menu_types::hold_context_menu_locks_scroll;
 use rise_ui::swiftui::binding::Binding;
-use rise_ui::swiftui::environment::{EnvKey, LayoutDirection, LayoutDirectionKey, env, env_scope};
+use rise_ui::swiftui::environment::{EnvKey, LayoutDirection, LayoutDirectionKey, env_scope};
 use rise_ui::swiftui::lifecycle::{LifecycleModifiers, on_change};
 use rise_ui::swiftui::measure::measure;
 use rise_ui::swiftui::scroll_view::scroll_view;
@@ -26,7 +26,7 @@ use rise_ui::swiftui::shapes::{Shape, SwiftUiShapes, centred_stroke};
 use crate::core::ui::animated_tabs_ui::animated_tabs_header::AnimatedTabsHeader;
 use crate::core::ui::animated_tabs_ui::animated_tabs_pager_gesture_gate::AnimatedTabsPagerAxisOwnersKey;
 use crate::core::ui::profile_grid_date_scrubber::ProfileGridDateScrubberLayer;
-use crate::core::widgets::wrappers::list_shell_ui::ListShellFloatingTopInsetKey;
+use crate::core::widgets::wrappers::list_shell_ui::list_shell_floating_top_inset;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::chat::backdrop::chat_decorative_backdrop::ChatDecorativeBackdrop;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui::{
@@ -811,7 +811,7 @@ impl RenderOnce for ChatProfileTabs {
             return Empty.into_any_element();
         };
         let background = ThemeStore::shared(cx).read(cx).current_theme().bg._100;
-        let floating_top_inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let floating_top_inset = list_shell_floating_top_inset(cx);
         let container_height =
             ChatProfileViewportLayoutPolicy::pinned_container_height(self.viewport_height, floating_top_inset);
         let pager_height = ChatProfileViewportLayoutPolicy::pager_height(container_height);

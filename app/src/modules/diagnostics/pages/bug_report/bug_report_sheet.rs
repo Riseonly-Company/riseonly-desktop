@@ -6,7 +6,7 @@ use gpui::{
     AnyElement, App, Context, ElementId, Entity, ExternalPaths, FontWeight, ImageFormat, IntoElement, KeyDownEvent,
     PromptButton, PromptLevel, Render, RenderOnce, SharedString, Subscription, Window, white,
 };
-use rise_canon::{RiseBugReportSurface, RiseFeedbackKind, RiseGuideAnchor};
+use rise_canon::{RiseBugReportPlatform, RiseBugReportStatus, RiseBugReportSurface, RiseFeedbackKind, RiseGuideAnchor};
 use rise_core::foundation::foundation_url::Url;
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_i18n::{FormatArg, tr, tr_args};
@@ -43,6 +43,7 @@ use crate::modules::diagnostics::engine::core::rise_bug_report_upload::{
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_actions::bug_report_types::{
     BugReportDraft, BugReportDraftKind, BugReportSheetPage, BugReportSubmissionState,
 };
+use crate::modules::diagnostics::stores::diagnostics::diagnostics_actions::bug_report_wire_types::BugReportRecord;
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_interactions::bug_report_interactions::BugReportInteractionsStore;
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_services::bug_report_services::BugReportServicesStore;
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerItemKind, MediaPickerResult};
@@ -326,7 +327,7 @@ fn paste_attachment(
 ) -> bool {
     {
         let store = services.read(cx);
-        if !store.is_sheet_presented() || store.page().form_kind().is_none() {
+        if !store.is_sheet_presented() || store.page().form_kind().is_none() || store.is_read_only() {
             return false;
         }
     }
@@ -484,7 +485,7 @@ impl BugReportFormPage {
         tr(if self.is_feedback() { "feedback_subtitle" } else { "bug_report_subtitle" })
     }
 
-    fn feedback_kind_row(&self, draft: &BugReportDraft, is_sending: bool) -> AnyElement {
+    fn feedback_kind_row(&self, draft: &BugReportDraft, locked: bool) -> AnyElement {
         let items = BugReportServicesStore::ordered_feedback_kinds()
             .iter()
             .copied()
@@ -501,7 +502,7 @@ impl BugReportFormPage {
                         "feedback_kind_improvement_hint"
                     }))
                     .subtitle_line_limit(2)
-                    .disabled(is_sending)
+                    .disabled(locked)
                     .accessibility_selected(selected)
                     .show_chevron(false)
                     .callback(move |_: &mut Window, cx: &mut App| {
@@ -602,7 +603,7 @@ impl BugReportFormPage {
         )
     }
 
-    fn page_row(&self, draft: &BugReportDraft, is_sending: bool, theme: &AppTheme, cx: &App) -> AnyElement {
+    fn page_row(&self, draft: &BugReportDraft, locked: bool, read_only: bool, theme: &AppTheme, cx: &App) -> AnyElement {
         let navigation = bottom_sheet_navigation(cx);
         let mut item = GroupedBtn::new(
             "bug_report_where",
@@ -612,8 +613,8 @@ impl BugReportFormPage {
         .icon_background(theme.primary._100)
         .subtitle_line_limit(2)
         .trailing(format!("{}/{}", draft.pages.len(), RiseBugReportUpload::maximum_pages()))
-        .disabled(is_sending)
-        .show_chevron(true)
+        .disabled(locked)
+        .show_chevron(!read_only)
         .callback(move |window: &mut Window, cx: &mut App| {
             navigate(&navigation, BugReportSheetPage::Areas, window, cx);
         });
@@ -621,6 +622,85 @@ impl BugReportFormPage {
             item = item.subtitle(label);
         }
         GroupedBtns::new(self.id("where"), vec![item]).horizontal_padding(16.0).into_any_element()
+    }
+
+    fn platforms_section(&self, draft: &BugReportDraft, locked: bool) -> AnyElement {
+        let items = RiseBugReportPlatform::ALL
+            .into_iter()
+            .map(|platform| {
+                let selected = draft.fix_platforms.contains(&platform);
+                let interactions = self.interactions.clone();
+                let (icon, background) = Self::platform_icon(platform);
+                let mut item = GroupedBtn::new(platform.wire(), tr(platform.i18n_key()))
+                    .icon(icon)
+                    .icon_background(color(background))
+                    .disabled(locked)
+                    .accessibility_selected(selected)
+                    .show_chevron(false)
+                    .callback(move |_: &mut Window, cx: &mut App| {
+                        interactions.update(cx, |interactions, cx| interactions.toggle_platform(platform, cx));
+                    });
+                if Self::is_desktop(platform) {
+                    item = item.subtitle(tr("bug_report_platform_desktop"));
+                }
+                if selected {
+                    item = item.trailing(CHECK_MARK);
+                }
+                item
+            })
+            .collect();
+        GroupedBtns::new(self.id("platforms"), items)
+            .title(tr(if self.is_feedback() { "feedback_platforms_title" } else { "bug_report_platforms_title" }).to_uppercase())
+            .horizontal_padding(16.0)
+            .into_any_element()
+    }
+
+    fn is_desktop(platform: RiseBugReportPlatform) -> bool {
+        matches!(
+            platform,
+            RiseBugReportPlatform::DesktopMacos | RiseBugReportPlatform::DesktopLinux | RiseBugReportPlatform::DesktopWindows
+        )
+    }
+
+    fn platform_icon(platform: RiseBugReportPlatform) -> (&'static str, &'static str) {
+        match platform {
+            RiseBugReportPlatform::DesktopMacos => ("laptopcomputer", "#5856D6"),
+            RiseBugReportPlatform::DesktopLinux => ("terminal.fill", "#FF9500"),
+            RiseBugReportPlatform::DesktopWindows => ("desktopcomputer", "#008DE5"),
+            RiseBugReportPlatform::Ios => ("iphone", "#00A9BB"),
+            RiseBugReportPlatform::Android => ("candybarphone", "#34C759"),
+        }
+    }
+
+    fn status_header(status: RiseBugReportStatus) -> AnyElement {
+        let chip_color = color(status.color());
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(16.0))
+            .child(SecondaryText::new(tr("bug_report_status_label")).px(13.0))
+            .child(
+                div().px(px(8.0)).py(px(3.0)).bg(chip_color.opacity(0.15)).capsule().child(
+                    MainText::new(tr(status.i18n_key())).px(12.0).font_weight(FontWeight::SEMIBOLD).color(chip_color),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn status_comment_block(comment: &str, theme: &AppTheme) -> AnyElement {
+        div()
+            .mx(px(16.0))
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .rounded_rect(14.0)
+            .bg(theme.bg._200)
+            .child(SecondaryText::new(tr("bug_report_status_comment_title")).px(13.0))
+            .child(MainText::new(comment.to_owned()).px(15.0).color(theme.text.primary))
+            .into_any_element()
     }
 
     fn selected_pages_label(draft: &BugReportDraft) -> Option<String> {
@@ -656,6 +736,7 @@ impl BugReportFormPage {
         &self,
         draft: &BugReportDraft,
         is_sending: bool,
+        read_only: bool,
         can_attach_more: bool,
         theme: &AppTheme,
     ) -> AnyElement {
@@ -663,7 +744,7 @@ impl BugReportFormPage {
             .screenshots
             .iter()
             .chain(draft.video.iter())
-            .map(|attachment| self.attachment_thumbnail(attachment, is_sending, theme));
+            .map(|attachment| self.attachment_thumbnail(attachment, is_sending, read_only, theme));
         div()
             .flex()
             .flex_col()
@@ -694,13 +775,19 @@ impl BugReportFormPage {
                         .gap(px(8.0))
                         .px(px(16.0))
                         .children(thumbnails)
-                        .child(self.add_attachment_button(is_sending, can_attach_more, theme)),
+                        .when(!read_only, |row| row.child(self.add_attachment_button(is_sending, can_attach_more, theme))),
                 ),
             )
             .into_any_element()
     }
 
-    fn attachment_thumbnail(&self, attachment: &BugReportAttachment, is_sending: bool, theme: &AppTheme) -> AnyElement {
+    fn attachment_thumbnail(
+        &self,
+        attachment: &BugReportAttachment,
+        is_sending: bool,
+        read_only: bool,
+        theme: &AppTheme,
+    ) -> AnyElement {
         let preview: AnyElement = match &attachment.preview_url {
             Some(preview) => CleverImageUi::new(preview.absolute_string().to_owned())
                 .content_mode(ContentMode::Fill)
@@ -731,6 +818,9 @@ impl BugReportFormPage {
                             .color(white()),
                     ),
             );
+        }
+        if read_only {
+            return div().relative().flex_none().size(px(72.0)).child(frame).into_any_element();
         }
         let (interactions, attachment_id) = (self.interactions.clone(), attachment.id.clone());
         div()
@@ -781,6 +871,25 @@ impl BugReportFormPage {
                     .child(MainText::new(tr("bug_report_add_media")).px(11.0).color(theme.text.secondary)),
             )
             .guide_anchor(self.anchor(RiseGuideAnchor::BugReportAddMedia))
+            .into_any_element()
+    }
+
+    fn read_only_footer(&self, record: &BugReportRecord, theme: &AppTheme) -> AnyElement {
+        if !record.can_refile() {
+            return div().into_any_element();
+        }
+        let interactions = self.interactions.clone();
+        div()
+            .px(px(16.0))
+            .py(px(12.0))
+            .bg(theme.bg._100)
+            .child(
+                ButtonUi::new(self.id("refile"))
+                    .on_press(move |_: &mut Window, cx: &mut App| {
+                        interactions.update(cx, |interactions, cx| interactions.refile_viewed_report(cx));
+                    })
+                    .child(MainText::new(tr("bug_report_refile")).px(15.0).font_weight(FontWeight::SEMIBOLD)),
+            )
             .into_any_element()
     }
 
@@ -868,25 +977,34 @@ impl Render for BugReportFormPage {
         let has_content = services.has_content();
         let message_error = if is_active { services.message_error() } else { None };
         let component_error = if is_active { services.component_error() } else { None };
+        let viewed = if is_active { services.viewed_record().cloned() } else { None };
+        let status_comment = if is_active { services.opened_status_comment().map(str::to_owned) } else { None };
+        let read_only = viewed.is_some();
+        let locked = is_sending || read_only;
 
-        let mut column = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .gap(px(18.0))
-            .pt(px(8.0))
-            .pb(px(16.0))
-            .child(div().px(px(16.0)).child(SecondaryText::new(subtitle).px(13.0)));
+        let header = match &viewed {
+            Some(record) => Self::status_header(record.status),
+            None => div().px(px(16.0)).child(SecondaryText::new(subtitle).px(13.0)).into_any_element(),
+        };
+        let mut column = div().flex().flex_col().w_full().gap(px(18.0)).pt(px(8.0)).pb(px(16.0)).child(header);
+        if let Some(comment) = &status_comment {
+            column = column.child(Self::status_comment_block(comment, &theme));
+        }
         if self.is_feedback() {
-            column = column.child(self.feedback_kind_row(&draft, is_sending));
+            column = column.child(self.feedback_kind_row(&draft, locked));
         }
         column = column
             .child(self.message_field(&draft, message_error, can_edit, &theme))
-            .child(self.page_row(&draft, is_sending, &theme, cx));
+            .child(self.page_row(&draft, locked, read_only, &theme, cx))
+            .child(self.platforms_section(&draft, locked));
         if !self.is_feedback() {
             column = column.child(self.component_field(&draft, component_error, can_edit));
         }
-        column = column.child(self.attachments_section(&draft, is_sending, can_attach_more, &theme));
+        column = column.child(self.attachments_section(&draft, is_sending, read_only, can_attach_more, &theme));
+        let footer = match &viewed {
+            Some(record) => self.read_only_footer(record, &theme),
+            None => self.footer(&state, is_active, can_send, is_editing, has_content, &theme),
+        };
 
         let (drop_services, drop_interactions) = (self.services.clone(), self.interactions.clone());
         let submit_interactions = self.interactions.clone();
@@ -906,7 +1024,7 @@ impl Render for BugReportFormPage {
                     .min_h_0()
                     .child(scroll_view(self.id("scroll")).size_full().shows_indicators(false).child(column)),
             )
-            .child(self.footer(&state, is_active, can_send, is_editing, has_content, &theme))
+            .child(footer)
     }
 }
 

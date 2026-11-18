@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{App, Context, Entity, Task};
-use rise_canon::{RiseBugReportSurface, RiseFeedbackKind};
+use rise_canon::{RiseBugReportPlatform, RiseBugReportSurface, RiseFeedbackKind};
 use rise_catalog::DIAGNOSTICS_FEEDBACK_KINDS_DEFAULT;
 use serde_json::{Map, Value};
 
@@ -27,6 +27,7 @@ const MESSAGE_KEY: &str = "message";
 const COMPONENT_KEY: &str = "component";
 const PAGES_KEY: &str = "pages";
 const SEEDED_PAGES_KEY: &str = "seededPages";
+const FIX_PLATFORMS_KEY: &str = "fixPlatforms";
 
 /// what survives a relaunch of the report sheet: text, areas feedback kind idempotency key page
 /// one record per draft kind under the account scope, attachments are not persisted
@@ -39,6 +40,7 @@ pub struct BugReportPersistedDraft {
     pub component: String,
     pub pages: Vec<RiseBugReportSurface>,
     pub seeded_pages: Vec<RiseBugReportSurface>,
+    pub fix_platforms: Vec<RiseBugReportPlatform>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +138,10 @@ impl BugReportDraftPersistence {
             dictionary.insert(COMPONENT_KEY.to_owned(), Value::from(draft.component.clone()));
             dictionary.insert(PAGES_KEY.to_owned(), Self::encode_pages(&draft.pages));
             dictionary.insert(SEEDED_PAGES_KEY.to_owned(), Self::encode_pages(&draft.seeded_pages));
+            dictionary.insert(
+                FIX_PLATFORMS_KEY.to_owned(),
+                Value::Array(draft.fix_platforms.iter().map(|platform| Value::from(platform.wire())).collect()),
+            );
             drafts.insert(kind.raw_value().to_owned(), Value::Object(dictionary));
         }
         let mut raw = Map::new();
@@ -198,6 +204,7 @@ impl BugReportDraftPersistence {
                     component: Self::decode_text(dictionary, COMPONENT_KEY),
                     pages: Self::decode_pages(dictionary, PAGES_KEY),
                     seeded_pages: Self::decode_pages(dictionary, SEEDED_PAGES_KEY),
+                    fix_platforms: Self::decode_platforms(dictionary),
                 },
             );
         }
@@ -206,6 +213,17 @@ impl BugReportDraftPersistence {
 
     fn decode_text(dictionary: &Map<String, Value>, key: &str) -> String {
         dictionary.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+    }
+
+    fn decode_platforms(dictionary: &Map<String, Value>) -> Vec<RiseBugReportPlatform> {
+        let known: Vec<RiseBugReportPlatform> = dictionary
+            .get(FIX_PLATFORMS_KEY)
+            .and_then(Value::as_array)
+            .map(|platforms| {
+                platforms.iter().filter_map(Value::as_str).filter_map(RiseBugReportPlatform::from_wire).collect()
+            })
+            .unwrap_or_default();
+        if known.is_empty() { RiseBugReportPlatform::ALL.to_vec() } else { known }
     }
 
     fn decode_pages(dictionary: &Map<String, Value>, key: &str) -> Vec<RiseBugReportSurface> {

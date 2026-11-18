@@ -102,6 +102,62 @@ pub fn oriented_bgra_of_nv12(
     Some((u32::try_from(out_columns).ok()?, u32::try_from(out_rows).ok()?, bgra))
 }
 
+/// nv12 picture turned clockwise by quarter turns, rows packed, none for planes too short for their strides
+pub fn turned_nv12(picture: &Nv12Picture, clockwise_quarter_turns: u8) -> Option<Nv12Picture> {
+    let columns = usize::try_from(picture.width).ok()?;
+    let rows = usize::try_from(picture.height).ok()?;
+    if columns == 0 || rows == 0 {
+        return None;
+    }
+    let luma_stride = usize::try_from(picture.luma_stride).ok()?;
+    let chroma_stride = usize::try_from(picture.chroma_stride).ok()?;
+    let chroma_columns = columns.div_ceil(2);
+    let chroma_rows = rows.div_ceil(2);
+    if luma_stride < columns || chroma_stride < chroma_columns * 2 {
+        return None;
+    }
+    let luma_needed = luma_stride.checked_mul(rows - 1)?.checked_add(columns)?;
+    let chroma_needed = chroma_stride.checked_mul(chroma_rows - 1)?.checked_add(chroma_columns * 2)?;
+    if picture.luma.len() < luma_needed || picture.chroma.len() < chroma_needed {
+        return None;
+    }
+    let turns = clockwise_quarter_turns % 4;
+    if turns == 0 {
+        return Some(picture.clone());
+    }
+    let (out_columns, out_rows) = if turns % 2 == 1 { (rows, columns) } else { (columns, rows) };
+    let source = |out_column: usize, out_row: usize| match turns {
+        1 => (out_row, rows - 1 - out_column),
+        2 => (columns - 1 - out_column, rows - 1 - out_row),
+        _ => (columns - 1 - out_row, out_column),
+    };
+    let mut luma = Vec::with_capacity(out_columns.checked_mul(out_rows)?);
+    for out_row in 0..out_rows {
+        for out_column in 0..out_columns {
+            let (column, row) = source(out_column, out_row);
+            luma.push(picture.luma[row * luma_stride + column]);
+        }
+    }
+    let (out_chroma_columns, out_chroma_rows) = (out_columns.div_ceil(2), out_rows.div_ceil(2));
+    let mut chroma = Vec::with_capacity(out_chroma_columns.checked_mul(out_chroma_rows)?.checked_mul(2)?);
+    for out_row in 0..out_chroma_rows {
+        for out_column in 0..out_chroma_columns {
+            let (column, row) = source(out_column * 2, out_row * 2);
+            let at = (row / 2) * chroma_stride + (column / 2) * 2;
+            chroma.extend_from_slice(&picture.chroma[at..at + 2]);
+        }
+    }
+    Some(Nv12Picture {
+        width: u32::try_from(out_columns).ok()?,
+        height: u32::try_from(out_rows).ok()?,
+        luma: luma.into(),
+        luma_stride: u32::try_from(out_columns).ok()?,
+        chroma: chroma.into(),
+        chroma_stride: u32::try_from(out_chroma_columns * 2).ok()?,
+        generation: picture.generation,
+    })
+}
+
 fn rgb_of(columns: &[[f32; 4]; 4], luma: u8, cb: u8, cr: u8) -> [u8; 3] {
     let yuv = [f32::from(luma) / 255.0, f32::from(cb) / 255.0, f32::from(cr) / 255.0];
     let mut rgb = [0_u8; 3];

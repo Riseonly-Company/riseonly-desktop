@@ -400,14 +400,14 @@ pub const fn notification_settings_url(host: HostOs) -> Option<&'static str> {
     }
 }
 
+/// the page for this app where the system lets one, else the general notification page
 pub fn open_notification_settings(app: &mut gpui::App) -> PlatformSupport {
-    match notification_settings_url(HostOs::current()) {
-        Some(url) => {
-            app.open_url(url);
-            PlatformSupport::Performed
-        }
-        None => PlatformSupport::Unsupported,
-    }
+    super::os::open_settings(app)
+}
+
+/// true when open_notification_settings has somewhere to go
+pub fn can_open_notification_settings() -> bool {
+    super::os::settings_reachable()
 }
 
 /// registers the handler for notification clicks on whichever route this host posts by
