@@ -120,6 +120,16 @@ if [ -n "$(linked_ffmpeg "$EXE")" ]; then
     echo "ffmpeg: $(ls "$LIBS" | tr '\n' ' ')"
 fi
 
+for soname in libuv.so.1; do
+    readelf -d "$EXE" | grep -q "(NEEDED).*\[$soname\]" || continue
+    lib=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }')
+    [ -n "$lib" ] || { echo "the binary needs $soname and the build machine has none" >&2; exit 1; }
+    mkdir -p "$LIBS"
+    cp -L "$lib" "$LIBS/$soname"
+    readelf -d "$EXE" | grep -q 'ORIGIN/../lib/riseonly' || patchelf --add-rpath '$ORIGIN/../lib/riseonly' "$EXE"
+    echo "bundled $soname"
+done
+
 for tree in "$ROOT"/vendor/rlottie/rlottie-*/; do
     [ -d "$tree" ] || continue
     tree="${tree%/}"
