@@ -22,6 +22,9 @@ label env-staging c5def5 "build against the staging backend instead of the branc
 label env-prod c5def5 "build against the production backend instead of the branch default"
 label release-profile f9d0c4 "build with the release profile (lto) instead of fast"
 label tests fbca04 "also run cargo test and clippy"
+label release-patch c2e0c6 "the release moves the version by a patch, 1.1.4 -> 1.1.5 (the default)"
+label release-minor c2e0c6 "the release moves the version by a minor, 1.1.4 -> 1.2.0"
+label release-major c2e0c6 "the release moves the version by a major, 1.1.4 -> 2.0.0"
 
 case "$ACTION:$BASE" in
     opened:staging | opened:main | reopened:staging | reopened:main | ready_for_review:staging | ready_for_review:main)
@@ -29,3 +32,13 @@ case "$ACTION:$BASE" in
         echo "build label added"
         ;;
 esac
+
+if [ "$BASE" = staging ]; then
+    names=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+    has() { [ "$(printf '%s\n' "$names" | grep -cx "$1")" != 0 ]; }
+    if has release-minor || has release-major; then
+        ! has release-patch || gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label release-patch >/dev/null
+    else
+        has release-patch || gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label release-patch >/dev/null
+    fi
+fi
