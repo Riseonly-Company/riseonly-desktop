@@ -61,6 +61,15 @@ sources package, sign and notarize them instead of compiling. Compile such a bin
 `build-macos.sh` does: no `RISE_ENV`, the `RISE_BUILD_NUMBER` of that build, the
 `RISE_UPDATE_FEED_PUBLIC_KEY` of the repository.
 
+The label `macos-local` moves the macOS jobs of a pull request or a release from GitHub machines to
+the runner `riseonly-desktop-macos` (a Mac of the team, `~/actions-runner/riseonly-desktop`, a
+launchd agent of the logged in user). The job is the same: it compiles when no kept binary fits,
+packages, signs and notarizes with the repository secrets. There the checkout keeps `target` and
+`vendor/ffmpeg` between runs, the Rust toolchain and the cargo home are the machine's own, and the
+build waits for `/tmp/riseonly-desktop-build.lock`. The label alone picks both Mac builds; a pull
+request from a fork never reaches that runner. The Mac has to be on and logged in, else the job
+waits in the queue.
+
 ## Where the files go
 
 ```
@@ -88,15 +97,26 @@ per target) and `downloads` (every file, the dmg included, for the site). A rele
 platforms keeps the other targets of the same version.
 
 `latest/` holds a copy of every file of the newest version under a name without the version
-(`Riseonly-macos-aarch64.dmg`, `Riseonly-Staging-macos-aarch64.dmg`), so the site links to one fixed
-url. Publishing an older version again leaves `latest/` alone. Republishing a version replaces its
-build in `releases.json`, the files of the earlier build stay on the cdn under their own folder.
+(`Riseonly-macos-aarch64.dmg`, `Riseonly-Staging-macos-aarch64.dmg`), a fixed url to hand out.
+Publishing an older version again leaves `latest/` alone. The versions page and `releases.json`
+link the exact files (`url`), the fixed one is `stable_url`.
 
-The pull zone caches for 30 days by default, so the files that change in place have two edge rules:
-`feed.json`, `releases.json` and `index.html` under `desktop/` are never cached (cdn and browser
-cache time 0), `latest/*` stays cached on the cdn for download speed but gets browser cache time 0,
-and the publish step purges every `latest/` file it replaces with `BUNNY_API_KEY`. Without that
-secret a new `latest/` file can lag behind on the cdn until its cache expires.
+A cached file is never replaced under its url: the cdn keeps a big file in 5 MB pieces, and after
+a replace an edge that served the old file answers with old and new pieces mixed, the right size and
+the wrong bytes; neither a url purge nor a folder purge clears it. So publishing a version and build
+that already has a folder goes to a new one, `<version>-<build>.<run>-<attempt>`, and `latest/`,
+the one place replaced in place, is not cached on the cdn at all.
+
+The pull zone caches for 30 days by default, so the files that change in place have two edge rules
+with cdn and browser cache time 0: `feed.json`, `releases.json` and `index.html` under `desktop/`,
+and `desktop/*/latest/*`. The publish step purges what it replaced with `BUNNY_API_KEY`, then
+downloads every file it uploaded through the cdn and compares it with the build; that check sees
+one edge only.
+
+The zone has no allowed referrers list. A third edge rule keeps the hotlink protection for the app
+media: a request outside `desktop/` whose `Referer` starts with `http` and is not riseonly.net or
+a subdomain is blocked. Everything under `desktop/` answers any referer, so a download link works
+from GitHub, a chat or a search page.
 
 The publish step also posts the release as json to `BACKEND_RELEASE_HOOK` when that secret is set.
 A failed hook is a warning, the feed is already out.

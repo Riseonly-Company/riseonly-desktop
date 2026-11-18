@@ -31,6 +31,8 @@ jobs:
       linux_archs: ${{ steps.plan.outputs.linux_archs }}
       windows_archs: ${{ steps.plan.outputs.windows_archs }}
       macos_archs: ${{ steps.plan.outputs.macos_archs }}
+      macos_runner: ${{ steps.plan.outputs.macos_runner }}
+      macos_local: ${{ steps.plan.outputs.macos_local }}
       environment: ${{ steps.plan.outputs.environment }}
       profile: ${{ steps.plan.outputs.profile }}
       version: ${{ steps.plan.outputs.version }}
@@ -59,6 +61,7 @@ jobs:
         name: Plan
         env:
           GH_TOKEN: ${{ github.token }}
+          MACOS_RUNNER: ${{ vars.DESKTOP_MACOS_RUNNER }}
         run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
       - name: The version is new
         if: steps.plan.outputs.run == 'true' && steps.plan.outputs.environment == 'production'
@@ -207,7 +210,7 @@ jobs:
   macos:
     needs: plan
     if: needs.plan.outputs.run == 'true' && needs.plan.outputs.macos == 'true'
-    runs-on: ${{ fromJSON(vars.DESKTOP_MACOS_RUNNER || '"macos-15"') }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.macos_runner) }}
     strategy:
       fail-fast: false
       matrix:
@@ -224,6 +227,7 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       SLUG: ${{ needs.plan.outputs.slug }}
       MACOS_ARCH: ${{ matrix.arch }}
+      MACOS_LOCAL: ${{ needs.plan.outputs.macos_local }}
       PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('macos-{0}', matrix.arch)] }}
       PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-b${{ needs.plan.outputs.build_number }}-macos-${{ matrix.arch }}
       PAYLOAD_TAG: ${{ needs.plan.outputs.payload_tag }}
@@ -234,6 +238,7 @@ jobs:
           ref: ${{ needs.plan.outputs.sha }}
           path: riseonly-desktop
           persist-credentials: false
+          clean: ${{ needs.plan.outputs.macos_local != 'true' }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
@@ -257,18 +262,19 @@ jobs:
           gh release download "$PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PAYLOAD_ASSET" --dir "$RUNNER_TEMP/payload"
           mkdir -p "riseonly-desktop/payload/macos-$MACOS_ARCH"
           tar -xzf "$RUNNER_TEMP/payload/$PAYLOAD_ASSET" -C "riseonly-desktop/payload/macos-$MACOS_ARCH"
-      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == ''
+      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == '' && env.MACOS_LOCAL != 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
           toolchain: ${{ needs.plan.outputs.rust }}
           targets: x86_64-apple-darwin
-      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == ''
+      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == '' && env.MACOS_LOCAL != 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: riseonly-desktop -> target
           key: ${{ needs.plan.outputs.profile }}-${{ matrix.arch }}
           cache-on-failure: true
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - if: env.MACOS_LOCAL != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: riseonly-desktop/vendor/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('riseonly-desktop/scripts/build-ffmpeg-lgpl.sh') }}
@@ -287,7 +293,12 @@ jobs:
           PAYLOAD: ${{ (env.PAYLOAD_RUN != '' || env.PAYLOAD_ASSET != '') && format('payload/macos-{0}', matrix.arch) || '' }}
         run: |
           rm -rf dist
-          bash scripts/ci/build-macos.sh
+          if [ "$MACOS_LOCAL" = true ]; then
+            [ "$MACOS_ARCH" != x86_64 ] || rustup target add x86_64-apple-darwin
+            caffeinate -i /usr/bin/lockf -k /tmp/riseonly-desktop-build.lock bash scripts/ci/build-macos.sh
+          else
+            bash scripts/ci/build-macos.sh
+          fi
       - if: env.PAYLOAD_RUN == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

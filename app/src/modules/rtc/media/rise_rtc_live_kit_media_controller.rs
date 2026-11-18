@@ -757,20 +757,17 @@ impl RiseRTCLiveKitMediaController {
         let delivered = Arc::new(AtomicBool::new(false));
         let frames: ScreenFrameSink = Arc::new(move |frame: ScreenFrame| {
             let next = generation.fetch_add(1, Ordering::Relaxed) + 1;
-            match frame.into_host_frame(stream_id, next) {
-                Ok(host_frame) => match livekit_room::push_local_frame(TrackSource::ScreenShare, &host_frame) {
-                    Ok(()) => {
-                        if !delivered.swap(true, Ordering::Relaxed) {
-                            RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Media, || {
-                                "screen share: first frame arrived".to_owned()
-                            });
-                            let dimensions = Dimensions { width: host_frame.width, height: host_frame.height };
-                            Self::on_main(move |cx| Self::show_local_screen_track(dimensions, cx));
-                        }
+            let dimensions = Dimensions { width: frame.width, height: frame.height };
+            match livekit_room::push_screen_frame(frame, stream_id, next) {
+                Ok(()) => {
+                    if !delivered.swap(true, Ordering::Relaxed) {
+                        RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Media, || {
+                            "screen share: first frame arrived".to_owned()
+                        });
+                        Self::on_main(move |cx| Self::show_local_screen_track(dimensions, cx));
                     }
-                    Err(reason) => tracing::debug!(%reason, "rtc screen frame dropped"),
-                },
-                Err(error) => tracing::debug!(%error, "rtc screen frame unreadable"),
+                }
+                Err(reason) => tracing::debug!(%reason, "rtc screen frame dropped"),
             }
         });
         let ended: ScreenEndSink = Arc::new(|end: ScreenCaptureEnd| {

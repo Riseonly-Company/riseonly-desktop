@@ -8,6 +8,11 @@ dist=${1:?usage: publish.sh <dist dir>}
 host=${BUNNY_STORAGE_HOST:-storage.bunnycdn.com}
 prefix=${STORAGE_PREFIX:-desktop}
 folder="$ENVIRONMENT/$VERSION-$BUILD_NUMBER"
+kept=$(curl -fsS -H "AccessKey: $BUNNY_STORAGE_KEY" "https://$host/$BUNNY_STORAGE_ZONE/$prefix/$folder/" || true)
+case "$kept" in
+    '' | '[]') ;;
+    *) folder="$folder.${GITHUB_RUN_NUMBER:-0}-${GITHUB_RUN_ATTEMPT:-1}" ;;
+esac
 base_url="${DOWNLOADS_BASE%/}/$folder"
 feed_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/feed.json"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,32 +67,47 @@ esac
 ENVIRONMENT="$ENVIRONMENT" SLUG="$SLUG" VERSION="$VERSION" LATEST_URL="$latest_url" \
     python3 "$here/releases.py" "$work/feed.json" "$work/releases-current.json" \
     "$work/releases.json" "$work/index.html" "$work/latest-copies.tsv"
-purge_urls=("$feed_url" "$feed_url.sig" "${DOWNLOADS_BASE%/}/$ENVIRONMENT/releases.json" "$index_url")
-for file in "${files[@]}"; do purge_urls+=("$base_url/$(basename "$file")"); done
+purge() {
+    [ -n "${BUNNY_API_KEY:-}" ] || return 0
+    curl -fsS -X POST -H "AccessKey: $BUNNY_API_KEY" \
+        "https://api.bunny.net/purge?async=false&url=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1")" >/dev/null &&
+        echo "purged $1" || echo "::warning::cdn purge failed for $1"
+}
+
+served=()
+for file in "${files[@]}"; do served+=("$file"$'\t'"$base_url/$(basename "$file")"); done
 while IFS=$'\t' read -r name latest; do
     source_file=$(printf '%s\n' "${files[@]}" | awk -F/ -v n="$name" '$NF == n' | head -n 1)
-    [ -n "$source_file" ] || { echo "no local file for $name" >&2; exit 1; }
+    [ -n "$source_file" ] || continue
     upload "$source_file" "$ENVIRONMENT/latest/$latest" application/octet-stream
-    purge_urls+=("$latest_url/$latest")
+    served+=("$source_file"$'\t'"$latest_url/$latest")
 done < "$work/latest-copies.tsv"
 upload "$work/releases.json" "$ENVIRONMENT/releases.json" application/json
 upload "$work/index.html" "$ENVIRONMENT/index.html" "text/html; charset=utf-8"
 
-if [ -n "${BUNNY_API_KEY:-}" ]; then
-    for url in "${purge_urls[@]}"; do
-        curl -fsS -X POST -H "AccessKey: $BUNNY_API_KEY" \
-            "https://api.bunny.net/purge?async=false&url=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$url")" >/dev/null &&
-            echo "purged $url" || echo "::warning::cdn purge failed for $url"
+for url in "$feed_url" "$feed_url.sig" "${DOWNLOADS_BASE%/}/$ENVIRONMENT/releases.json" "$index_url" \
+    "$base_url/*" "$latest_url/*"; do
+    purge "$url"
+done
+
+for pair in "${served[@]}"; do
+    file=${pair%%$'\t'*}
+    url=${pair#*$'\t'}
+    want=$(sha256sum "$file" | awk '{ print $1 }')
+    attempt=1
+    until [ "$(curl -fsS --retry 2 "$url" | sha256sum | awk '{ print $1 }')" = "$want" ]; do
+        [ "$attempt" -lt 5 ] || { echo "::error::the cdn serves another file at $url" >&2; exit 1; }
+        echo "::warning::$url is not the uploaded file, purge $attempt of 4"
+        attempt=$((attempt + 1))
+        purge "$url"
+        purge "${url%/*}/*"
+        sleep 20
     done
-fi
+    echo "the cdn serves $url"
+done
 
 notes="$work/notes.md"
-{
-    echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT"
-    echo
-    echo "feed: $feed_url"
-    for file in "${files[@]}"; do echo "- $base_url/$(basename "$file")"; done
-} > "$notes"
+echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT" > "$notes"
 if [ "$ENVIRONMENT" = production ]; then
     gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
         --title "$SLUG $VERSION" --notes-file "$notes" "${files[@]}"
@@ -96,6 +116,12 @@ else
     gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --draft --prerelease \
         --title "$SLUG $VERSION ($BUILD_NUMBER)" --notes-file "$notes" "${files[@]}"
 fi
+{
+    echo
+    gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+        --jq '.assets | sort_by(.name) | .[] | "- [\(.name)](\(.url))"'
+} >> "$notes"
+gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes" >/dev/null
 
 if [ -n "${BACKEND_RELEASE_HOOK:-}" ]; then
     FEED_URL="$feed_url" python3 - "$work/feed.json" "$VERSION" > "$work/hook.json" <<'PY'
