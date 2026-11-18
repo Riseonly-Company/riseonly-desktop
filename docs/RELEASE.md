@@ -145,7 +145,7 @@ A failed hook is a warning, the feed is already out.
 ## Machines
 
 - Linux x86_64 and both Windows architectures build on the ci builder, in docker
-  (`scripts/ci/toolchain/Dockerfile`, Ubuntu 22.04 for the glibc floor, llvm 19, cargo-xwin for
+  (`scripts/ci/toolchain/Dockerfile`, Ubuntu 24.04, so the Linux build needs glibc 2.39 and libstdc++ of GCC 13 (Ubuntu 24.04, Debian 13, Fedora 40 and newer); 22.04 has PipeWire headers too old for libspa 0.8 and a GCC that rejects the WebRTC headers, llvm 19, cargo-xwin for
   msvc, mingw-w64 and llvm-mingw for the Windows FFmpeg dlls). Windows arm64 is cross compiled
   there too (`WIN_ARCH=aarch64`); the two Windows jobs run one after another. Linux arm64 builds
   on the GitHub hosted `ubuntu-24.04-arm` runner in the same image (override with the
