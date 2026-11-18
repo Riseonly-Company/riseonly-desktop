@@ -580,7 +580,7 @@ mod tests {
         assert!(assets().join("icons/lucide/heart.svg").is_file());
     }
 
-    const ALL_BODY_FILLS: &[&str] = &["bell", "bell-dot", "crown", "hammer", "hand", "layout-grid", "lightbulb", "messages-square", "pause", "pin", "pointer", "shopping-cart", "skip-back", "skip-forward", "thumbs-down", "thumbs-up", "user-round", "user-round-plus", "users-round", "video"];
+    const ALL_BODY_FILLS: &[&str] = &["bell", "bell-dot", "crown", "hammer", "hand", "layout-grid", "lightbulb", "messages-square", "pause", "pin", "pointer", "shopping-cart", "skip-back", "skip-forward", "thumbs-down", "thumbs-up", "user-round", "user-round-plus", "users-round", "users-round-three", "video"];
 
     #[test]
     fn every_fill_table_is_sorted_and_names_each_element_of_a_real_document() {

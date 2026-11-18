@@ -26,6 +26,7 @@ use rise_ui::swiftui::lifecycle::use_task;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::progress_view::{ControlSize, progress_view};
 
+use crate::modules::chat::components::chat::chat_audio_now_playing_bar::ChatAudioNowPlayingBar;
 use crate::core::lib::canon_format::RiseFormat;
 use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
@@ -894,6 +895,7 @@ impl AudioMessagePlaybackRow {
             record_play_on_success: false,
             ..MusicPlayOptions::default()
         };
+        ChatAudioNowPlayingBar::reveal(cx);
         player.update(cx, |player, cx| player.play(track.clone(), options, cx));
         MessageInteractionsStore::shared(cx).update(cx, |store, cx| {
             store.continue_chat_audio_queue(chat_id, ChatAudioQueueContinuationOrder::Chronological, cx);

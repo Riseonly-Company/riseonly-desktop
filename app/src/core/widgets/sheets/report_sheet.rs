@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 
 use gpui::{
-    AnyElement, App, Context, ElementId, Entity, ExternalPaths, FontWeight, Hsla, IntoElement, ParentElement, Render, RenderOnce,
+    AnyElement, AnyWindowHandle, App, Context, ElementId, Entity, ExternalPaths, FontWeight, Hsla, IntoElement, ParentElement, Render, RenderOnce,
     SharedString, Styled, Subscription, Window, black, div, px, transparent_black, white,
 };
 use rise_canon::RiseLimits;
@@ -86,6 +86,7 @@ pub struct ReportSheetStore {
     handed_off_draft_id: Option<String>,
 
     is_checking_connection: bool,
+    presenting_window: Option<AnyWindowHandle>,
 }
 
 impl ReportSheetStore {
@@ -106,6 +107,16 @@ impl ReportSheetStore {
             include_context: true,
             handed_off_draft_id: None,
             is_checking_connection: false,
+            presenting_window: None,
+        }
+    }
+
+    /// the sheet comes up in the window it was asked from, a call window included
+    /// a window that closed meanwhile hands it to every shell window
+    pub fn presents_in(&self, window: AnyWindowHandle, cx: &App) -> bool {
+        match self.presenting_window {
+            Some(presenting) if presenting != window => !cx.windows().contains(&presenting),
+            _ => true,
         }
     }
 
@@ -198,6 +209,7 @@ impl ReportSheetStore {
         self.selected_reason = None;
         self.description = String::new();
         self.attachments = Vec::new();
+        self.presenting_window = cx.active_window();
         self.route = ReportSheetRoute::Sheet;
         cx.notify();
     }
@@ -518,10 +530,11 @@ impl ReportSheetHost {
 }
 
 impl Render for ReportSheetHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
+        let here = !store.has_interactive_surface() || store.presents_in(window.window_handle(), cx);
         let (mounts_sheet, mounts_picker, interactive) =
-            (store.mounts_sheet(), store.mounts_picker(), store.has_interactive_surface());
+            (here && store.mounts_sheet(), here && store.mounts_picker(), here && store.has_interactive_surface());
 
         let mut root = div().absolute().top_0().left_0();
         root = if interactive { root.size_full() } else { root.size_0().overflow_hidden() };

@@ -15,8 +15,9 @@ use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, 
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::sai::modules::sai_data_render::sai_data_render::SaiDataRenderDefaultsEmpty;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_container::HoldContextMenuContainer;
-use crate::core::ui::premium_badge::PremiumBadge;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::wrappers::list_shell_ui::{
     ListShellScrollUnderChromeModifiers, SettingsWrapperUi, list_shell_floating_top_inset,
 };
@@ -139,7 +140,12 @@ impl BlockedUsersScreenParts {
                     .source(SharedString::from(entry.logo.clone()))
                     .name(SharedString::from(name.to_owned()))
                     .user_id(SharedString::from(entry.user_id.clone()))
-                    .size(UserRelationshipRowMetrics::AVATAR_SIZE),
+                    .size(UserRelationshipRowMetrics::AVATAR_SIZE)
+                    .gift_worn_frame(
+                        SharedString::from(format!("blocked-user-frame-{}", entry.user_id)),
+                        (!entry.is_deleted).then(|| entry.user_id.clone()),
+                        UserRelationshipRowMetrics::AVATAR_SIZE,
+                    ),
             )
             .child(
                 vstack(4.0)
@@ -147,18 +153,8 @@ impl BlockedUsersScreenParts {
                     .min_w_0()
                     .align(HorizontalAlignment::Leading)
                     .child(
-                        hstack(4.0)
-                            .child(
-                                MainText::new(name.to_owned())
-                                    .px(16.0)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .number_of_lines(1),
-                            )
-                            .when(entry.is_premium, |stack| {
-                                stack.child(
-                                    PremiumBadge::new().user_id(Some(SharedString::from(entry.user_id.clone()))).size(14.0),
-                                )
-                            }),
+                        UserNameWithBadges::new(Some(SharedString::from(entry.user_id.clone())), name.to_owned())
+                            .premium(entry.is_premium, None, None),
                     )
                     .when(!subtitle.is_empty(), |stack| {
                         stack.child(

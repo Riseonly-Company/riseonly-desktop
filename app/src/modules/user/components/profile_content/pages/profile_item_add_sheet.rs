@@ -8,6 +8,7 @@ use rise_canon::{RiseGuideAnchor, RiseGuideSignal};
 use rise_core::foundation::foundation_date::{Date, RiseClock};
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_i18n::tr;
+use rise_ui::context_menu_ui::DeferredLayerFloorKey;
 use rise_ui::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use rise_ui::main_text::MainText;
 use rise_ui::swiftui::date_picker::{DatePicker, DatePickerComponents};
@@ -112,6 +113,7 @@ impl ProfileItemAddSheet {
         let theme = rise_ui::theme(cx);
         let popover_background = theme.bg._100;
         let popover_border = theme.border._100;
+        let popover_priority = env::<DeferredLayerFloorKey>(cx) + 1;
         div()
             .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _, cx| {
                 down_state.update(cx, |state, _| {
@@ -138,30 +140,33 @@ impl ProfileItemAddSheet {
                     .child(MainText::new(PlanDateFormatting::display(PlanDateFormatting::ms(date))).px(14.0)),
             )
             .when(shows_date_picker, |picker| {
-                picker.child(deferred(
-                    anchored().anchor(Anchor::TopRight).snap_to_window_with_margin(px(8.0)).child(
-                        div()
-                            .occlude()
-                            .w(px(300.0))
-                            .p(px(12.0))
-                            .bg(popover_background)
-                            .border_1()
-                            .border_color(popover_border)
-                            .rounded(px(12.0))
-                            .on_mouse_down_out(move |event: &MouseDownEvent, _, cx| {
-                                close_state.update(cx, |state, cx| {
-                                    state.shows_date_picker = false;
-                                    state.date_picker_closed_at = Some(event.position);
-                                    cx.notify();
-                                });
-                            })
-                            .child(
-                                DatePicker::new("profile-item-add-date-picker", selection)
-                                    .displayed_components(DatePickerComponents::Date)
-                                    .tint(tint),
-                            ),
-                    ),
-                ))
+                picker.child(
+                    deferred(
+                        anchored().anchor(Anchor::TopRight).snap_to_window_with_margin(px(8.0)).child(
+                            div()
+                                .occlude()
+                                .w(px(300.0))
+                                .p(px(12.0))
+                                .bg(popover_background)
+                                .border_1()
+                                .border_color(popover_border)
+                                .rounded(px(12.0))
+                                .on_mouse_down_out(move |event: &MouseDownEvent, _, cx| {
+                                    close_state.update(cx, |state, cx| {
+                                        state.shows_date_picker = false;
+                                        state.date_picker_closed_at = Some(event.position);
+                                        cx.notify();
+                                    });
+                                })
+                                .child(
+                                    DatePicker::new("profile-item-add-date-picker", selection)
+                                        .displayed_components(DatePickerComponents::Date)
+                                        .tint(tint),
+                                ),
+                        ),
+                    )
+                    .with_priority(popover_priority),
+                )
             })
     }
 }

@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, ElementId, Empty, Entity, FocusHandle, FontWeight, Hsla,
+    AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, ElementId, Empty, Entity, FocusHandle, FontWeight, Hsla,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement, Pixels, Point,
     Render, RenderOnce, SharedString, Size, StatefulInteractiveElement, Styled, StyledImage as _, Subscription, Task,
-    TextRun, WeakEntity, Window, black, container_query, div, img, px, rgb, size, white,
+    StyleRefinement, TextRun, WeakEntity, Window, black, container_query, div, img, px, rgb, size, white,
 };
 use rise_canon::RiseGuideAnchor;
 use rise_core::foundation::foundation_date::RiseClock;
@@ -43,6 +43,7 @@ use rise_ui::swiftui::shapes::{Shape, SwiftUiShapes, centred_stroke};
 use rise_ui::swiftui::stacks::{HorizontalAlignment, StackAlign, hstack, spacer, vstack};
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_ui::swiftui::transition::{Edge, Presence, Transition, Transitioned, UnitPoint};
+use rise_ui::stepped_slider_ui::SteppedSliderUi;
 use rise_ui::switch_ui::SwitchUi;
 use rise_ui::{IconUi, MainText};
 
@@ -95,11 +96,14 @@ use crate::modules::rtc::media::rise_rtc_call_picture_in_picture::{
     RiseRTCCallPictureInPictureController, RiseRTCCallPictureInPictureControllerOwner, RiseRTCPictureInPictureLayerHost,
 };
 use crate::modules::rtc::media::rise_rtc_live_kit_audio_coordinator::RiseRTCLiveKitAudioCoordinator;
+use crate::modules::rtc::media::rise_rtc_live_kit_media_controller::RiseRTCLiveKitMediaController;
 use crate::modules::rtc::media::rise_rtc_media_presentation::{
     RiseRTCMediaPresentation, RiseRTCStreamPreviewStore, VideoTrack,
 };
 use crate::modules::rtc::pages::rise_rtc_direct_call_screen::RiseRTCDirectCallScreen;
+use crate::modules::rtc::pages::rise_rtc_room_presentation_host::RiseRTCRoomPresentationHost;
 use crate::modules::rtc::pages::rise_rtc_voice_invite_sheet::RiseRTCVoiceInviteBottomSheet;
+use crate::modules::rtc::engine::rise_rtc_domain::RiseRTCDomain;
 use crate::modules::rtc::shared::rise_rtc_device_refusal::RiseRTCDeviceRefusal;
 use crate::modules::rtc::shared::rise_rtc_navigation_gate::{RiseRTCNavigationGate, RiseRTCRoomTargetSafeLogKind};
 use crate::modules::rtc::shared::rise_rtc_room_locator::RiseRTCRoomTargetRoomID;
@@ -139,6 +143,13 @@ struct PendingMediaToggles {
     deafened: Option<bool>,
     camera: Option<bool>,
     screen_share: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+struct CaptionImposed {
+    muted: bool,
+    deafened: bool,
+    color: Hsla,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,7 +253,6 @@ pub struct RiseRTCRoomScreenView {
     stage_inset_position: UnitPoint,
     audio_route_sheet_fraction: f32,
     audio_input_sheet_fraction: f32,
-    stream_settings_sheet_fraction: f32,
     top_safe_inset: f32,
     chrome_visible: bool,
     chrome_progress: Animated<f32>,
@@ -268,6 +278,7 @@ pub struct RiseRTCRoomScreenView {
     captured_preview_tracks: HashMap<String, String>,
     grid_origin_y: f32,
     gear_menu_presented: bool,
+    stage_controls: Option<Entity<RiseRTCStageControls>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -358,7 +369,6 @@ impl RiseRTCRoomScreenView {
             stage_inset_position: UnitPoint::TOP_TRAILING,
             audio_route_sheet_fraction: 0.3,
             audio_input_sheet_fraction: 0.55,
-            stream_settings_sheet_fraction: 0.5,
             top_safe_inset: 0.0,
             chrome_visible: true,
             chrome_progress: Animated::new(1.0),
@@ -382,6 +392,7 @@ impl RiseRTCRoomScreenView {
             captured_preview_tracks: HashMap::new(),
             grid_origin_y: 0.0,
             gear_menu_presented: false,
+            stage_controls: None,
             _subscriptions: subscriptions,
         };
         view.refresh_room(cx);
@@ -732,14 +743,24 @@ impl RiseRTCRoomScreenView {
         self.has_publishing_role() && !self.is_server_silenced() && self.has_room_permission(ChatPerm::SPEAK, cx)
     }
 
+    fn is_server_camera_blocked(&self) -> bool {
+        self.self_participant().is_some_and(|participant| participant.server_camera_blocked)
+    }
+
+    fn is_server_screen_share_blocked(&self) -> bool {
+        self.self_participant().is_some_and(|participant| participant.server_screen_share_blocked)
+    }
+
     fn can_publish_camera(&self, cx: &mut App) -> bool {
         self.has_publishing_role()
+            && !self.is_server_camera_blocked()
             && self.displayed_room.as_deref().is_some_and(|room| room.config.video_enabled)
             && self.has_room_permission(ChatPerm::STREAM_VIDEO, cx)
     }
 
     fn can_publish_screen(&self, cx: &mut App) -> bool {
         self.has_publishing_role()
+            && !self.is_server_screen_share_blocked()
             && self.displayed_room.as_deref().is_some_and(|room| room.config.screen_share_enabled)
             && self.has_room_permission(ChatPerm::SHARE_SCREEN, cx)
     }
@@ -754,6 +775,14 @@ impl RiseRTCRoomScreenView {
 
     fn can_deafen_participants(&self, cx: &mut App) -> bool {
         self.has_room_permission(ChatPerm::DEAFEN_VOICE_MEMBERS, cx)
+    }
+
+    fn can_block_participant_camera(&self, cx: &mut App) -> bool {
+        self.has_room_permission(ChatPerm::BLOCK_VOICE_VIDEO, cx)
+    }
+
+    fn can_block_participant_screen_share(&self, cx: &mut App) -> bool {
+        self.has_room_permission(ChatPerm::BLOCK_VOICE_SCREEN_SHARE, cx)
     }
 
     fn can_remove_participants(&self, cx: &mut App) -> bool {
@@ -854,6 +883,8 @@ impl RiseRTCRoomScreenView {
             screen_share_enabled: false,
             server_muted: false,
             server_deafened: false,
+            server_camera_blocked: false,
+            server_screen_share_blocked: false,
             deafened: false,
             hand_raised: true,
             joined_at_ms: hand.requested_at_ms,
@@ -873,6 +904,8 @@ impl RiseRTCRoomScreenView {
             can_manage_stage: self.can_manage_stage(cx),
             can_mute: self.can_mute_participants(cx),
             can_deafen: self.can_deafen_participants(cx),
+            can_block_camera: self.can_block_participant_camera(cx),
+            can_block_screen_share: self.can_block_participant_screen_share(cx),
             can_remove: self.can_remove_participants(cx),
             chat_id,
         }
@@ -1222,11 +1255,29 @@ impl RiseRTCRoomScreenView {
             .when(self.picture_in_picture_supported(), |body| {
                 body.child(div().absolute().top_0().left_0().w(px(160.0)).h(px(90.0)).opacity(0.001).child(RiseRTCPictureInPictureLayerHost))
             })
+            .when(self.presented_in_room_sheet, |body| body.child(Self::window_mode_toggle(theme.text.primary, cx)))
             .when(self.audio_routes_visible, |body| body.child(self.audio_route_sheet(&theme, cx)))
             .when(self.audio_inputs_visible, |body| body.child(self.audio_input_sheet(&theme, cx)))
             .when(self.stream_settings_visible, |body| body.child(self.stream_settings_sheet(&theme, cx)))
             .children(self.voice_invite_sheet(cx))
             .into_any_element()
+    }
+
+    /// bottom trailing switch between a call in its own window and one inside the shell window
+    pub(crate) fn window_mode_toggle(tint: Hsla, cx: &App) -> impl IntoElement + use<> {
+        let separate = RiseRTCRoomPresentationHost::uses_separate_window(cx);
+        let label = tr(if separate { "desktop_rtc_call_in_app" } else { "desktop_rtc_call_in_window" });
+        div()
+            .absolute()
+            .right(px(16.0 + Self::horizontal_safe_inset()))
+            .bottom(px(16.0 + Self::bottom_safe_inset()))
+            .child(Self::glass_circle(
+                "rtc-room-window-mode",
+                label,
+                36.0,
+                move |_, cx| RiseRTCRoomPresentationHost::set_uses_separate_window(!separate, cx),
+                IconUi::sized(if separate { "dock.rectangle" } else { "macwindow" }, px(16.0), tint, false),
+            ))
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -1614,8 +1665,7 @@ impl RiseRTCRoomScreenView {
                     if sharing {
                         this.stop_screen_share(cx);
                     } else {
-                        this.stream_settings_visible = true;
-                        cx.notify();
+                        this.open_stream_settings(cx);
                     }
                 }),
             ));
@@ -1911,6 +1961,18 @@ impl RiseRTCRoomScreenView {
             },
         );
 
+        let stage_controls = (!is_own_stage && chrome_visible).then(|| {
+            let is_stream = screen.as_ref().is_some_and(|screen| Rc::ptr_eq(&track, screen));
+            let controls = self.stage_controls_view(&user_id, is_stream, cx);
+            AnyView::from(controls).cached(
+                StyleRefinement::default()
+                    .absolute()
+                    .right(px(14.0 + horizontal_safe))
+                    .bottom(px(14.0 + dock_reserved))
+                    .w(px(RiseRTCStageControls::WIDTH))
+                    .h(px(RiseRTCStageControls::HEIGHT)),
+            )
+        });
         let speaking = self.media.read(cx).is_speaking(&user_id);
         let radius = f32::from(theme.radius._300);
         let primary_is_own_screen = is_own_stage && screen.as_ref().is_some_and(|screen| Rc::ptr_eq(&track, screen));
@@ -1942,6 +2004,7 @@ impl RiseRTCRoomScreenView {
             .children(badge)
             .children(inset)
             .children(caption)
+            .children(stage_controls)
             .when(speaking, |stage| {
                 stage.child(
                     div()
@@ -1951,6 +2014,36 @@ impl RiseRTCRoomScreenView {
                 )
             })
             .into_any_element()
+    }
+
+    fn stage_controls_view(&mut self, user_id: &str, is_stream: bool, cx: &mut Context<Self>) -> Entity<RiseRTCStageControls> {
+        if let Some(controls) = self.stage_controls.as_ref().filter(|controls| {
+            let controls = controls.read(cx);
+            controls.user_id == user_id && controls.is_stream == is_stream
+        }) {
+            return controls.clone();
+        }
+        let room = self.this.clone();
+        let controls = cx.new(|_| RiseRTCStageControls {
+            user_id: user_id.to_owned(),
+            is_stream,
+            volume_open: false,
+            dragged_percent: None,
+            room,
+        });
+        self.stage_controls = Some(controls.clone());
+        controls
+    }
+
+    fn open_mini_player(&mut self, cx: &mut Context<Self>) {
+        let Some((user_id, _, track)) = self.picture_in_picture_source(cx) else {
+            return;
+        };
+        let identity = self.picture_in_picture_source_identity(cx);
+        let track_key = track.track_key().to_owned();
+        RiseRTCCallPictureInPictureController::shared(cx)
+            .update(cx, |controller, cx| controller.float_stream(track_key, identity, user_id, cx));
+        self.minimize_or_close(cx);
     }
 
     fn handler_with_position(&self) -> impl Fn(UnitPoint, &mut Window, &mut App) + 'static + use<> {
@@ -2164,6 +2257,26 @@ impl RiseRTCRoomScreenView {
                     RiseRTCModerationAction::ForceDeafen
                 };
                 self.perform(format!("deafen-{user_id}"), move |cx| {
+                    interactions.update(cx, |interactions, cx| interactions.moderate(&user_id, moderation, None, cx))
+                }, cx);
+            }
+            RiseRTCRoomMenuAction::ToggleCamera => {
+                let moderation = if participant.server_camera_blocked {
+                    RiseRTCModerationAction::AllowCamera
+                } else {
+                    RiseRTCModerationAction::BlockCamera
+                };
+                self.perform(format!("camera-block-{user_id}"), move |cx| {
+                    interactions.update(cx, |interactions, cx| interactions.moderate(&user_id, moderation, None, cx))
+                }, cx);
+            }
+            RiseRTCRoomMenuAction::ToggleScreenShare => {
+                let moderation = if participant.server_screen_share_blocked {
+                    RiseRTCModerationAction::AllowScreenShare
+                } else {
+                    RiseRTCModerationAction::BlockScreenShare
+                };
+                self.perform(format!("screen-share-block-{user_id}"), move |cx| {
                     interactions.update(cx, |interactions, cx| interactions.moderate(&user_id, moderation, None, cx))
                 }, cx);
             }
@@ -2464,14 +2577,20 @@ impl RiseRTCRoomScreenView {
             )));
         } else if is_screen_sharing {
             tile = match stream_preview {
-                Some(preview) => tile.child(div().absolute().inset_0().child(img(preview).size_full().object_fit(ObjectFit::Cover))),
+                Some(preview) => tile.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .child(img(preview).size_full().rounded(px(radius)).object_fit(ObjectFit::Cover)),
+                ),
                 None => tile.child(
                     centered()
                         .bg(theme.bg._300)
+                        .rounded(px(radius))
                         .children(IconUi::sized("rectangle.on.rectangle", px(30.0), theme.text.secondary, false)),
                 ),
             };
-            tile = tile.child(div().absolute().inset_0().bg(Hsla::from(rgb(0x8e8e93)).opacity(0.22)));
+            tile = tile.child(div().absolute().inset_0().rounded(px(radius)).bg(Hsla::from(rgb(0x8e8e93)).opacity(0.22)));
         } else {
             tile = tile.child(centered().child(self.avatar_logo(participant, "logo", 76.0, cx)));
         }
@@ -2591,6 +2710,11 @@ impl RiseRTCRoomScreenView {
                 participant.deafened || participant.server_deafened,
             )
         };
+        let imposed = CaptionImposed {
+            muted: participant.is_server_silenced(),
+            deafened: participant.server_deafened,
+            color: rise_ui::theme(cx).primary._100,
+        };
         div().size_full().child(RiseRTCListenerVolumeContent::new(
             participant.user_id.clone(),
             move |percent, _, _| {
@@ -2604,12 +2728,12 @@ impl RiseRTCRoomScreenView {
                             let glyphs = if deafened { 3.0 } else { 2.0 };
                             let row_width = name_width + text_width + glyphs * 15.0 + 16.0;
                             let shows_text = row_width <= f32::from(size.width);
-                            Self::caption_row(name, muted, deafened, Some((true, Some(text))), shows_text)
+                            Self::caption_row(name, muted, deafened, imposed, Some((true, Some(text))), shows_text)
                         })
                         .size_full()
                         .into_any_element()
                     }
-                    volume => Self::caption_row(name, muted, deafened, volume, true).into_any_element(),
+                    volume => Self::caption_row(name, muted, deafened, imposed, volume, true).into_any_element(),
                 }
             },
         ))
@@ -2619,10 +2743,14 @@ impl RiseRTCRoomScreenView {
         name: String,
         muted: bool,
         deafened: bool,
+        imposed: CaptionImposed,
         volume: Option<(bool, Option<String>)>,
         shows_volume_text: bool,
     ) -> impl IntoElement {
         let glyph = |symbol: &str| IconUi::sized(symbol, px(10.0), white(), false);
+        let tinted = |symbol: &str, imposed_state: bool| {
+            IconUi::sized(symbol, px(10.0), if imposed_state { imposed.color } else { white() }, false)
+        };
         let mut row = hstack(5.0)
             .items_center()
             .max_w_full()
@@ -2630,8 +2758,8 @@ impl RiseRTCRoomScreenView {
             .py(px(5.0))
             .rounded_full()
             .bg(black().opacity(0.58))
-            .when(deafened, |row| row.children(glyph(RiseSymbol::DEAFENED)))
-            .children(glyph(if muted { "mic.slash.fill" } else { "mic.fill" }))
+            .when(deafened, |row| row.children(tinted(RiseSymbol::DEAFENED, imposed.deafened)))
+            .children(tinted(if muted { "mic.slash.fill" } else { "mic.fill" }, muted && imposed.muted))
             .child(
                 div().flex_shrink_1().min_w_0().child(
                     MainText::new(name).px(12.0).font_weight(FontWeight::SEMIBOLD).color(white()).number_of_lines(1),
@@ -2706,7 +2834,9 @@ impl RiseRTCRoomScreenView {
     fn control_dock(&mut self, theme: &AppTheme, width: f32, has_focused_stream: bool, cx: &mut Context<Self>) -> AnyElement {
         let compact = width < 430.0;
         let dock_width = width - 2.0 * (14.0 + Self::horizontal_safe_inset());
-        let slot_count: f32 = 5.0;
+        let sharing = self.displayed_screen_share_enabled();
+        let shows_share = sharing || self.can_publish_screen(cx);
+        let slot_count: f32 = if shows_share { 6.0 } else { 5.0 };
         let preferred_spacing = if compact { 10.0 } else { 13.0 };
         let preferred_size = if compact { 50.0 } else { 54.0 };
         let fits = slot_count * (preferred_size + 8.0) + (slot_count - 1.0) * preferred_spacing <= dock_width;
@@ -2818,6 +2948,22 @@ impl RiseRTCRoomScreenView {
                 over_stage,
                 self.handler(|this, _, cx| this.toggle_microphone(cx)),
             ));
+        if shows_share {
+            row = row.child(self.dock_control(
+                "screen-share",
+                if sharing { "rectangle.on.rectangle.slash" } else { "rectangle.on.rectangle" },
+                tr("rtc_screen_share"),
+                Some(tr(if sharing { "rtc_stop_stream" } else { "rtc_start_stream" })),
+                sharing,
+                circle_size,
+                true,
+                false,
+                None,
+                theme,
+                over_stage,
+                self.handler(|this, _, cx| this.toggle_screen_share(cx)),
+            ));
+        }
         row = if has_focused_stream {
             row.child(self.dock_control(
                 "stop-watching",
@@ -2891,8 +3037,13 @@ impl RiseRTCRoomScreenView {
     ) -> AnyElement {
         let silenced = destructive || (id == "microphone" && !is_on) || (id == "headphones" && is_on);
         let lit = !silenced && is_on && id != "microphone";
+        let imposed = (id == "microphone" && !is_on && self.is_server_silenced())
+            || (id == "headphones" && is_on && self.is_server_deafened())
+            || (id == "camera" && !is_on && self.is_server_camera_blocked());
 
-        let tint = if silenced {
+        let tint = if imposed {
+            Some(theme.primary._100)
+        } else if silenced {
             Some(theme.semantic.error_100)
         } else if lit {
             Some(if over_stage { white() } else { theme.text.primary })
@@ -2901,7 +3052,7 @@ impl RiseRTCRoomScreenView {
         };
         let glyph_color = if lit {
             if over_stage { black() } else { theme.bg._000 }
-        } else if silenced || over_stage {
+        } else if silenced || imposed || over_stage {
             white()
         } else {
             theme.text.primary
@@ -3191,8 +3342,6 @@ impl RiseRTCRoomScreenView {
         }
     }
 
-    /// start button sits in the measured content not the shell footer, the measured
-    /// fraction counts content only so a footer bar ran off the bottom of the window
     fn stream_settings_sheet(&self, theme: &AppTheme, cx: &mut Context<Self>) -> BottomSheetUi {
         let entity = cx.entity();
         let binding = Binding::entity(
@@ -3202,7 +3351,7 @@ impl RiseRTCRoomScreenView {
                 this.stream_settings_visible = value;
             },
         );
-        Self::sheet_shell("rtc-room-stream-sheet", binding, self.stream_settings_sheet_fraction, theme, move |_, cx| {
+        Self::sheet_shell("rtc-room-stream-sheet", binding, 0.32, theme, move |_, cx| {
             let content_entity = entity.clone();
             content_entity.update(cx, |this, cx| {
                 let theme = rise_ui::theme(cx).clone();
@@ -3224,7 +3373,6 @@ impl RiseRTCRoomScreenView {
                         this.stream_includes_audio = !this.stream_includes_audio;
                         cx.notify();
                     }));
-                let weak = this.this.clone();
                 vstack(12.0)
                     .w_full()
                     .pb(px(12.0 + Self::sheet_bottom_safe_inset()))
@@ -3233,16 +3381,11 @@ impl RiseRTCRoomScreenView {
                     .when(this.stream_audio_supported, |stack| {
                         stack.child(GroupedBtns::new("rtc-stream-audio", vec![audio_item]))
                     })
-                    .child(div().pt(px(4.0)).child(this.start_stream_button(&theme)))
-                    .measured_sheet_fraction("rtc-stream-settings-fraction", 0.32, move |fraction, _, cx| {
-                        let _ = weak.update(cx, |view, cx| {
-                            view.stream_settings_sheet_fraction = fraction;
-                            cx.notify();
-                        });
-                    })
+                    .child(div().w_full().pt(px(4.0)).child(this.start_stream_button(&theme)))
                     .into_any_element()
             })
         })
+        .fits_content(true)
     }
 
     fn start_stream_button(&self, theme: &AppTheme) -> impl IntoElement + use<> {
@@ -3460,9 +3603,14 @@ impl RiseRTCRoomScreenView {
         if self.displayed_screen_share_enabled() {
             self.stop_screen_share(cx);
         } else {
-            self.stream_settings_visible = true;
-            cx.notify();
+            self.open_stream_settings(cx);
         }
+    }
+
+    fn open_stream_settings(&mut self, cx: &mut Context<Self>) {
+        self.stream_quality = self.interactions.update(cx, |interactions, cx| interactions.remembered_stream_quality(cx));
+        self.stream_settings_visible = true;
+        cx.notify();
     }
 
     fn stop_screen_share(&mut self, cx: &mut Context<Self>) {
@@ -3660,7 +3808,9 @@ impl RiseRTCRoomScreenView {
                 && !left
             {
                 cx.update(|cx| {
-                    if !RiseRTCDeviceRefusal::present_settings_alert(&error, cx) {
+                    if let Some(text) = RiseRTCDomain::desktop_failure_text(&error) {
+                        Self::send_error(text, cx);
+                    } else if !RiseRTCDeviceRefusal::present_settings_alert(&error, cx) {
                         Self::send_error(tr("rtc_action_failed"), cx);
                     }
                 });
@@ -3770,8 +3920,8 @@ impl RiseRTCRoomScreenView {
             SaiLogKind::Network,
             cx,
         );
-        let title = CanonErrors::failure(&error)
-            .and_then(|failure| CanonErrors::text_for(&failure))
+        let title = RiseRTCDomain::desktop_failure_text(&error)
+            .or_else(|| CanonErrors::failure(&error).and_then(|failure| CanonErrors::text_for(&failure)))
             .unwrap_or_else(|| tr("rtc_action_failed"));
         Self::send_error(title, cx);
     }
@@ -3966,6 +4116,8 @@ impl VoiceChannelParticipantPendingRTC for VoiceChannelParticipant {
             screen_share_enabled: self.screen_share_enabled,
             server_muted: self.server_muted,
             server_deafened: self.server_deafened,
+            server_camera_blocked: false,
+            server_screen_share_blocked: false,
             deafened: self.deafened,
             hand_raised: self.is_hand_raised(RiseForumVoicePresenceSnapshot::now_ms_for_display()),
             joined_at_ms: self.joined_at_ms,
@@ -3983,5 +4135,146 @@ impl VoiceChannelParticipantPendingRTC for VoiceChannelParticipant {
                 last_seen_ms: 0,
             }),
         }
+    }
+}
+
+/// mini player and sound of the watched stage, bottom trailing over the picture
+/// its own view so a slider drag redraws only this corner
+pub struct RiseRTCStageControls {
+    user_id: String,
+    is_stream: bool,
+    volume_open: bool,
+    dragged_percent: Option<f64>,
+    room: WeakEntity<RiseRTCRoomScreenView>,
+}
+
+impl RiseRTCStageControls {
+    const WIDTH: f32 = 260.0;
+    const HEIGHT: f32 = 120.0;
+    const BUTTON_SIDE: f32 = 36.0;
+
+    fn stored_percent(&self, cx: &mut App) -> f64 {
+        if self.is_stream {
+            RiseRTCLiveKitMediaController::shared().stream_volume(&self.user_id) * 100.0
+        } else {
+            RTCServicesStore::shared(cx).read(cx).listener_volume_percent(&self.user_id, cx)
+        }
+    }
+
+    fn apply(&self, percent: f64, commit: bool, cx: &mut App) {
+        if self.is_stream {
+            RiseRTCLiveKitMediaController::shared().set_stream_volume(&self.user_id, percent / 100.0);
+            return;
+        }
+        let user_id = self.user_id.clone();
+        RTCInteractionsStore::shared(cx).update(cx, |interactions, cx| {
+            if commit {
+                interactions.commit_listener_volume(&user_id, percent, cx);
+            } else {
+                interactions.preview_listener_volume(&user_id, percent, cx);
+            }
+        });
+    }
+
+    fn volume_panel(&self, percent: f64, theme: &AppTheme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let changed = cx.entity().downgrade();
+        let committed = changed.clone();
+        let slider = SteppedSliderUi::new(
+            SharedString::from(format!("rtc-stage-volume-{}", self.user_id)),
+            percent,
+            RiseRTCListenerVolume::MINIMUM_PERCENT..=RiseRTCListenerVolume::MAXIMUM_PERCENT,
+            RiseRTCListenerVolume::STEP_PERCENT,
+            move |value, _: &mut Window, cx: &mut App| {
+                let _ = changed.update(cx, |controls, cx| {
+                    controls.dragged_percent = Some(value);
+                    controls.apply(value, false, cx);
+                    cx.notify();
+                });
+            },
+            move |value, _: &mut Window, cx: &mut App| {
+                let _ = committed.update(cx, |controls, cx| {
+                    controls.dragged_percent = None;
+                    controls.apply(value, true, cx);
+                    cx.notify();
+                });
+            },
+        )
+        .breakpoints(RiseRTCListenerVolume::BREAKPOINTS.to_vec());
+        let muted = RiseRTCListenerVolume::is_muted(percent);
+        vstack(6.0)
+            .w_full()
+            .px(px(12.0))
+            .py(px(10.0))
+            .rounded(px(14.0))
+            .bg(theme.bg._100)
+            .border_1()
+            .border_color(theme.border._100)
+            .occlude()
+            .child(
+                hstack(8.0)
+                    .w_full()
+                    .items_center()
+                    .children(IconUi::sized(
+                        if muted { "speaker.slash.fill" } else { "speaker.wave.2.fill" },
+                        px(13.0),
+                        theme.text.primary,
+                        true,
+                    ))
+                    .child(MainText::new(tr("rtc_volume_title")).px(14.0).font_weight(FontWeight::SEMIBOLD).number_of_lines(1))
+                    .child(spacer())
+                    .child(
+                        MainText::new(RiseRTCListenerVolume::percent_label(percent))
+                            .px(13.0)
+                            .secondary(true)
+                            .number_of_lines(1)
+                            .monospaced_digits(true),
+                    ),
+            )
+            .child(div().w_full().h(px(28.0)).child(slider))
+    }
+}
+
+impl Render for RiseRTCStageControls {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = rise_ui::theme(cx).clone();
+        let percent = match self.dragged_percent {
+            Some(percent) => percent,
+            None => self.stored_percent(cx),
+        };
+        let muted = RiseRTCListenerVolume::is_muted(percent);
+        let room = self.room.clone();
+        let toggled = cx.entity().downgrade();
+        let panel = self.volume_open.then(|| self.volume_panel(percent, &theme, cx));
+        let icon = |name: &'static str| IconUi::sized(name, px(15.0), white(), true);
+        vstack(8.0)
+            .size_full()
+            .justify_end()
+            .items_end()
+            .children(panel)
+            .child(
+                hstack(8.0)
+                    .items_center()
+                    .child(RiseRTCRoomScreenView::glass_circle(
+                        "rtc-stage-mini-player",
+                        tr("desktop_rtc_mini_player"),
+                        Self::BUTTON_SIDE,
+                        move |_, cx| {
+                            let _ = room.update(cx, |view, cx| view.open_mini_player(cx));
+                        },
+                        icon("pip.enter"),
+                    ))
+                    .child(RiseRTCRoomScreenView::glass_circle(
+                        "rtc-stage-volume",
+                        tr("rtc_volume_title"),
+                        Self::BUTTON_SIDE,
+                        move |_, cx| {
+                            let _ = toggled.update(cx, |controls, cx| {
+                                controls.volume_open = !controls.volume_open;
+                                cx.notify();
+                            });
+                        },
+                        icon(if muted { "speaker.slash.fill" } else { "speaker.wave.2.fill" }),
+                    )),
+            )
     }
 }

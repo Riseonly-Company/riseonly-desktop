@@ -95,6 +95,7 @@ pub trait DragGestureModifiers: IntoElement + Sized {
             id: id.into(),
             gesture: Some(gesture),
             content: self.into_any_element(),
+            fills: false,
         }
     }
 
@@ -109,6 +110,7 @@ pub trait DragGestureModifiers: IntoElement + Sized {
             id: id.into(),
             gesture: including.includes_gesture().then_some(gesture),
             content: self.into_any_element(),
+            fills: false,
         }
     }
 }
@@ -121,6 +123,14 @@ pub struct DragGestureElement {
     id: ElementId,
     gesture: Option<DragGesture>,
     content: AnyElement,
+    fills: bool,
+}
+
+impl DragGestureElement {
+    pub fn size_full(mut self) -> Self {
+        self.fills = true;
+        self
+    }
 }
 
 impl RenderOnce for DragGestureElement {
@@ -132,7 +142,8 @@ impl RenderOnce for DragGestureElement {
             .use_keyed_state(self.id, cx, |_, _| DragGestureTrackingCell::default())
             .read(cx)
             .clone();
-        div()
+        let area = if self.fills { div().size_full() } else { div() };
+        area
             .relative()
             .child(self.content)
             .child(drag_gesture_overlay(gesture, tracking))
@@ -147,6 +158,7 @@ struct DragGestureTracking {
     location: Point<Pixels>,
     is_recognized: bool,
     samples: Vec<(Instant, Point<Pixels>)>,
+    pressed_in_active_window: bool,
 }
 
 impl DragGestureTracking {
@@ -157,6 +169,7 @@ impl DragGestureTracking {
             location,
             is_recognized: false,
             samples: vec![(now, location)],
+            pressed_in_active_window: false,
         }
     }
 
@@ -217,7 +230,20 @@ struct DragGestureTrackingCell(Rc<RefCell<Option<DragGestureTracking>>>);
 fn drag_gesture_overlay(gesture: DragGesture, tracking: DragGestureTrackingCell) -> impl IntoElement {
     canvas(
         |bounds, window, _| (bounds, window.insert_hitbox(bounds, HitboxBehavior::Normal)),
-        move |_, (bounds, hitbox): (Bounds<Pixels>, Hitbox), window, _| {
+        move |_, (bounds, hitbox): (Bounds<Pixels>, Hitbox), window, cx| {
+            let lost_focus = tracking.0.borrow().as_ref().is_some_and(|held| held.pressed_in_active_window);
+            if lost_focus && !window.is_window_active() {
+                let lost = tracking.clone();
+                let lost_gesture = gesture.clone();
+                window.defer(cx, move |window, cx| {
+                    let Some(ended) = lost.0.borrow_mut().take() else {
+                        return;
+                    };
+                    if ended.is_recognized {
+                        lost_gesture.ended(&ended.value(), window, cx);
+                    }
+                });
+            }
             let down = tracking.clone();
             let down_gesture = gesture.clone();
             window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -229,6 +255,7 @@ fn drag_gesture_overlay(gesture: DragGesture, tracking: DragGestureTrackingCell)
                 }
                 let now = cx.background_executor().now();
                 let mut started = DragGestureTracking::new(bounds.origin, event.position, now);
+                started.pressed_in_active_window = window.is_window_active();
                 let value = started.recognize(down_gesture.minimum_distance).then(|| started.value());
                 *down.0.borrow_mut() = Some(started);
                 if let Some(value) = value {

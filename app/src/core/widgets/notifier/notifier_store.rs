@@ -1,15 +1,21 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use gpui::{App, Context, Entity, Hsla, Task};
+use futures::StreamExt;
+use futures::channel::mpsc;
+use gpui::{App, Context, Entity, Global, Hsla, Task};
 use rise_core::foundation::foundation_date::{Date, TimeInterval};
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_diagnostics::rise_breadcrumbs::{RiseBreadcrumbs, RiseBreadcrumbsChannel};
 use rise_i18n::tr;
 use rise_platform::haptics::{NotificationKind, notification};
+use rise_platform::user_defaults::UserDefaults;
+use rise_platform::user_defaults_keys::DESKTOP_NOTIFICATION_BANNER_POSITION;
 use rise_theme::color;
 use rise_ui::swiftui::motion::duration_from_seconds;
 
+use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, UIApplication};
+use crate::core::desktop_platform::rise_app_lifecycle::{RiseAppLifecycle, ScenePhase};
 use crate::core::push_notifications::push_deep_link_store::{PushDeepLink, PushDeepLinkStore};
 use crate::core::restriction::restriction_store::RestrictionStore;
 
@@ -22,6 +28,50 @@ pub enum NotifierPosition {
     Top,
     #[default]
     Bottom,
+}
+
+/// where in app notifications show, the person picks it in the notification settings
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NotifierBannerPosition {
+    #[default]
+    TopRight,
+    TopCenter,
+    TopLeft,
+}
+
+impl Global for NotifierBannerPosition {}
+
+impl NotifierBannerPosition {
+    pub const ALL: [Self; 3] = [Self::TopRight, Self::TopCenter, Self::TopLeft];
+
+    pub const fn raw_value(self) -> &'static str {
+        match self {
+            Self::TopRight => "top_right",
+            Self::TopCenter => "top_center",
+            Self::TopLeft => "top_left",
+        }
+    }
+
+    pub const fn title_key(self) -> &'static str {
+        match self {
+            Self::TopRight => "desktop_notification_banner_right",
+            Self::TopCenter => "desktop_notification_banner_center",
+            Self::TopLeft => "desktop_notification_banner_left",
+        }
+    }
+
+    pub fn current(cx: &App) -> Self {
+        if let Some(position) = cx.try_global::<Self>() {
+            return *position;
+        }
+        let stored = UserDefaults::standard().string(DESKTOP_NOTIFICATION_BANNER_POSITION);
+        Self::ALL.into_iter().find(|position| Some(position.raw_value()) == stored.as_deref()).unwrap_or_default()
+    }
+
+    pub fn set(position: Self, cx: &mut App) {
+        UserDefaults::standard().set(DESKTOP_NOTIFICATION_BANNER_POSITION, position.raw_value());
+        cx.set_global(position);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -113,6 +163,14 @@ impl NotifierUndoPolicy {
         }
         let remaining = until.time_interval_since(now);
         (remaining / window).clamp(0.0, 1.0)
+    }
+}
+
+impl NotifierConfig {
+    /// a notification about someone or something, it opens a place when tapped
+    /// it shows where the person put banners, feedback toasts stay at the top centre
+    pub fn is_in_app_notification(&self) -> bool {
+        self.action.is_some()
     }
 }
 
@@ -222,6 +280,7 @@ pub struct NotifierStore {
     undo_handlers: HashMap<Uuid, NotifierUndoHandlers>,
     replacement_delay_nanoseconds: u64,
     held: Option<Uuid>,
+    awaits_return: Option<Uuid>,
 }
 
 impl NotifierStore {
@@ -229,7 +288,21 @@ impl NotifierStore {
         rise_ui::shared::shared(cx, |cx| Self::new(DEFAULT_REPLACEMENT_DELAY_NANOSECONDS, cx))
     }
 
-    pub fn new(replacement_delay_nanoseconds: u64, _cx: &mut Context<Self>) -> Self {
+    pub fn new(replacement_delay_nanoseconds: u64, cx: &mut Context<Self>) -> Self {
+        let (returns, mut inbox) = mpsc::unbounded::<()>();
+        RiseAppEvents::default_center()
+            .observe(UIApplication::DID_BECOME_ACTIVE_NOTIFICATION, move |_| {
+                let _ = returns.unbounded_send(());
+            })
+            .detach();
+        cx.spawn(async move |this, cx| {
+            while inbox.next().await.is_some() {
+                if this.update(cx, |store, cx| store.app_returned(cx)).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
         Self {
             items: Vec::new(),
             pending_latest: None,
@@ -240,6 +313,16 @@ impl NotifierStore {
             undo_handlers: HashMap::new(),
             replacement_delay_nanoseconds,
             held: None,
+            awaits_return: None,
+        }
+    }
+
+    fn app_returned(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.awaits_return.take() else {
+            return;
+        };
+        if let Some(duration) = self.items.first().filter(|first| first.id == id).map(|first| first.duration) {
+            self.restart_timer(id, duration, cx);
         }
     }
 
@@ -556,6 +639,11 @@ impl NotifierStore {
     fn restart_timer(&mut self, id: Uuid, duration: TimeInterval, cx: &mut Context<Self>) {
         self.cancel_timer(id);
         if duration <= 0.0 || self.held == Some(id) {
+            return;
+        }
+        let banner = self.items.first().is_some_and(|first| first.id == id && first.is_in_app_notification());
+        if banner && RiseAppLifecycle::scene_phase(cx) != ScenePhase::Active {
+            self.awaits_return = Some(id);
             return;
         }
         self.schedule_dismiss(id, duration, cx);

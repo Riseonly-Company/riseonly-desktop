@@ -119,13 +119,16 @@ impl MusicTab {
                 }))
         };
 
+        let column = rise_ui::theme(cx).shell.music_max_width;
         vstack(0.0).w_full().overflow_hidden().child(
-            div().w_full().px(px(10.0)).pt(px(8.0)).pb(px(10.0)).child(
-                ListShellHeaderCollapseSlide::new(
-                    collapse,
-                    div().w_full().h(px(MusicChromeMetrics::SEARCH_FIELD_HEIGHT)).child(search_slot),
-                )
-                .hides_when_folded(true),
+            div().w_full().flex().justify_center().child(
+                div().w_full().max_w(column).px(px(10.0)).pt(px(8.0)).pb(px(10.0)).child(
+                    ListShellHeaderCollapseSlide::new(
+                        collapse,
+                        div().w_full().h(px(MusicChromeMetrics::SEARCH_FIELD_HEIGHT)).child(search_slot),
+                    )
+                    .hides_when_folded(true),
+                ),
             ),
         )
     }

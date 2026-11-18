@@ -88,7 +88,7 @@ pub(crate) fn watch_on_bus_thread(
 ) -> std::io::Result<ActivityWatch> {
     let (stop, stopped) = futures::channel::oneshot::channel::<()>();
     std::thread::Builder::new().name(name.to_owned()).spawn(move || {
-        zbus::block_on(async move {
+        crate::dbus_block_on::block_on(async move {
             let service = std::pin::pin!(service);
             let _ = futures::future::select(service, stopped).await;
         });

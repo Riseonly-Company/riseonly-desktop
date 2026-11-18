@@ -4,23 +4,24 @@ use derive_more::{Deref, DerefMut};
 use etagere::BucketedAtlasAllocator;
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    PlatformAtlas, PlatformImageUploader, Point, Size,
 };
 use metal::Device;
 use parking_lot::Mutex;
 use std::borrow::Cow;
+use std::sync::Arc;
 
-pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
+pub(crate) struct MetalAtlas(Arc<Mutex<MetalAtlasState>>);
 
 impl MetalAtlas {
     pub(crate) fn new(device: Device, is_apple_gpu: bool) -> Self {
-        MetalAtlas(Mutex::new(MetalAtlasState {
+        MetalAtlas(Arc::new(Mutex::new(MetalAtlasState {
             device: AssertSend(device),
             is_apple_gpu,
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             tiles_by_key: Default::default(),
-        }))
+        })))
     }
 
     pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
@@ -64,11 +65,57 @@ impl PlatformAtlas for MetalAtlas {
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        lock.release(tile);
+    }
+
+    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
+        Some(Arc::new(MetalImageUploader(self.0.clone())))
+    }
+}
+
+struct MetalImageUploader(Arc<Mutex<MetalAtlasState>>);
+
+impl PlatformImageUploader for MetalImageUploader {
+    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) {
+        let (tile, texture, bytes_per_pixel) = {
+            let mut lock = self.0.lock();
+            if lock.tiles_by_key.contains_key(key) {
+                return;
+            }
+            let Some(tile) = lock.allocate(size, key.texture_kind()) else {
+                return;
+            };
+            let texture = lock.texture(tile.texture_id);
+            let bytes_per_pixel = texture.bytes_per_pixel();
+            (tile, texture.metal_texture.0.clone(), bytes_per_pixel)
+        };
+        let expected = tile.bounds.size.width.to_bytes(bytes_per_pixel) as usize
+            * tile.bounds.size.height.0.max(0) as usize;
+        let written = bytes.len() >= expected;
+        if written {
+            write_region(&texture, tile.bounds, bytes, bytes_per_pixel);
+        }
+        drop(texture);
+        let mut lock = self.0.lock();
+        if !written || lock.tiles_by_key.contains_key(key) {
+            lock.release(tile);
+        } else {
+            lock.tiles_by_key.insert(key.clone(), tile);
+        }
+    }
+
+    fn is_resident(&self, key: &AtlasKey) -> bool {
+        self.0.lock().tiles_by_key.contains_key(key)
+    }
+}
+
+impl MetalAtlasState {
+    fn release(&mut self, tile: AtlasTile) {
         let id = tile.texture_id;
 
         let textures = match id.kind {
-            AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
-            AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
+            AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+            AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
             AtlasTextureKind::Subpixel => unreachable!(),
         };
 
@@ -224,18 +271,7 @@ impl MetalAtlasTexture {
     }
 
     fn upload(&self, bounds: Bounds<DevicePixels>, bytes: &[u8]) {
-        let region = metal::MTLRegion::new_2d(
-            bounds.origin.x.into(),
-            bounds.origin.y.into(),
-            bounds.size.width.into(),
-            bounds.size.height.into(),
-        );
-        self.metal_texture.replace_region(
-            region,
-            0,
-            bytes.as_ptr() as *const _,
-            bounds.size.width.to_bytes(self.bytes_per_pixel()) as u64,
-        );
+        write_region(&self.metal_texture, bounds, bytes, self.bytes_per_pixel());
     }
 
     fn bytes_per_pixel(&self) -> u8 {
@@ -254,6 +290,26 @@ impl MetalAtlasTexture {
     fn is_unreferenced(&mut self) -> bool {
         self.live_atlas_keys == 0
     }
+}
+
+fn write_region(
+    texture: &metal::Texture,
+    bounds: Bounds<DevicePixels>,
+    bytes: &[u8],
+    bytes_per_pixel: u8,
+) {
+    let region = metal::MTLRegion::new_2d(
+        bounds.origin.x.into(),
+        bounds.origin.y.into(),
+        bounds.size.width.into(),
+        bounds.size.height.into(),
+    );
+    texture.replace_region(
+        region,
+        0,
+        bytes.as_ptr() as *const _,
+        bounds.size.width.to_bytes(bytes_per_pixel) as u64,
+    );
 }
 
 fn size_to_etagere(size: Size<DevicePixels>) -> etagere::Size {

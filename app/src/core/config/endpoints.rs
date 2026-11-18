@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::OnceLock;
 
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use serde::Deserialize;
@@ -28,7 +29,20 @@ pub struct LocalOverride {
     pub ws_url: Option<String>,
 }
 
+pub const LOCAL_OVERRIDE_FILE: &str = "config/local.json";
+
 impl Endpoints {
+    /// endpoints this process talks to, compiled ones plus env and local file overrides outside production
+    pub fn effective(environment: AppEnvironment) -> Self {
+        static CURRENT: OnceLock<Endpoints> = OnceLock::new();
+        if environment != AppEnvironment::current() {
+            return Self::compiled_for(environment);
+        }
+        CURRENT
+            .get_or_init(|| Self::from_process(environment, Some(Path::new(LOCAL_OVERRIDE_FILE))))
+            .clone()
+    }
+
     pub fn compiled_for(environment: AppEnvironment) -> Self {
         let (api, ws) = match environment {
             AppEnvironment::Dev => ("http://127.0.0.1:8080/api", "ws://127.0.0.1:8085"),
@@ -123,6 +137,13 @@ fn read_local_override(path: &Path) -> Option<LocalOverride> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn production_never_takes_an_override_through_the_effective_endpoints() {
+        let production = Endpoints::effective(AppEnvironment::Prod);
+        assert_eq!(production, Endpoints::compiled_for(AppEnvironment::Prod));
+        assert_eq!(production.source, EndpointSource::Compiled);
+    }
 
     #[test]
     fn remote_sockets_carry_the_ingress_path_and_the_local_gateway_stays_bare() {

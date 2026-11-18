@@ -27,6 +27,11 @@ pub enum AppMenuBarKey {
     Next,
 }
 
+/// only windows draws the menu in the window, macos has the system bar and linux goes without one
+pub const fn draws_in_window_menu_bar(host: HostOs, native_menu_bar: bool) -> bool {
+    !native_menu_bar && matches!(host, HostOs::Windows)
+}
+
 /// up and down and enter and escape inside an open menu belong to the menu itself
 pub fn menu_bar_key(keystroke: &Keystroke, menu_open: bool) -> Option<AppMenuBarKey> {
     let modifiers = &keystroke.modifiers;
@@ -107,10 +112,11 @@ pub struct AppMenuBar {
 
 impl AppMenuBar {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let sections = if supports_native_menu_bar().is_supported() {
-            Vec::new()
+        let host = HostOs::current();
+        let sections = if draws_in_window_menu_bar(host, supports_native_menu_bar().is_supported()) {
+            app_menu_sections(host)
         } else {
-            app_menu_sections(HostOs::current())
+            Vec::new()
         };
 
         let title_bounds = sections.iter().map(|_| Rc::new(Cell::new(None))).collect();
@@ -275,6 +281,7 @@ impl AppMenuBar {
             .h_full()
             .px(theme.spacing._300)
             .rounded(theme.radius._200)
+            .when(self.open_section.is_none(), |title| title.invisible())
             .when(is_open, |title| title.bg(theme.bg._400))
             .hover(|title| title.bg(theme.bg._300))
             .text_size(body.size)

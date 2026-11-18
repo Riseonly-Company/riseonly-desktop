@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use rise_canon::RiseGuideAnchor;
 use rise_i18n::i18n::tr;
@@ -11,8 +11,9 @@ use rise_theme::{AppTheme, ThemeStore};
 use crate::IconUi;
 use crate::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use crate::main_text::{MainText, TextAlignT};
-use crate::swiftui::button_style::plain;
+use crate::swiftui::button_style::{plain, row_hover_fill};
 use crate::swiftui::frame::{EdgeSet, SwiftUiAlignedFrame, SwiftUiFrame};
+use crate::swiftui::measure::measure;
 use crate::swiftui::shapes::{Shape, SwiftUiShapes};
 use crate::swiftui::stacks::{Alignment, HorizontalAlignment, StackAlign, hstack, spacer, spacer_min_w, vstack};
 
@@ -50,6 +51,7 @@ pub struct GroupedBtn {
     pub leading_slot: Option<AnyElement>,
     pub pretitle: Option<SharedString>,
     pub text: SharedString,
+    pub title_slot: Option<AnyElement>,
     pub subtitle: Option<SharedString>,
     pub text_line_limit: usize,
     pub subtitle_line_limit: usize,
@@ -79,6 +81,7 @@ impl GroupedBtn {
             leading_slot: None,
             pretitle: None,
             text: text.into(),
+            title_slot: None,
             subtitle: None,
             text_line_limit: 0,
             subtitle_line_limit: 0,
@@ -121,6 +124,11 @@ impl GroupedBtn {
 
     pub fn pretitle(mut self, pretitle: impl Into<SharedString>) -> Self {
         self.pretitle = Some(pretitle.into());
+        self
+    }
+
+    pub fn title_slot(mut self, slot: impl IntoElement) -> Self {
+        self.title_slot = Some(slot.into_any_element());
         self
     }
 
@@ -399,7 +407,7 @@ fn leading_content(item: &mut GroupedBtn, theme: &AppTheme) -> AnyElement {
 }
 
 impl RenderOnce for GroupedBtns {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = {
             let store = ThemeStore::shared(cx);
             store.read(cx).current_theme().clone()
@@ -410,6 +418,7 @@ impl RenderOnce for GroupedBtns {
         let separator = self.separator_color.unwrap_or(theme.border._200.opacity(0.55));
         let error = theme.semantic.error_100;
         let selection_fill = theme.primary._100.opacity(0.16);
+        let row_hover = row_hover_fill(&theme);
 
         let header = (self.title.is_some() || self.right_top_text.is_some()).then(|| {
             hstack(None)
@@ -435,6 +444,14 @@ impl RenderOnce for GroupedBtns {
         for (i, mut item) in self.items.into_iter().enumerate() {
             let opacity = disabled_opacity(item.disabled);
             let anchor = item.guide_anchor;
+            let expansion_shown = item.expanded_slot.as_ref().map(|_| {
+                window.use_keyed_state(
+                    SharedString::from(format!("{}-row-{}-expansion-shown", self.id, item.id)),
+                    cx,
+                    |_, _| false,
+                )
+            });
+            let expansion_folded = expansion_shown.as_ref().is_none_or(|shown| !*shown.read(cx));
             if let Some(content) = item.content_slot.take() {
                 rows = rows.child(
                     div()
@@ -457,12 +474,15 @@ impl RenderOnce for GroupedBtns {
                 if let Some(pre) = item.pretitle.clone() {
                     text_column = text_column.child(MainText::new(pre).px(11.0).color(secondary_text));
                 }
-                text_column = text_column.child(
-                    MainText::new(item.text.clone())
-                        .px(15.0)
-                        .color(if item.destructive { error } else { primary_text })
-                        .number_of_lines(item.text_line_limit),
-                );
+                text_column = match item.title_slot.take() {
+                    Some(slot) => text_column.child(slot),
+                    None => text_column.child(
+                        MainText::new(item.text.clone())
+                            .px(15.0)
+                            .color(if item.destructive { error } else { primary_text })
+                            .number_of_lines(item.text_line_limit),
+                    ),
+                };
                 if let Some(subtitle) = item.subtitle.clone() {
                     text_column = text_column.child(
                         MainText::new(subtitle)
@@ -510,13 +530,15 @@ impl RenderOnce for GroupedBtns {
                     .flatten()
                     .map(|chevron| div().flex_none().child(chevron));
                 let callback = item.callback.clone();
+                let rounds_top = i == 0;
+                let rounds_bottom = i + 1 == count && !has_end_action && expansion_folded;
                 let mut row_value = div().id(SharedString::from(format!("{}-row-{}-value", self.id, item.id))).w_full();
                 if item.selected {
                     row_value = row_value.bg(selection_fill);
                     if i == 0 {
                         row_value = row_value.rounded_tl(selection_radius).rounded_tr(selection_radius);
                     }
-                    if i + 1 == count && !has_end_action && item.expanded_slot.is_none() {
+                    if rounds_bottom {
                         row_value = row_value.rounded_bl(selection_radius).rounded_br(selection_radius);
                     }
                 }
@@ -524,6 +546,9 @@ impl RenderOnce for GroupedBtns {
                     plain(SharedString::from(format!("{}-row-{}", self.id, item.id)))
                         .on_press(move |window, cx| callback(window, cx))
                         .disabled(item.disabled)
+                        .hover_fill(row_hover)
+                        .when(rounds_top, |row| row.rounded_tl(selection_radius).rounded_tr(selection_radius))
+                        .when(rounds_bottom, |row| row.rounded_bl(selection_radius).rounded_br(selection_radius))
                         .w_full()
                         .opacity(opacity)
                         .child(
@@ -546,12 +571,23 @@ impl RenderOnce for GroupedBtns {
             }
 
             if let Some(expanded) = item.expanded_slot.take() {
-                rows = rows.child(
-                    div()
-                        .w_full()
-                        .opacity(opacity)
-                        .child(expanded.frame_max_width(Alignment::Center)),
-                );
+                let mut wrapper =
+                    div().relative().w_full().opacity(opacity).child(expanded.frame_max_width(Alignment::Center));
+                if let Some(shown) = expansion_shown.clone() {
+                    wrapper = wrapper.child(measure(
+                        SharedString::from(format!("{}-row-{}-expansion-measure", self.id, item.id)),
+                        move |bounds, _, cx| {
+                            let is_shown = f32::from(bounds.size.height) > 0.5;
+                            shown.update(cx, |value, cx| {
+                                if *value != is_shown {
+                                    *value = is_shown;
+                                    cx.notify();
+                                }
+                            });
+                        },
+                    ));
+                }
+                rows = rows.child(wrapper);
             }
 
             if i + 1 < count {
@@ -572,6 +608,9 @@ impl RenderOnce for GroupedBtns {
                     plain(SharedString::from(format!("{}-end-action", self.id)))
                         .on_press(move |window, cx| callback(window, cx))
                         .disabled(end.disabled)
+                        .hover_fill(row_hover)
+                        .rounded_bl(selection_radius)
+                        .rounded_br(selection_radius)
                         .w_full()
                         .opacity(disabled_opacity(end.disabled))
                         .child(

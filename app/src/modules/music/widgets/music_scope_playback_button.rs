@@ -53,9 +53,10 @@ impl RenderOnce for MusicScopePlaybackButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let id = SharedString::from(format!("music-scope-playback-{}", self.scope_id));
         let player = observed_music_player(SharedString::from(format!("{id}-player")), window, cx);
-        let (is_active_in_scope, is_playing) = {
+        let (is_active_in_scope, is_playing, is_preparing) = {
             let state = player.read(cx);
-            (self.is_active_in_scope(state), state.is_playing)
+            let is_active_in_scope = self.is_active_in_scope(state);
+            (is_active_in_scope, state.is_playing, is_active_in_scope && state.is_preparing_playback)
         };
         let icon = if is_active_in_scope && is_playing { "pause.fill" } else { "play.fill" };
         let primary = rise_ui::theme(cx).primary._100;
@@ -70,6 +71,9 @@ impl RenderOnce for MusicScopePlaybackButton {
             .disabled(disabled)
             .opacity(if disabled { 0.5 } else { 1.0 })
             .on_press(move |_, cx| {
+                if is_preparing {
+                    return;
+                }
                 if is_active_in_scope {
                     player.update(cx, |player, cx| player.toggle_play_pause(cx));
                 } else {
@@ -88,7 +92,12 @@ impl RenderOnce for MusicScopePlaybackButton {
                     .relative()
                     .size(px(size))
                     .child(div().absolute().inset_0().circle().bg(primary))
-                    .children(IconUi::sized(icon, px((size * 0.38).max(14.0)), on_primary, true)),
+                    .when(is_preparing, |button| {
+                        button.child(progress_view().tint(on_primary).control_size(ControlSize::Small))
+                    })
+                    .when(!is_preparing, |button| {
+                        button.children(IconUi::sized(icon, px((size * 0.38).max(14.0)), on_primary, true))
+                    }),
             )
     }
 }

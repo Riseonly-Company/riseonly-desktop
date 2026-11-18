@@ -65,6 +65,7 @@ const BIRTHDAY_PICKER_MAXIMUM_HEIGHT: f32 = 480.0;
 const BADGE_PICKER_MAXIMUM_HEIGHT: f32 = 376.0;
 const BADGE_PICKER_VIEWPORT_FRACTION: f32 = 0.44;
 const NAME_COLOR_EXPANDED_HEIGHT: f32 = 132.0;
+const NAME_COLOR_SWATCH_SIDE: f32 = 28.0;
 
 const NAME_COLOR_PALETTE: [&str; 10] = [
     "#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#00C7BE", "#007AFF", "#5856D6", "#AF52DE", "#FF2D55", "#A2845E",
@@ -111,6 +112,7 @@ struct ProfileSettingsState {
     tag_check_task: Option<Task<()>>,
     unsaved_alert_shown: bool,
     exit_resolved: bool,
+    is_saving: bool,
     story_stealth_enabled: bool,
     profile_id: Option<String>,
     nav_store: Option<Entity<NavigationStore>>,
@@ -150,6 +152,7 @@ impl ProfileSettingsState {
             tag_check_task: None,
             unsaved_alert_shown: false,
             exit_resolved: false,
+            is_saving: false,
             story_stealth_enabled: StoryStealthPreference::is_enabled(),
             profile_id: None,
             nav_store,
@@ -261,33 +264,65 @@ impl ProfileSettingsState {
         AuthServicesStore::shared(cx).read(cx).profile().map(|profile| profile.id.clone()).unwrap_or_default()
     }
 
-    fn commit_and_pop(&mut self, cx: &mut Context<Self>) {
-        if self.exit_resolved {
+    fn commit(&mut self, cx: &mut Context<Self>) {
+        if self.exit_resolved || self.is_saving {
             return;
         }
-        self.exit_resolved = true;
         let mut patch = self.pending_patch();
         if patch.tag.as_deref().is_some_and(|tag| {
             !ProfileFieldRules::tag().is_satisfied(tag) || self.tag_availability == TagAvailability::Taken
         }) {
             patch.tag = None;
         }
-        if !patch.is_empty() {
-            UserInteractionsStore::shared(cx).update(cx, |interactions, cx| {
-                interactions.save_profile_edits(
-                    patch.name,
-                    patch.tag,
-                    patch.description,
-                    patch.hb,
-                    None,
-                    None,
-                    None,
-                    cx,
-                );
-            });
+        if patch.is_empty() {
+            return;
         }
-        ProfileEditorDraftStore::clear(&Self::account_id(cx));
-        self.pop(cx);
+        let previous = (
+            self.initial_name.clone(),
+            self.initial_tag.clone(),
+            self.initial_description.clone(),
+            self.initial_hb_iso.clone(),
+        );
+        if let Some(name) = &patch.name {
+            self.initial_name = name.clone();
+        }
+        if let Some(tag) = &patch.tag {
+            self.initial_tag = tag.clone();
+        }
+        if let Some(description) = &patch.description {
+            self.initial_description = description.clone();
+        }
+        if let Some(hb) = &patch.hb {
+            self.initial_hb_iso = (!hb.is_empty()).then(|| hb.clone());
+        }
+        self.is_saving = true;
+        cx.notify();
+        let state = cx.weak_entity();
+        let on_done: Rc<dyn Fn(bool, &mut App)> = Rc::new(move |saved: bool, cx: &mut App| {
+            let previous = previous.clone();
+            let _ = state.update(cx, |state, cx| {
+                state.is_saving = false;
+                if saved {
+                    ProfileEditorDraftStore::clear(&Self::account_id(cx));
+                } else {
+                    (state.initial_name, state.initial_tag, state.initial_description, state.initial_hb_iso) = previous;
+                }
+                cx.notify();
+            });
+        });
+        UserInteractionsStore::shared(cx).update(cx, |interactions, cx| {
+            interactions.save_profile_edits_reporting(
+                patch.name,
+                patch.tag,
+                patch.description,
+                patch.hb,
+                None,
+                None,
+                None,
+                Some(on_done),
+                cx,
+            );
+        });
     }
 
     fn discard_and_pop(&mut self, cx: &mut Context<Self>) {
@@ -717,14 +752,9 @@ impl ProfileSettings {
         let is_expanded = state.read(cx).name_color_picker_open;
         let current = Self::current_name_color(cx).unwrap_or_default();
         let selected_border = theme.text.primary;
-        let swatches = hstack(8.0).w_full().children(NAME_COLOR_PALETTE.into_iter().map(|hex| {
-            let mut swatch = div()
-                .id(hex)
-                .flex_1()
-                .max_w(px(28.0))
-                .aspect_square()
-                .rounded_full()
-                .cursor_pointer();
+        let swatches = hstack(8.0).w_full().flex_wrap().children(NAME_COLOR_PALETTE.into_iter().map(|hex| {
+            let mut swatch =
+                div().id(hex).flex_none().size(px(NAME_COLOR_SWATCH_SIDE)).rounded_full().cursor_pointer();
             if let Some(color) = PremiumNameColor::parse(Some(hex)) {
                 swatch = swatch.bg(color);
             }
@@ -989,6 +1019,10 @@ impl RenderOnce for ProfileSettings {
 
         let commit_state = state.clone();
         let submit_state = state.clone();
+        let (has_unsaved_changes, is_saving) = {
+            let state = state.read(cx);
+            (state.has_unsaved_changes(), state.is_saving)
+        };
         let exit_state = state.clone();
         let appear_state = state.clone();
         let disappear_state = state.clone();
@@ -996,16 +1030,21 @@ impl RenderOnce for ProfileSettings {
         SettingsWrapperUi::new(SharedString::from(tr("settings_profile_title")), move |_, cx| {
             ProfileSettingsState::request_exit(&exit_state, cx);
         })
-        .right_jsx(PageHeaderIconButton::new("profile-settings-commit", "checkmark", move |_, cx| {
-            commit_state.update(cx, |state, cx| state.commit_and_pop(cx));
-        }))
+        .when(has_unsaved_changes || is_saving, |wrapper| {
+            wrapper.right_jsx(
+                PageHeaderIconButton::new("profile-settings-commit", "checkmark", move |_, cx| {
+                    commit_state.update(cx, |state, cx| state.commit(cx));
+                })
+                .disabled(is_saving),
+            )
+        })
         .content(
             div()
                 .id("profile-settings-paste-scope")
                 .size_full()
                 .track_focus(&focus_handle)
                 .on_key_down(|event: &KeyDownEvent, _, cx| Self::handle_key_down(event, cx))
-                .form_primary(true, move |_, cx| submit_state.update(cx, |state, cx| state.commit_and_pop(cx)))
+                .form_primary(true, move |_, cx| submit_state.update(cx, |state, cx| state.commit(cx)))
                 .child(
                     scroll_view("profile-settings-scroll")
                         .size_full()

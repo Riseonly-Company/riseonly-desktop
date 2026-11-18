@@ -1,14 +1,18 @@
 use std::rc::Rc;
 
-use gpui::{App, Global, Subscription};
+use futures::StreamExt;
+use futures::channel::mpsc;
+use gpui::{App, AsyncApp, Global, Subscription, Task};
 use rise_core::foundation::foundation_date::Date;
 use rise_core::foundation::foundation_uuid::Uuid;
+use rise_core::rise_app_events::{RiseAppEvents, RiseSubscription};
 
 use crate::app::root_view::RootView;
 use crate::app::shell::handover::frontmost_shell;
 use crate::core::desktop_platform::rise_app_lifecycle::{RiseAppLifecycle, ScenePhase};
 use crate::core::lib::rise_app_background_ledger::RiseAppBackgroundLedger;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
+use crate::core::lib::sai::core::websocket::sai_web_socket_manager::SAI_WS_DID_CONNECT;
 use crate::core::lib::sai::modules::sai_ws::sai_ws::SaiWs;
 use crate::core::maintenance::maintenance_gate::MaintenanceGate;
 use crate::core::widgets::notifier::notifier_store::Notifier;
@@ -40,13 +44,27 @@ pub(crate) struct RootProcessLifecycle {
     bootstrapped_account_id: Option<String>,
     deferred_call_end_refresh: Option<RootDeferredCallEndRefresh>,
     _scene_phase_observer: Subscription,
+    _connect_reports: Option<(RiseSubscription, Task<()>)>,
 }
 
 impl Global for RootProcessLifecycle {}
 
 impl RootProcessLifecycle {
     pub(crate) fn install_if_needed(cx: &mut App) {
+        if cx.has_global::<Self>() {
+            return;
+        }
         Self::install_with(Rc::new(Self::scene_phase_work), cx);
+        let (connected, mut on_connected) = mpsc::unbounded::<()>();
+        let watch = RiseAppEvents::default_center().observe(SAI_WS_DID_CONNECT, move |_| {
+            let _ = connected.unbounded_send(());
+        });
+        let reports = cx.spawn(async move |cx: &mut AsyncApp| {
+            while on_connected.next().await.is_some() {
+                cx.update(Self::report_focus_after_connect);
+            }
+        });
+        cx.global_mut::<Self>()._connect_reports = Some((watch, reports));
     }
 
     fn install_with(work: Rc<dyn Fn(ScenePhase, &mut App)>, cx: &mut App) {
@@ -69,6 +87,7 @@ impl RootProcessLifecycle {
             bootstrapped_account_id: None,
             deferred_call_end_refresh: None,
             _scene_phase_observer: observer,
+            _connect_reports: None,
         });
     }
 
@@ -110,10 +129,11 @@ impl RootProcessLifecycle {
                     let _ = shell.update(cx, |view, _, cx| view.resume_shared_story_after_authentication_if_needed(cx));
                 }
                 if !Self::consume_return_from_background(cx) {
+                    Self::set_away_action(PRESENCE_ONLINE, true, cx);
                     return;
                 }
                 Self::set_application_active(true, cx);
-                Self::set_away_action(PRESENCE_ONLINE, cx);
+                Self::set_away_action(PRESENCE_ONLINE, true, cx);
                 let user = UserInteractionsStore::shared(cx);
                 user.update(cx, |user, cx| user.application_did_become_active_for_contacts(cx));
             }
@@ -122,16 +142,17 @@ impl RootProcessLifecycle {
                 Notifier::commit_pending_undo(cx);
                 let messages = MessageInteractionsStore::shared(cx);
                 messages.update(cx, |messages, cx| messages.checkpoint_pending_chat_caches(cx));
-                Self::set_away_action(PRESENCE_AWAY, cx);
+                Self::set_away_action(PRESENCE_AWAY, false, cx);
                 Self::set_application_active(false, cx);
             }
             ScenePhase::Inactive => {
                 if !Self::consume_return_from_background(cx) {
+                    Self::set_away_action(PRESENCE_ONLINE, false, cx);
                     return;
                 }
                 tracing::warn!(target: "riseonly::X1525", "visible again without focus, transport live");
                 Self::set_application_active(true, cx);
-                Self::set_away_action(PRESENCE_ONLINE, cx);
+                Self::set_away_action(PRESENCE_ONLINE, false, cx);
                 let user = UserInteractionsStore::shared(cx);
                 user.update(cx, |user, cx| user.application_did_become_active_for_contacts(cx));
             }
@@ -151,9 +172,20 @@ impl RootProcessLifecycle {
         SaiWs::set_application_active(active, Some(access_token), cx);
     }
 
-    fn set_away_action(status: &str, cx: &mut App) {
+    fn set_away_action(status: &str, focused: bool, cx: &mut App) {
         let presence = PresenceActionsStore::shared(cx);
-        presence.update(cx, |presence, cx| presence.set_away_action(status.to_owned(), cx));
+        presence.update(cx, |presence, cx| presence.set_away_action(status.to_owned(), Some(focused), cx));
+    }
+
+    fn report_focus_after_connect(cx: &mut App) {
+        if !AuthServicesStore::shared(cx).read(cx).is_authenticated() {
+            return;
+        }
+        match RiseAppLifecycle::scene_phase(cx) {
+            ScenePhase::Active => Self::set_away_action(PRESENCE_ONLINE, true, cx),
+            ScenePhase::Inactive => Self::set_away_action(PRESENCE_ONLINE, false, cx),
+            ScenePhase::Background => Self::set_away_action(PRESENCE_AWAY, false, cx),
+        }
     }
 
     pub(crate) fn note_call_activity_change(was_active: bool, is_active: bool, cx: &mut App) {

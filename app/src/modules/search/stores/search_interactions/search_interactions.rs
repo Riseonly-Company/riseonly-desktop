@@ -43,6 +43,10 @@ impl SearchInteractionsStore {
         SaiWs::pagination_state(cache_key, cx).read(cx).trailing().can_request_automatically()
     }
 
+    pub fn tab_reselected(&mut self, cx: &mut Context<Self>) {
+        Self::service(cx).update(cx, |service, cx| service.request_field_focus(cx));
+    }
+
     pub fn on_screen_appear(&mut self, cx: &mut Context<Self>) {
         PostInteractionsStore::shared(cx).update(cx, |posts, cx| posts.load_initial_feed(cx));
     }

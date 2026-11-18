@@ -923,6 +923,7 @@ pub struct RiseMessageListView {
     pub message_selection_active: bool,
     pub selected_message_ids: HashSet<String>,
     pub on_toggle_message_selection: Option<RiseMessageListViewToggleSelectionHandler>,
+    pub on_begin_message_selection: Option<RiseMessageListViewToggleSelectionHandler>,
     pub initial_data_resolved: bool,
     pub can_load_older: bool,
     pub can_load_newer: bool,
@@ -1005,6 +1006,7 @@ impl RiseMessageListView {
             message_selection_active: false,
             selected_message_ids: HashSet::new(),
             on_toggle_message_selection: None,
+            on_begin_message_selection: None,
             initial_data_resolved: true,
             can_load_older: false,
             can_load_newer: false,
@@ -1207,6 +1209,7 @@ impl RiseMessageListView {
             &self.selected_message_ids,
             tint_color,
             self.on_toggle_message_selection.clone(),
+            self.on_begin_message_selection.clone(),
             window,
             cx,
         );

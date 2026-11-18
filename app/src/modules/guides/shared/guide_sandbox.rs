@@ -2142,7 +2142,11 @@ impl GuideSandbox {
             RiseRTCModerationAction::Kick => {
                 self.room_seats.remove(index);
             }
-            RiseRTCModerationAction::Unspecified => return,
+            RiseRTCModerationAction::BlockCamera
+            | RiseRTCModerationAction::AllowCamera
+            | RiseRTCModerationAction::BlockScreenShare
+            | RiseRTCModerationAction::AllowScreenShare
+            | RiseRTCModerationAction::Unspecified => return,
         }
         self.publish_voice_room(cx);
     }
@@ -2218,6 +2222,8 @@ impl GuideSandbox {
                 screen_share_enabled: false,
                 server_muted: seat.server_muted,
                 server_deafened: seat.server_deafened,
+                server_camera_blocked: false,
+                server_screen_share_blocked: false,
                 deafened: seat.deafened,
                 hand_raised: seat.hand_raised,
                 joined_at_ms: seat.joined_at_ms,

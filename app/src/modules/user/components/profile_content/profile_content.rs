@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{
     AnyElement, AnyView, App, AppContext, AsyncApp, Bounds, Context, ElementId, Entity, InteractiveElement, IntoElement,
     ParentElement, Render, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
-    Task, Pixels, WeakEntity, Window, canvas, div, prelude::FluentBuilder, px,
+    Task, Pixels, WeakEntity, Window, canvas, div, px,
 };
 use rise_canon::{RiseGuideAnchor, RiseGuideSignal};
 use rise_core::foundation::foundation_date::TimeInterval;
@@ -49,7 +49,9 @@ use crate::modules::story::stores::story::story_actions::story_profile_wire_type
 use crate::modules::story::stores::story::story_interactions::story_interactions::StoryInteractionsStore;
 use crate::modules::story::stores::story::story_services::story_services::StoryServicesStore;
 use crate::modules::user::components::profile_content::pages::comments::profile_comments::ProfileComments;
-use crate::modules::user::components::profile_content::pages::grid_favorites::grid_favorites::GridFavorites;
+use crate::modules::user::components::profile_content::pages::grid_favorites::grid_favorites::{
+    GridFavorites, ProfilePostShelf,
+};
 use crate::modules::user::components::profile_content::pages::grid_mentions::grid_mentions::GridMentions;
 use crate::modules::user::components::profile_content::pages::grid_posts::grid_posts::GridPosts;
 use crate::modules::user::components::profile_content::pages::grid_reposts::grid_reposts::GridReposts;
@@ -81,13 +83,14 @@ pub enum ProfileContentTab {
     Reposts,
     Mentions,
     Favorites,
+    Liked,
     Gifts,
     Goals,
     Plans,
 }
 
 impl ProfileContentTab {
-    pub const ALL_CASES: [ProfileContentTab; 11] = [
+    pub const ALL_CASES: [ProfileContentTab; 12] = [
         Self::Publications,
         Self::Riffs,
         Self::Threads,
@@ -96,6 +99,7 @@ impl ProfileContentTab {
         Self::Reposts,
         Self::Mentions,
         Self::Favorites,
+        Self::Liked,
         Self::Gifts,
         Self::Goals,
         Self::Plans,
@@ -121,13 +125,14 @@ impl ProfileContentTab {
             Self::Reposts => "profile_tab_reposts",
             Self::Mentions => "profile_tab_mentions",
             Self::Favorites => "chat_profile_tab_fav",
+            Self::Liked => "profile_tab_liked",
             Self::Gifts => "profile_tab_gifts",
             Self::Goals => "goals_title",
             Self::Plans => "plans_title",
         }
     }
 
-    /// every tab always, blocks never remove one. favorites show only for the owner
+    /// every tab always, blocks never remove one. favorites and liked show only for the owner
     pub fn visible(
         is_own_profile: bool,
         _has_foreign_goals: bool,
@@ -135,7 +140,7 @@ impl ProfileContentTab {
     ) -> Vec<ProfileContentTab> {
         Self::ALL_CASES
             .into_iter()
-            .filter(|tab| is_own_profile || *tab != Self::Favorites)
+            .filter(|tab| is_own_profile || !matches!(tab, Self::Favorites | Self::Liked))
             .collect()
     }
 }
@@ -784,6 +789,11 @@ impl ProfileContent {
                 GridFavorites::new(tab_id("profile-tab-page", tab), self.profile_tag.clone(), self.profile_user_id.clone())
                     .into_any_element()
             }
+            ProfileContentTab::Liked => {
+                GridFavorites::new(tab_id("profile-tab-page", tab), self.profile_tag.clone(), self.profile_user_id.clone())
+                    .shelf(ProfilePostShelf::Liked)
+                    .into_any_element()
+            }
             ProfileContentTab::Gifts => UserGiftsTab::new(self.profile_user_id.clone()).into_any_element(),
             ProfileContentTab::Goals => profile_content_goals_hooks()
                 .map(|hooks| {
@@ -935,6 +945,7 @@ impl ProfilePostRefreshModifier {
             ProfileContentTab::Reposts => RisePostProfileKind::Reposts,
             ProfileContentTab::Mentions => RisePostProfileKind::Mentions,
             ProfileContentTab::Favorites => RisePostProfileKind::Favorites,
+            ProfileContentTab::Liked => RisePostProfileKind::Liked,
             ProfileContentTab::Stories => {
                 return content.refreshable(move |_, cx| {
                     StoryInteractionsStore::shared(cx).update(cx, |store, cx| {
@@ -1197,13 +1208,12 @@ impl RenderOnce for ProfileTabBar {
                     )
                     .child(centred_stroke(capsule_stroke, 0.5, Shape::Capsule)),
             )
-            .child(
+            .children(shows_layout_toggle.then(|| {
                 div()
                     .flex_none()
-                    .when(shows_layout_toggle, |slot| slot.block_mouse_except_scroll())
-                    .when(!shows_layout_toggle, |slot| slot.invisible())
-                    .child(PostLayoutToggleUi::new("profile-tab-bar-layout-toggle", self.selected_layout_binding())),
-            )
+                    .block_mouse_except_scroll()
+                    .child(PostLayoutToggleUi::new("profile-tab-bar-layout-toggle", self.selected_layout_binding()))
+            }))
             .children(
                 self.reserves_create_action
                     .then(|| div().flex_none().w(px(Self::CREATE_ACTION_RESERVE - 8.0))),

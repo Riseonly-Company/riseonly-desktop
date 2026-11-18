@@ -800,6 +800,7 @@ pub mod modules {
         }
         pub mod system {
             pub mod account_state_reset_rtc_hooks_install;
+            pub mod rise_app_quit_drain_hooks_install;
             pub mod rise_rtc_call_system_coordinator;
             pub mod rise_rtc_call_system_hooks_install;
             pub mod rise_rtc_call_window_hooks;

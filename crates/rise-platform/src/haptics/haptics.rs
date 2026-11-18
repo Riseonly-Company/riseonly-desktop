@@ -53,7 +53,12 @@ pub enum HapticsUnavailable {
     NoSystemHaptics(HostOs),
     #[error("haptic feedback is not written for {0:?}")]
     BranchNotWritten(HostOs),
+    #[error("{0:?} plays no app haptics, a trackpad click already bumps on its own")]
+    OffOnDesktop(HostOs),
 }
+
+/// desktop plays no app haptics, a trackpad click already bumps on its own
+pub const PLAYS_APP_HAPTICS: bool = false;
 
 /// default answer of an os layer that doesnt override the haptic performer
 /// freedesktop has no haptic interface and the windows apis drive a device the app opened (pen etc)
@@ -91,11 +96,14 @@ pub fn support_of(answer: Result<(), HapticsUnavailable>) -> PlatformSupport {
 
 /// true when haptics can play on this host, with the reason when not
 pub fn availability() -> Result<(), HapticsUnavailable> {
+    if !PLAYS_APP_HAPTICS {
+        return Err(HapticsUnavailable::OffOnDesktop(HostOs::current()));
+    }
     super::os::NativeHaptics.available()
 }
 
 pub fn play(feedback: Feedback) -> PlatformSupport {
-    support_of(super::os::NativeHaptics.perform(pattern_for(feedback)))
+    support_of(availability().and_then(|()| super::os::NativeHaptics.perform(pattern_for(feedback))))
 }
 
 pub fn selection_changed() -> PlatformSupport {

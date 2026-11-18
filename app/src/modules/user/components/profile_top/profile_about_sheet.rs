@@ -7,6 +7,7 @@ use rise_i18n::tr;
 use rise_platform::pasteboard::UIPasteboard;
 use rise_theme::AppTheme;
 use rise_theme::ui_color_system::UIColor;
+use rise_ui::bottom_sheet_ui::modal_sheet_surface::{ModalSheetFrame, ModalSheetMetrics};
 use rise_ui::expandable_text_ui::{EdgeInsets, ExpandableTextUi};
 use rise_ui::icon_ui::IconUi;
 use rise_ui::grouped_btns::{GroupedBtn, GroupedBtns, GroupedCardMetrics};
@@ -372,8 +373,9 @@ impl RenderOnce for ProfileAboutSheet {
                 }),
             }
         });
-        let available_width =
-            state.read(cx).available_width.unwrap_or_else(|| f32::from(window.viewport_size().width));
+        let available_width = state.read(cx).available_width.unwrap_or_else(|| {
+            ModalSheetFrame::for_window(window, cx).width - ModalSheetMetrics::CONTENT_INSET * 2.0
+        });
         let actions = ProfileAboutSheetActions {
             is_presented: self.is_presented.clone(),
             achievements_user_id: self.achievements_user_id.clone(),

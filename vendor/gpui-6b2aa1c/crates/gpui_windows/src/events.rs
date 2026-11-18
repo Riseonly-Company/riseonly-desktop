@@ -1084,7 +1084,9 @@ impl WindowsWindowInner {
             let handled = !func(input).propagate;
             self.state.callbacks.input.set(Some(func));
 
-            if handled {
+            // why: the hit test already found a visible window button on top here, a layer that
+            // caught the press must not leave minimise, maximise and close dead
+            if handled && !is_window_button(wparam.0 as u32) {
                 return Some(0);
             }
         } else {
@@ -1128,7 +1130,7 @@ impl WindowsWindowInner {
             let handled = !func(input).propagate;
             self.state.callbacks.input.set(Some(func));
 
-            if handled {
+            if handled && !is_window_button(wparam.0 as u32) {
                 return Some(0);
             }
         } else {
@@ -1780,4 +1782,8 @@ fn notify_frame_changed(handle: HWND) {
         )
         .log_err();
     }
+}
+
+fn is_window_button(hit: u32) -> bool {
+    matches!(hit, HTMINBUTTON | HTMAXBUTTON | HTCLOSE)
 }

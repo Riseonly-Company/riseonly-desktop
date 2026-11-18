@@ -109,7 +109,9 @@ fn every_call_agrees_with_the_host_availability() {
 }
 
 #[test]
-fn only_macos_plays_haptics() {
-    let plays = availability().is_ok();
-    assert_eq!(plays, HostOs::current() == HostOs::MacOs);
+fn desktop_plays_no_app_haptics() {
+    assert_eq!(availability(), Err(HapticsUnavailable::OffOnDesktop(HostOs::current())));
+    assert_eq!(selection_changed(), PlatformSupport::Unsupported);
+    assert_eq!(impact(ImpactStyle::Heavy), PlatformSupport::Unsupported);
+    assert_eq!(notification(NotificationKind::Success), PlatformSupport::Unsupported);
 }

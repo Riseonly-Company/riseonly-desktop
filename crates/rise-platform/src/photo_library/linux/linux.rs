@@ -501,7 +501,7 @@ fn thumbnailer_link() -> Arc<ThumbnailerLink> {
     if let Some(link) = slot.as_ref() {
         return link.clone();
     }
-    let opened = zbus::block_on(async { tokio::time::timeout(THUMBNAILER_WAIT, open_thumbnailer()).await });
+    let opened = crate::dbus_block_on::block_on(async { tokio::time::timeout(THUMBNAILER_WAIT, open_thumbnailer()).await });
     let link = match opened {
         Ok(Ok(link)) => link,
         Ok(Err(error)) => {
@@ -548,7 +548,7 @@ fn system_video_thumbnail(path: &Path, target: ThumbnailBox) -> bool {
     let Some(flavor) = thumbnailer_flavor(target, flavors) else {
         return false;
     };
-    let answer = zbus::block_on(async {
+    let answer = crate::dbus_block_on::block_on(async {
         tokio::time::timeout(THUMBNAILER_WAIT, queue_thumbnail(connection, &uri, mime, flavor)).await
     });
     let step = match answer {

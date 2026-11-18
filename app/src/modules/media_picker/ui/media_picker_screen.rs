@@ -290,6 +290,9 @@ impl MediaPickerScreen {
         self.configuration.send_mode != MediaPickerSendMode::Media
     }
 
+    pub(crate) const SOURCE_PAGE_HEADER_HEIGHT: f32 = 20.0 + PageHeaderMetrics::TOOLBAR_BUTTON_SIZE;
+    pub(crate) const SOURCE_PAGE_CHROME_EXTENT: f32 = Self::SOURCE_PAGE_HEADER_HEIGHT + HEADER_CHROME_OVERHANG;
+
     fn floating_header_chrome_extent(&self) -> f32 {
         self.floating_header_height() + HEADER_CHROME_OVERHANG
     }
@@ -1037,7 +1040,11 @@ impl MediaPickerScreen {
 
     fn offer_files_on_appear(&self, state: &Entity<MediaPickerScreenState>, window: &mut Window, cx: &mut App) {
         let fetcher = self.fetcher.read(cx);
-        if !fetcher.reads_picked_files() || fetcher.has_picked_files() || state.read(cx).offered_files {
+        if !fetcher.reads_picked_files()
+            || fetcher.has_picked_files()
+            || state.read(cx).offered_files
+            || self.configuration.source_tabs.len() > 1
+        {
             return;
         }
         state.update(cx, |state, _| state.offered_files = true);
@@ -1145,8 +1152,12 @@ impl MediaPickerScreen {
     }
 
     fn picker_header_chrome(&self, cx: &App) -> impl IntoElement + use<> {
-        let extent = self.floating_header_chrome_extent();
         let bg_100 = self.theme_store.read(cx).current_theme().bg._100;
+        Self::header_chrome_layer(self.floating_header_chrome_extent(), bg_100, cx)
+    }
+
+    /// material and shadow under a floating picker header, the same band on every picker page
+    pub(crate) fn header_chrome_layer(extent: f32, bg_100: Hsla, cx: &App) -> impl IntoElement + use<> {
         let (material_stops, shadow_stops) = Self::header_chrome_stops(extent, bg_100, cx);
         pass_through()
             .absolute()

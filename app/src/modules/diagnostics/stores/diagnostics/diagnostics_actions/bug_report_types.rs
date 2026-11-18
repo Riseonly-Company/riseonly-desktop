@@ -1,4 +1,4 @@
-use rise_canon::{RiseBugReportSurface, RiseDiagnosticReportKind, RiseFeedbackKind};
+use rise_canon::{RiseBugReportPlatform, RiseBugReportSurface, RiseDiagnosticReportKind, RiseFeedbackKind};
 use rise_catalog::DIAGNOSTICS_FEEDBACK_KINDS_DEFAULT;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_core::foundation::foundation_url::Url;
@@ -118,6 +118,7 @@ pub struct BugReportDraft {
     pub pages: Vec<RiseBugReportSurface>,
     pub seeded_pages: Vec<RiseBugReportSurface>,
     pub component: String,
+    pub fix_platforms: Vec<RiseBugReportPlatform>,
     pub screenshots: Vec<BugReportAttachment>,
     pub video: Option<BugReportAttachment>,
 }
@@ -134,6 +135,7 @@ impl BugReportDraft {
             pages: Vec::new(),
             seeded_pages: Vec::new(),
             component: String::new(),
+            fix_platforms: RiseBugReportPlatform::ALL.to_vec(),
             screenshots: Vec::new(),
             video: None,
         }
@@ -160,6 +162,11 @@ impl BugReportDraft {
             pages: self.pages.iter().map(|page| page.wire().to_owned()).collect(),
             component: (self.kind == BugReportDraftKind::Bug && !trimmed_component.is_empty())
                 .then(|| trimmed_component.to_owned()),
+            fix_platforms: RiseBugReportPlatform::ALL
+                .into_iter()
+                .filter(|platform| self.fix_platforms.contains(platform))
+                .map(|platform| platform.wire().to_owned())
+                .collect(),
             screenshots: self.screenshots.clone(),
             video: self.video.clone(),
         }

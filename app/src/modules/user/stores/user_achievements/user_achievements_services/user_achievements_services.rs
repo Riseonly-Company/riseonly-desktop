@@ -24,6 +24,16 @@ impl UserAchievementsServicesStore {
         (user_guide_sandbox_hooks().achievements_snapshot)(real, cx)
     }
 
+    pub fn own_achievement(id: i64, cx: &mut App) -> Option<RiseAchievement> {
+        RiseUserAchievementsPresentation::shared(cx)
+            .read(cx)
+            .snapshot()
+            .achievements
+            .iter()
+            .find(|achievement| achievement.id == id)
+            .cloned()
+    }
+
     pub fn achievements(cx: &mut App) -> Vec<RiseAchievement> {
         Self::snapshot(cx).achievements
     }

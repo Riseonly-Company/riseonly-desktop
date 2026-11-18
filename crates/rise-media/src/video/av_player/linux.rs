@@ -59,7 +59,7 @@ mod clip {
     use crate::video::av_asset::AVURLAsset;
     use crate::video::av_player::clip_pacing::*;
     use crate::video::av_player::media_engine_frames::Nv12Picture;
-    use crate::video::av_player::pixel_buffer::Nv12PixelBuffer;
+    use crate::video::av_player::pixel_buffer::{clockwise_quarter_turns_of_display_rotation, turned_nv12, Nv12PixelBuffer};
     use crate::video::av_player::*;
     use crate::video::decoder::HostI420Planes;
     use crate::video_export::ffmpeg_export::remote_io_context;
@@ -387,6 +387,7 @@ mod clip {
         flushed: bool,
         last_pts_us: i64,
         scaler: Option<SwsContext>,
+        turns: u8,
     }
 
     /// opens the item through the asset loader or as a local file or through ranged requests
@@ -416,8 +417,9 @@ mod clip {
                 .find_best_stream(ffi::AVMEDIA_TYPE_VIDEO)
                 .map_err(|error| format!("av_find_best_stream: {error}"))?
                 .ok_or_else(|| "the item has no video stream".to_owned())?;
-            let (time_base, start, mut decoder) = {
+            let (time_base, start, mut decoder, turns) = {
                 let av_stream = &input.streams()[stream];
+                let turns = clockwise_quarter_turns_of_display_rotation(super::playback::display_rotation(&av_stream.codecpar()));
                 let mut decoder = AVCodecContext::new(&codec);
                 decoder
                     .apply_codecpar(&av_stream.codecpar())
@@ -425,12 +427,12 @@ mod clip {
                 decoder.set_pkt_timebase(av_stream.time_base);
                 crate::decode_guard::decode_guard::limit_codec_pixels(&mut decoder);
                 let start = if av_stream.start_time == ffi::AV_NOPTS_VALUE { 0 } else { av_stream.start_time };
-                (av_stream.time_base, start, decoder)
+                (av_stream.time_base, start, decoder, turns)
             };
             decoder
                 .open(Some(AVDictionary::new(c"threads", c"auto", 0)))
                 .map_err(|error| format!("avcodec_open2: {error}"))?;
-            Ok(Self { input, stream, decoder, time_base, start, flushed: false, last_pts_us: 0, scaler: None })
+            Ok(Self { input, stream, decoder, time_base, start, flushed: false, last_pts_us: 0, scaler: None, turns })
         }
 
         fn next_picture(&mut self) -> Result<Option<Decoded>, String> {
@@ -484,7 +486,10 @@ mod clip {
                 unsafe { ffi::av_rescale_q(stamp.saturating_sub(self.start), self.time_base, MICROSECONDS) }
             };
             self.last_pts_us = pts_us;
-            let shown = video_picture(frame, &mut self.scaler)?;
+            let mut shown = video_picture(frame, &mut self.scaler)?;
+            if self.turns != 0 {
+                shown.picture = turned_nv12(&shown.picture, self.turns).ok_or("a decoded picture did not turn upright")?;
+            }
             Ok(Decoded { pts_us, shown })
         }
     }
@@ -604,7 +609,7 @@ mod playback {
     use crate::audio::output::{choose, ring_samples, AudioSink as _, DeviceConfig};
     use crate::audio::ring::{self, Producer};
     use crate::video::av_player::media_clock::*;
-    use crate::video::av_player::pixel_buffer::clockwise_quarter_turns_of_display_rotation;
+    use crate::video::av_player::pixel_buffer::{clockwise_quarter_turns_of_display_rotation, turned_nv12};
     use crate::video::av_player::*;
 
     const MICROSECONDS: ffi::AVRational = ffi::AVRational { num: 1, den: 1_000_000 };
@@ -1299,6 +1304,7 @@ mod playback {
         }
 
         fn take_from_graph(&mut self) -> Result<Option<()>, String> {
+            let device_channels = self.channels();
             let Some((graph, _, _)) = &mut self.graph else {
                 return Ok(None);
             };
@@ -1307,8 +1313,8 @@ mod playback {
                 Ok(frame) => {
                     let channels = usize::try_from(frame.ch_layout.nb_channels).unwrap_or(0);
                     let frames = usize::try_from(frame.nb_samples).unwrap_or(0);
-                    if channels != self.channels() || frame.data[0].is_null() {
-                        return Err(format!("the graph gave {channels} channels for a {} channel device", self.channels()));
+                    if channels != device_channels || frame.data[0].is_null() {
+                        return Err(format!("the graph gave {channels} channels for a {device_channels} channel device"));
                     }
                     let samples = unsafe { std::slice::from_raw_parts(frame.data[0].cast::<f32>(), frames * channels) };
                     self.leftover.extend_from_slice(samples);
@@ -1391,7 +1397,7 @@ mod playback {
         rotation_degrees: f64,
     }
 
-    fn display_rotation(par: &ffi::AVCodecParameters) -> f64 {
+    pub(super) fn display_rotation(par: &ffi::AVCodecParameters) -> f64 {
         let side = unsafe { ffi::av_packet_side_data_get(par.coded_side_data, par.nb_coded_side_data, ffi::AV_PKT_DATA_DISPLAYMATRIX) };
         if side.is_null() {
             return 0.0;
@@ -1818,9 +1824,16 @@ mod playback {
                 let decoded = presentation_size_of(shown.picture.width, shown.picture.height, (1, 1), self.rotation_degrees);
                 self.presentation = (decoded.width > 0.0).then_some(decoded);
             }
+            let turns = clockwise_quarter_turns_of_display_rotation(self.rotation_degrees);
+            if turns != 0 {
+                let Some(upright) = turned_nv12(&shown.picture, turns) else {
+                    return;
+                };
+                shown.picture = upright;
+            }
             self.generation = self.generation.wrapping_add(1);
             shown.picture.generation = self.generation;
-            *picture.lock() = Some((self.item, shown, self.rotation_degrees));
+            *picture.lock() = Some((self.item, shown, 0.0));
             self.has_picture = true;
             self.land_seek(pts_us);
         }

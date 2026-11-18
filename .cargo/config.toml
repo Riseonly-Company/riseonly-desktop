@@ -1,6 +1,7 @@
 # why: X2352, a build script's set_var does not reach the build script of rusty_ffmpeg
-# (rsmpeg), so without this it probes Homebrew's GPL FFmpeg. Only the macOS target
-# enables rise-media/ffmpeg (app/Cargo.toml), so other targets never read it.
+# (rsmpeg), so without this it probes Homebrew's GPL FFmpeg. Linux and Windows builds export
+# FFMPEG_PKG_CONFIG_PATH for their own prefix (linux-check.sh, windows-check.sh, ci/build-*.sh),
+# and a variable already in the environment wins over this default.
 [env]
 FFMPEG_PKG_CONFIG_PATH = { value = "vendor/ffmpeg/macos-arm64/lib/pkgconfig", relative = true }
 # why: the app tree is compiled by several crates at different depths (scripts/crate-views.json), so a

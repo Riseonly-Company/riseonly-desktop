@@ -6,6 +6,7 @@ use crate::core::feature_hooks::FeatureHookSlot;
 /// what the navigation store and a page ask the right panel of the front window
 pub struct NavigationAsideHooks {
     pub open: fn(RootRoute, &mut App),
+    pub open_over_default: fn(RootRoute, &mut App),
     pub has_frontmost: fn(&App) -> bool,
 }
 

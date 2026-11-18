@@ -33,7 +33,7 @@ fn key() -> SecretKey {
 
 #[test]
 fn saving_tokens_works_when_the_os_store_is_unavailable() {
-    let store = usable_secure_store(Arc::new(UnavailableStore));
+    let store = usable_secure_store(Arc::new(UnavailableStore), None);
 
     store
         .set(&key(), b"token", SecretAccessibility::AfterFirstUnlock)
@@ -46,7 +46,7 @@ fn saving_tokens_works_when_the_os_store_is_unavailable() {
 fn an_available_os_store_is_the_one_used() {
     let memory = Arc::new(InMemorySecureStore::new());
     let os_store: Arc<dyn SecureStore> = memory.clone();
-    let store = usable_secure_store(os_store);
+    let store = usable_secure_store(os_store, None);
 
     store
         .set(&key(), b"token", SecretAccessibility::AfterFirstUnlock)

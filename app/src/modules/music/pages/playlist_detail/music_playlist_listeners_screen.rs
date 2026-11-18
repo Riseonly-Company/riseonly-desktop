@@ -3,7 +3,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, Context, ElementId, Entity, PromptButton, PromptLevel, RenderOnce, SharedString, Subscription, Window,
+    App, Context, ElementId, Entity, FontWeight, PromptButton, PromptLevel, RenderOnce, SharedString, Subscription,
+    Window,
 };
 use rise_canon::{RiseGuideAnchor, RiseGuideSignal};
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
@@ -22,7 +23,9 @@ use rise_ui::swiftui::scroll_view::scroll_view;
 use crate::core::guides::guide_facts::GuideFacts;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiSliceState;
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_pages_ui::BottomSheetPagesUi;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierSendOptions, NotifierType};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::pages::chats::chat::chat_profile::chat_tile_color::ChatTileColor;
@@ -387,13 +390,26 @@ impl MusicPlaylistListenersParts {
                     .name(SharedString::from(listener.user.name.clone()))
                     .user_id(SharedString::from(listener.user_id.clone()))
                     .size(LISTENER_LOGO_SIZE)
-                    .show_story_ring(false);
+                    .open_story_on_press(false)
+                    .gift_worn_frame(
+                        named_child(&self.id, format!("listener-frame-{}", listener.user_id)),
+                        Some(listener.user_id.clone()),
+                        LISTENER_LOGO_SIZE,
+                    );
                 let trailing = Self::listener_trailing(is_current_session, is_joining, listener.is_playing, theme);
                 let text = if listener.user.name.is_empty() { listener.user.tag.clone() } else { listener.user.name.clone() };
                 let subtitle = Self::track_title(&playlist_tracks, &listener.track_id);
                 let joined = self.clone();
+                let title = UserNameWithBadges::new(Some(SharedString::from(listener.user_id.clone())), text.clone())
+                    .font(15.0, FontWeight::NORMAL)
+                    .premium(
+                        listener.user.is_premium,
+                        listener.user.premium_badge_emoji.clone(),
+                        listener.user.name_color.clone(),
+                    );
                 GroupedBtn::new(listener.user_id.clone(), text)
                     .leading_slot(logo)
+                    .title_slot(title)
                     .subtitle(subtitle)
                     .disabled(is_current_session || joining_user_id.is_some() || is_transitioning)
                     .guide_anchor(is_first.then_some(RiseGuideAnchor::ListenersFirstListener))

@@ -788,6 +788,7 @@ pub struct App {
     #[cfg(any(test, feature = "test-support", debug_assertions))]
     pub(crate) name: Option<&'static str>,
     pub(crate) text_rendering_mode: Rc<Cell<TextRenderingMode>>,
+    pub(crate) window_zoom: f32,
 
     pub(crate) window_update_stack: Vec<WindowId>,
     pub(crate) mode: GpuiMode,
@@ -835,6 +836,7 @@ impl App {
                 platform: platform.clone(),
                 text_system,
                 text_rendering_mode: Rc::new(Cell::new(TextRenderingMode::default())),
+                window_zoom: 1.0,
                 mode: GpuiMode::Production,
                 actions: Rc::new(ActionRegistry::default()),
                 flushing_effects: false,
@@ -1434,6 +1436,29 @@ impl App {
     /// Returns the current text rendering mode for the application.
     pub fn text_rendering_mode(&self) -> TextRenderingMode {
         self.text_rendering_mode.get()
+    }
+
+    /// Riseonly 0124: one zoom for every window, like a browser zoom. Each window draws its
+    /// content at this many logical pixels per platform point, so layout sees a smaller viewport
+    /// and every element grows. Windows opened later start with it.
+    pub fn set_window_zoom(&mut self, zoom: f32) {
+        let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+        if self.window_zoom == zoom {
+            return;
+        }
+        self.window_zoom = zoom;
+        // why: the call usually comes from a key handler while its own window is leased out,
+        // so the windows take the new zoom once the current update is over
+        self.defer(move |cx| {
+            for handle in cx.windows() {
+                let _ = handle.update(cx, |_, window, cx| window.set_zoom(zoom, cx));
+            }
+        });
+    }
+
+    /// The zoom set by [`Self::set_window_zoom`], 1.0 by default.
+    pub fn window_zoom(&self) -> f32 {
+        self.window_zoom
     }
 
     /// Writes data to the platform clipboard.

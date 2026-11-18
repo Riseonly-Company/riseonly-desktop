@@ -19,6 +19,7 @@ use crate::modules::map::components::pins::map_self_pin_layer::MapSelfProfile;
 use crate::modules::map::components::rise_map_view::RiseMapView;
 use crate::modules::map::stores::map_interactions::map_interactions::MapInteractionsStore;
 use crate::modules::media_picker::ui::media_picker_header_icon_button::MediaPickerHeaderIconButton;
+use crate::modules::media_picker::ui::media_picker_screen::MediaPickerScreen;
 
 #[derive(IntoElement)]
 pub struct MediaPickerLocationSourcePage {
@@ -35,7 +36,7 @@ impl MediaPickerLocationSourcePage {
 
     fn header(&self, theme: &AppTheme) -> Div {
         let on_cancel = self.on_cancel.clone();
-        div().w_full().px(px(14.0)).py(px(10.0)).bg(theme.bg._100).child(
+        div().w_full().px(px(14.0)).py(px(10.0)).child(
             zstack(Alignment::Center)
                 .w_full()
                 .h(px(PageHeaderMetrics::TOOLBAR_BUTTON_SIZE))
@@ -111,17 +112,18 @@ impl RenderOnce for MediaPickerLocationSourcePage {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = rise_ui::theme(cx).clone();
         let map = Self::map(&theme, cx);
-        vstack(0.0)
+        let header = self.header(&theme);
+        div()
             .id(self.id.clone())
+            .relative()
             .size_full()
             .bg(theme.bg._100)
-            .child(self.header(&theme))
             .child(
-                div().flex_1().min_h_0().w_full().child(
-                    scroll_view("location-source-scroll").child(
+                div().absolute().inset_0().child(
+                    scroll_view("location-source-scroll").size_full().child(
                         vstack(18.0)
                             .w_full()
-                            .pt(px(10.0))
+                            .pt(px(MediaPickerScreen::SOURCE_PAGE_HEADER_HEIGHT + 10.0))
                             .pb(px(108.0))
                             .child(map)
                             .child(Self::from_phone_note(&theme))
@@ -146,5 +148,7 @@ impl RenderOnce for MediaPickerLocationSourcePage {
                     ),
                 ),
             )
+            .child(MediaPickerScreen::header_chrome_layer(MediaPickerScreen::SOURCE_PAGE_CHROME_EXTENT, theme.bg._100, cx))
+            .child(div().absolute().top_0().left_0().right_0().child(header))
     }
 }

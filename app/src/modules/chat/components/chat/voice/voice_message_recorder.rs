@@ -5,6 +5,7 @@ use futures::channel::oneshot;
 use gpui::{Context, Pixels, Size, Task};
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::foundation::foundation_uuid::Uuid;
+use rise_i18n::tr;
 use rise_media::audio_capture::{AacSettings, AudioRecorder};
 use rise_platform::capture_permission::{self, CaptureAccess, CaptureKind};
 use rise_platform::file_manager::FileManager;
@@ -12,6 +13,7 @@ use rise_platform::haptics::{ImpactStyle, impact};
 use rise_platform::paths::temporary_directory;
 
 use crate::core::lib::rise_call_audio_ownership::RiseCallAudioOwnership;
+use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::modules::chat::shared::chat_music_hooks::ChatMusicHooks;
 use crate::modules::chat::shared::utils::voice::voice_message_metadata::VoiceMessageMetadata;
 use crate::modules::music::shared::utils::music::music_external_audio_owner::MusicExternalAudioOwner;
@@ -363,6 +365,15 @@ impl VoiceMessageRecorder {
             self.deactivate_session(cx);
             self.cleanup_file();
             self.reset_state(cx);
+            Notifier::send(
+                tr("rtc_media_microphone_failed"),
+                NotifierSendOptions {
+                    r#type: NotifierType::Error,
+                    position: NotifierPosition::Bottom,
+                    ..NotifierSendOptions::default()
+                },
+                cx,
+            );
             return false;
         };
 

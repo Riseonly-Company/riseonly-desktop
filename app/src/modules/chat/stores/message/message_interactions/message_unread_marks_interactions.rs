@@ -46,9 +46,11 @@ impl MessageInteractionsStore {
             return;
         }
         self.unread_mark_observation_counts.remove(&key);
-        self.pending_unread_mark_candidates.remove(&key);
+        let seen = self.pending_unread_mark_candidates.remove(&key).unwrap_or_default();
         SaiDebouncer::cancel(&key, UNREAD_MARKS_GROUP_KEY, cx);
-        Self::actions(cx).update(cx, |actions, cx| actions.release_unread_marks_action(chat_id, topic_id, cx));
+        Self::actions(cx).update(cx, |actions, cx| {
+            actions.release_unread_marks_action(chat_id, topic_id, seen.into_iter().collect(), cx);
+        });
     }
 
     pub fn unread_mark_candidates_became_visible(

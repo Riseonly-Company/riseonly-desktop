@@ -63,7 +63,7 @@ struct LoadedFont {
 
 impl CosmicTextSystem {
     pub fn new(system_font_fallback: &str) -> Self {
-        let font_system = FontSystem::new();
+        let font_system = system_font_system();
 
         Self(RwLock::new(CosmicTextSystemState {
             font_system,
@@ -90,6 +90,23 @@ impl CosmicTextSystem {
             system_font_fallback: system_font_fallback.to_string(),
         }))
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn system_font_system() -> FontSystem {
+    let font_system = FontSystem::new();
+    match crate::fontconfig_fallback::FontconfigFallback::new(font_system.locale()) {
+        Some(fallback) => {
+            let (locale, db) = font_system.into_locale_and_db();
+            FontSystem::new_with_locale_and_db_and_fallback(locale, db, fallback)
+        }
+        None => font_system,
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn system_font_system() -> FontSystem {
+    FontSystem::new()
 }
 
 impl PlatformTextSystem for CosmicTextSystem {

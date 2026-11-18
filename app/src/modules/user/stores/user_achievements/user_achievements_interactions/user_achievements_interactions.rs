@@ -29,6 +29,7 @@ impl RiseAchievementShareIntent {
 
 pub struct UserAchievementsInteractionsStore {
     pending_share_intent: Option<RiseAchievementShareIntent>,
+    pending_detail_id: Option<i64>,
 }
 
 impl UserAchievementsInteractionsStore {
@@ -37,7 +38,7 @@ impl UserAchievementsInteractionsStore {
     }
 
     fn new(_cx: &mut Context<Self>) -> Self {
-        Self { pending_share_intent: None }
+        Self { pending_share_intent: None, pending_detail_id: None }
     }
 
     fn actions(cx: &mut App) -> Entity<UserAchievementsActionsStore> {
@@ -63,6 +64,26 @@ impl UserAchievementsInteractionsStore {
     pub fn consume_pending_share_intent(&mut self, cx: &mut Context<Self>) {
         self.pending_share_intent = None;
         cx.notify();
+    }
+
+    pub fn pending_detail_id(&self) -> Option<i64> {
+        self.pending_detail_id
+    }
+
+    /// opens the earned card from a push or a feed row, the own list reloads since the grant may be newer
+    pub fn open_earned_achievement(&mut self, id: i64, cx: &mut Context<Self>) {
+        if id <= 0 {
+            return;
+        }
+        self.pending_detail_id = Some(id);
+        cx.notify();
+        Self::actions(cx).update(cx, |actions, cx| actions.load_action(true, cx));
+    }
+
+    pub fn consume_pending_detail(&mut self, cx: &mut Context<Self>) {
+        if self.pending_detail_id.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub fn open_achievements(&mut self, user_id: Option<&str>, cx: &mut Context<Self>) {

@@ -1,4 +1,9 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use thiserror::Error;
+
+use crate::app_info::AppIdentity;
 
 #[derive(Debug, Error)]
 pub enum SecureStoreError {
@@ -19,8 +24,8 @@ pub enum SecureStoreError {
 }
 
 /// why the os store cant keep a secret on this machine
-/// the sign in screen turns code() into text and wont keep the session past this run
-/// no variant falls back to a plain file, tokens are never stored in the clear
+/// linux then keeps sessions in sealed files, elsewhere they live until quit
+/// tokens are never stored in the clear
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SecretStoreUnavailable {
     NoService,
@@ -57,6 +62,14 @@ pub fn availability_from_probe(
         Err(SecureStoreError::AccessDenied) => Err(SecretStoreUnavailable::Locked),
         Err(_) => Err(SecretStoreUnavailable::NoService),
     }
+}
+
+pub fn fallback_secure_store(data_dir: &Path, identity: &AppIdentity) -> Option<Arc<dyn SecureStore>> {
+    super::os::fallback_secure_store(data_dir, identity)
+}
+
+pub fn move_fallback_secrets(data_dir: &Path, identity: &AppIdentity, target: &dyn SecureStore) -> usize {
+    super::os::move_fallback_secrets(data_dir, identity, target)
 }
 
 pub const AUTH_SERVICE: &str = "riseonly.auth";

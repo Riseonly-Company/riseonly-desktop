@@ -29,6 +29,8 @@ fn participant(role: RiseRTCParticipantRole, server_muted: bool, server_deafened
         screen_share_enabled: false,
         server_muted,
         server_deafened,
+        server_camera_blocked: false,
+        server_screen_share_blocked: false,
         deafened: false,
         hand_raised: false,
         joined_at_ms: 0,
@@ -153,6 +155,8 @@ fn removal_is_the_only_destructive_entry(cx: &mut TestAppContext) {
         can_manage_stage: true,
         can_mute: true,
         can_deafen: true,
+        can_block_camera: false,
+        can_block_screen_share: false,
         can_remove: true,
         chat_id: None,
     };

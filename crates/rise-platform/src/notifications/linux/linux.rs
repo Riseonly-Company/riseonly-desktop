@@ -13,6 +13,40 @@ use crate::gpui_shim::PlatformSupport;
 use crate::notifications::freedesktop_notify::*;
 use crate::notifications::*;
 
+const SETTINGS_PANELS: [(&str, &[&str]); 4] = [
+    ("gnome-control-center", &["notifications"]),
+    ("systemsettings", &["kcm_notifications"]),
+    ("systemsettings5", &["kcm_notifications"]),
+    ("xfce4-notifyd-config", &[]),
+];
+
+fn settings_panel() -> Option<(std::path::PathBuf, &'static [&'static str])> {
+    let path = std::env::var_os("PATH")?;
+    SETTINGS_PANELS.iter().find_map(|(program, arguments)| {
+        std::env::split_paths(&path)
+            .map(|directory| directory.join(program))
+            .find(|candidate| candidate.is_file())
+            .map(|candidate| (candidate, *arguments))
+    })
+}
+
+pub(crate) fn open_settings(_app: &mut gpui::App) -> PlatformSupport {
+    let Some((program, arguments)) = settings_panel() else {
+        return PlatformSupport::Unsupported;
+    };
+    match std::process::Command::new(&program).args(arguments).spawn() {
+        Ok(_) => PlatformSupport::Performed,
+        Err(error) => {
+            tracing::warn!("notifications: {} did not start: {error}", program.display());
+            PlatformSupport::Unsupported
+        }
+    }
+}
+
+pub(crate) fn settings_reachable() -> bool {
+    settings_panel().is_some()
+}
+
 pub(crate) fn host_precondition_met() -> bool {
     true
 }

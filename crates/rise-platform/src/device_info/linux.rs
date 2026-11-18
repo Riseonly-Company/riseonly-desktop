@@ -8,6 +8,19 @@ const FLATPAK_HOST_OS_RELEASE: &str = "/run/host/os-release";
 pub(super) struct NativeDeviceInfo;
 
 impl DeviceInfoSource for NativeDeviceInfo {
+    fn os_details(&self) -> OsDetails {
+        let os_release = std::iter::once(FLATPAK_HOST_OS_RELEASE)
+            .chain(OS_RELEASE_PATHS)
+            .find_map(|path| std::fs::read_to_string(path).ok());
+        let kernel = std::fs::read_to_string(KERNEL_RELEASE).ok();
+        linux_os_details(
+            os_release.as_deref(),
+            kernel.as_deref(),
+            |name| std::env::var(name).ok(),
+            std::path::Path::new(FLATPAK_INFO).exists(),
+        )
+    }
+
     fn hardware_model(&self) -> Result<HardwareModel, DeviceInfoUnavailable> {
         let files = LinuxHardwareFiles {
             sys_vendor: read_optional(DMI_SYS_VENDOR),

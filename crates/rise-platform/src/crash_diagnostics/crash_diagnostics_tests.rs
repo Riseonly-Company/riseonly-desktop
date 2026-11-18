@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::crash_diagnostics::*;
 use crate::host_os::HostOs;
@@ -234,4 +235,256 @@ fn filetime_creation_counts_from_1601() {
     assert_eq!(start, Ok(1_762_160_000.5));
     assert_eq!(uptime_seconds_or_failed(start, 1_762_160_010.9), 10);
     assert!(process_start_from_filetime(0, 0).is_err());
+}
+
+#[test]
+fn crash_text_writes_numbers_without_allocating_and_cuts_overflow() {
+    let mut text: CrashText<32> = CrashText::new();
+    text.push_decimal(0).push_str(" ").push_signed(-6).push_str(" ").push_hex(0xc000_0005);
+    assert_eq!(text.as_bytes(), b"0 -6 0xc0000005");
+    let mut small: CrashText<4> = CrashText::new();
+    small.push_str("abcdef");
+    assert!(small.is_full());
+    assert_eq!(small.as_bytes(), b"abcd");
+    let mut wide: CrashText<32> = CrashText::new();
+    wide.push_utf16(&[0x0043, 0x003a, 0x005c, 0x0444]);
+    assert_eq!(wide.as_bytes(), "C:\\\u{444}".as_bytes());
+}
+
+#[test]
+fn a_native_record_is_named_like_a_panic_marker() {
+    let mut name: CrashText<64> = CrashText::new();
+    push_native_crash_name(&mut name, 1_700_000_000_123, 42);
+    assert_eq!(name.as_bytes(), b"0001700000000123-42.crash");
+    assert_eq!(
+        MarkerStamp::of(std::path::Path::new("0001700000000123-42.crash")),
+        Some(MarkerStamp { millis: 1_700_000_000_123, pid: 42 })
+    );
+}
+
+#[test]
+fn only_file_backed_executable_or_image_start_maps_are_kept() {
+    assert!(keep_map_line(b"7f00-7f10 r-xp 00001000 08:01 12 /usr/lib/libc.so.6"));
+    assert!(keep_map_line(b"7e00-7e10 r--p 00000000 08:01 12 /usr/lib/libc.so.6"));
+    assert!(!keep_map_line(b"7d00-7d10 rw-p 00030000 08:01 12 /usr/lib/libc.so.6"));
+    assert!(!keep_map_line(b"7c00-7c10 rw-p 00000000 00:00 0 "));
+    assert!(!keep_map_line(b"7b00-7b10 r-xp 00000000 00:00 0 [vdso]"));
+}
+
+#[test]
+fn the_ucontext_pc_offset_is_known_for_both_linux_architectures() {
+    assert_eq!(signal_context_pc_offset("x86_64"), Some(168));
+    assert_eq!(signal_context_pc_offset("aarch64"), Some(440));
+    assert_eq!(signal_context_pc_offset("riscv64"), None);
+}
+
+const WINDOWS_RECORD: &str = "riseonly native crash 1
+kind exception
+code 0xc0000005
+subcode 0
+address 0x10
+pc 0x7ff800001234 0x7ff800000000
+pid 77
+thread 4242
+at 1700000000123
+arch x86_64
+frame 0x7ff700005000 0x7ff700000000
+frame 0x7ff800001234 0x7ff800000000
+frame 0x7ff700006000 0x7ff700000000
+module 0x7ff800000000 C:\\Riseonly\\avcodec-61.dll
+module 0x7ff700000000 C:\\Riseonly\\riseonly.exe
+";
+
+#[test]
+fn a_windows_record_names_the_exception_and_the_faulting_module() {
+    let record = NativeCrashRecord::parse(WINDOWS_RECORD);
+    assert_eq!(
+        record.termination_reason(),
+        "Native crash: EXCEPTION_ACCESS_VIOLATION (0xc0000005) reading 0x10 at avcodec-61.dll + 0x1234 on thread 4242"
+    );
+    let frames = record.crash_frames();
+    assert_eq!(frames.len(), 2, "the handler frame before the fault is dropped");
+    let trace = record.stack_trace();
+    assert!(trace.lines().next().unwrap().ends_with("avcodec-61.dll + 0x1234"), "{trace}");
+    assert!(trace.lines().nth(1).unwrap().ends_with("riseonly.exe + 0x6000"), "{trace}");
+    let json: serde_json::Value = serde_json::from_slice(&record.to_json()).unwrap();
+    let crash = &json[CRASH_DIAGNOSTICS_KEY][0];
+    assert_eq!(crash[DIAGNOSTIC_META_DATA_KEY]["exceptionCode"], 0xc000_0005_u64);
+    assert_eq!(json["timeStampBegin"], "2023-11-14 22:13:20");
+}
+
+#[test]
+fn a_linux_record_resolves_frames_through_the_maps() {
+    let text = "riseonly native crash 1
+kind signal
+code 11
+subcode 1
+address 0x0
+pc 0x7f0000002010
+pid 9
+thread riseonly-clip
+at 1700000000000
+arch aarch64
+frame 0x5500000010
+frame 0x7f0000002010
+map 7f0000000000-7f0000001000 r--p 00000000 08:01 7 /opt/riseonly/lib/libwebrtc.so
+map 7f0000001000-7f0000003000 r-xp 00001000 08:01 7 /opt/riseonly/lib/libwebrtc.so
+";
+    let record = NativeCrashRecord::parse(text);
+    assert_eq!(
+        record.termination_reason(),
+        "Native crash: SIGSEGV (11) SEGV_MAPERR address 0x0 at libwebrtc.so + 0x2010 on thread riseonly-clip"
+    );
+    assert_eq!(record.crash_frames().len(), 1);
+    let json: serde_json::Value = serde_json::from_slice(&record.to_json()).unwrap();
+    assert_eq!(json[CRASH_DIAGNOSTICS_KEY][0][DIAGNOSTIC_META_DATA_KEY]["signal"], 11);
+}
+
+#[test]
+fn an_abort_right_after_a_panic_of_the_same_process_is_not_a_second_crash() {
+    let panics = [MarkerStamp { millis: 1_000, pid: 5 }];
+    let abort = |pid, at| NativeCrashRecord {
+        kind: KIND_SIGNAL.to_owned(),
+        code: Some(LINUX_SIGABRT),
+        pid: Some(pid),
+        at_millis: Some(at),
+        ..NativeCrashRecord::default()
+    };
+    assert!(abort(5, 1_200).follows_a_panic(&panics));
+    assert!(!abort(6, 1_200).follows_a_panic(&panics));
+    assert!(!abort(5, 1_000 + PANIC_ABORT_WINDOW_MILLIS + 1).follows_a_panic(&panics));
+    let segv = NativeCrashRecord { code: Some(11), ..abort(5, 1_200) };
+    assert!(!segv.follows_a_panic(&panics));
+}
+
+#[test]
+fn native_records_are_delivered_with_panic_markers_and_removed() {
+    let dir = scratch_dir("native");
+    std::fs::write(dir.join("0001700000000123-77.crash"), WINDOWS_RECORD).unwrap();
+    std::fs::write(
+        dir.join("0000000000001000-5.json"),
+        br#"{"crashDiagnostics":[{"stackTrace":"x"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("0000000000001100-5.crash"), "kind signal\ncode 6\n").unwrap();
+    let (sink, deliveries) = collecting_sink();
+    assert_eq!(deliver_panic_markers(&dir, &sink).unwrap(), 2);
+    let deliveries = deliveries.lock().unwrap();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0].len(), 2);
+    let native: serde_json::Value = serde_json::from_slice(&deliveries[0][1].json).unwrap();
+    assert!(native[CRASH_DIAGNOSTICS_KEY][0][STACK_TRACE_KEY].as_str().unwrap().contains("avcodec-61.dll"));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "the superseded abort is removed too");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_hang_record_goes_out_as_hang_diagnostics() {
+    let text = "riseonly native crash 1
+kind hang
+pc 0x7ff800001234 0x7ff800000000
+thread 4242
+at 1700000000123
+arch x86_64
+frame 0x7ff800001234 0x7ff800000000
+module 0x7ff800000000 C:\\Windows\\System32\\ntdll.dll
+";
+    let record = NativeCrashRecord::parse(text);
+    assert_eq!(
+        record.termination_reason(),
+        "Hang: main thread not responding at ntdll.dll + 0x1234 on thread 4242"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&record.to_json()).unwrap();
+    assert!(json[HANG_DIAGNOSTICS_KEY][0][STACK_TRACE_KEY].as_str().unwrap().contains("ntdll.dll + 0x1234"));
+    assert!(json.get(CRASH_DIAGNOSTICS_KEY).is_none());
+}
+
+#[test]
+fn a_hang_is_a_silence_of_the_canon_threshold_and_beats_off_macos() {
+    assert!(!is_hang(None));
+    assert!(!is_hang(Some(hang_report_after() - Duration::from_millis(1))));
+    assert!(is_hang(Some(hang_report_after())));
+    assert_eq!(main_thread_beat_interval() * 5, hang_report_after());
+    assert!(main_thread_beats_needed(HostOs::Linux));
+    assert!(main_thread_beats_needed(HostOs::Windows));
+    assert!(!main_thread_beats_needed(HostOs::MacOs));
+}
+
+#[test]
+fn a_silence_right_after_a_sleep_of_the_machine_is_not_a_hang() {
+    let interval = main_thread_beat_interval();
+    assert!(!is_wake_gap(interval));
+    assert!(is_wake_gap(interval * 4));
+    let long_silence = Some(hang_report_after() * 10);
+    assert!(!is_hang_while_awake(long_silence, interval));
+    assert!(is_hang_while_awake(long_silence, hang_report_after()));
+    assert!(!is_hang_while_awake(Some(interval), hang_report_after() * 2));
+}
+
+const BEX_REPORT: &str = "Version=1\r\nEventType=BEX64\r\nEventTime=134080323510000000\r\nAppSessionGuid=000014c4-0001-001a-c9c1-7f09bfd7dc01\r\nSig[0].Name=App\r\nSig[0].Value=riseonly.exe\r\nSig[3].Name=Module\r\nSig[3].Value=ntdll.dll\r\nSig[6].Name=Offset\r\nSig[6].Value=0000000000255e4c\r\nSig[7].Name=Code\r\nSig[7].Value=c0000409\r\nSig[8].Name=Data\r\nSig[8].Value=0000000000000023\r\nAppPath=C:\\Riseonly\\riseonly.exe\r\n";
+
+#[test]
+fn a_fail_fast_report_of_windows_error_reporting_reads_by_position() {
+    let crash = WerCrash::parse(BEX_REPORT).expect("bex report");
+    assert_eq!(crash.module, "ntdll.dll");
+    assert_eq!(crash.offset, Some(0x255e4c));
+    assert_eq!(crash.code, Some(STATUS_FAIL_FAST));
+    assert_eq!(crash.data, Some(35));
+    assert_eq!(crash.pid, Some(0x14c4));
+    assert_eq!(crash.at_millis, Some((134_080_323_510_000_000 - FILETIME_UNIX_EPOCH) / 10_000));
+    let appcrash = BEX_REPORT
+        .replace("BEX64", "APPCRASH")
+        .replace("Sig[6].Value=0000000000255e4c", "Sig[6].Value=c0000005")
+        .replace("Sig[7].Value=c0000409", "Sig[7].Value=0000000000001234");
+    let crash = WerCrash::parse(&appcrash).expect("appcrash report");
+    assert_eq!((crash.code, crash.offset), (Some(0xC000_0005), Some(0x1234)));
+    assert!(WerCrash::parse(&BEX_REPORT.replace("BEX64", "AppHangB1")).is_none());
+}
+
+#[test]
+fn a_fail_fast_record_names_the_module_offset_and_the_fail_fast_code() {
+    let crash = WerCrash::parse(BEX_REPORT).expect("bex report");
+    let record = NativeCrashRecord::parse(&crash.record_text("x86_64"));
+    let reason = record.termination_reason();
+    assert!(reason.starts_with("Native crash: STATUS_STACK_BUFFER_OVERRUN (0xc0000409)"), "{reason}");
+    assert!(reason.contains("fail fast 35 unexpected heap exception"), "{reason}");
+    assert!(reason.contains("at ntdll.dll + 0x255e4c"), "{reason}");
+    assert!(reason.ends_with("(windows error reporting)"), "{reason}");
+    assert_eq!(record.pid, Some(0x14c4));
+    let json: serde_json::Value = serde_json::from_slice(&record.to_json()).expect("json");
+    assert_eq!(json[CRASH_DIAGNOSTICS_KEY][0][DIAGNOSTIC_META_DATA_KEY]["exceptionCode"], STATUS_FAIL_FAST);
+}
+
+#[test]
+fn only_fresh_reports_of_this_exe_without_an_own_record_are_taken_once() {
+    let at = (134_080_323_510_000_000 - FILETIME_UNIX_EPOCH) / 10_000;
+    let other = BEX_REPORT.replace("C:\\Riseonly\\riseonly.exe", "C:\\Other\\riseonly.exe");
+    let reports = vec![
+        ("AppCrash_a".to_owned(), BEX_REPORT.to_owned()),
+        ("AppCrash_b".to_owned(), other),
+        ("AppCrash_c".to_owned(), BEX_REPORT.to_owned()),
+    ];
+    let exe = "c:\\riseonly\\RISEONLY.exe";
+    let (chosen, seen) = select_wer_crashes(&reports, &["AppCrash_c".to_owned()], &[], exe, at + 1_000);
+    assert_eq!(chosen.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["AppCrash_a"]);
+    assert_eq!(seen, ["AppCrash_a", "AppCrash_b", "AppCrash_c"]);
+    let (chosen, _) = select_wer_crashes(&reports, &[], &[0x14c4], exe, at + 1_000);
+    assert!(chosen.is_empty());
+    let (chosen, _) = select_wer_crashes(&reports, &[], &[], exe, at + WER_REPORT_MAX_AGE_MILLIS + 1);
+    assert!(chosen.is_empty());
+}
+
+#[test]
+fn a_silence_while_a_system_panel_is_open_is_not_a_hang() {
+    let long_silence = Some(hang_report_after() * 10);
+    let awake = hang_report_after() * 2;
+    let guard = NativeModalGuard::enter();
+    let nested = NativeModalGuard::enter();
+    assert!(native_modal_open());
+    assert!(!is_hang_while_awake(long_silence, awake));
+    drop(nested);
+    assert!(!is_hang_while_awake(long_silence, awake));
+    drop(guard);
+    assert!(!native_modal_open());
+    assert!(is_hang_while_awake(long_silence, awake));
 }

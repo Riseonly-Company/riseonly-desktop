@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use gpui::{App, ElementId, Entity, FontWeight, RenderOnce, Window};
 use rise_canon::{RiseGuideAnchor, RiseGuideSignal};
 use rise_i18n::tr;
@@ -49,6 +51,7 @@ impl RenderOnce for NotificationsHubSheetHost {
 struct FittedHeights {
     room: f32,
     content: f32,
+    room_generation: u64,
 }
 
 #[derive(Clone)]
@@ -74,6 +77,7 @@ impl NotificationsHubSheet {
     const MAXIMUM_FITTED_FRACTION: f32 = 0.86;
     const REFIT_GATE: f32 = 48.0;
     const REFIT_TOLERANCE: f32 = 0.5;
+    const REFIT_SETTLE: Duration = Duration::from_millis(120);
 
     pub fn new() -> Self {
         Self
@@ -85,8 +89,15 @@ impl NotificationsHubSheet {
             .clamp(Self::MINIMUM_FITTED_FRACTION, Self::MAXIMUM_FITTED_FRACTION)
     }
 
-    fn refit(fraction: &Entity<f32>, heights: &Entity<FittedHeights>, window: &Window, cx: &mut App) {
-        let FittedHeights { room, content } = *heights.read(cx);
+    /// a small room correction waits until the page height stops springing
+    fn refit(
+        fraction: &Entity<f32>,
+        heights: &Entity<FittedHeights>,
+        room_settled: bool,
+        window: &Window,
+        cx: &mut App,
+    ) {
+        let FittedHeights { room, content, .. } = *heights.read(cx);
         if content <= 0.0 {
             return;
         }
@@ -94,7 +105,7 @@ impl NotificationsHubSheet {
         let current = *fraction.read(cx);
         let difference = content - room;
         let target = if room > 0.0 && difference.abs() < Self::REFIT_GATE {
-            if difference.abs() <= Self::REFIT_TOLERANCE {
+            if difference.abs() <= Self::REFIT_TOLERANCE || !room_settled {
                 return;
             }
             (current + difference / viewport).clamp(Self::MINIMUM_FITTED_FRACTION, Self::MAXIMUM_FITTED_FRACTION)
@@ -121,13 +132,28 @@ impl NotificationsHubSheet {
         let content_heights = heights.clone();
         let measured = div().relative().w_full().child(content).child(measure(ids.content, move |bounds, window, cx| {
             content_heights.update(cx, |heights, _| heights.content = f32::from(bounds.size.height));
-            Self::refit(&content_fraction, &content_heights, window, cx);
+            Self::refit(&content_fraction, &content_heights, false, window, cx);
         }));
         let room_fraction = fraction.clone();
         let room_heights = heights.clone();
         let room = measure(ids.room, move |bounds, window, cx| {
-            room_heights.update(cx, |heights, _| heights.room = f32::from(bounds.size.height));
-            Self::refit(&room_fraction, &room_heights, window, cx);
+            let generation = room_heights.update(cx, |heights, _| {
+                heights.room = f32::from(bounds.size.height);
+                heights.room_generation = heights.room_generation.wrapping_add(1);
+                heights.room_generation
+            });
+            Self::refit(&room_fraction, &room_heights, false, window, cx);
+            let (settle_fraction, settle_heights) = (room_fraction.clone(), room_heights.clone());
+            window
+                .spawn(cx, async move |cx| {
+                    cx.background_executor().timer(Self::REFIT_SETTLE).await;
+                    let _ = cx.update(|window, cx| {
+                        if settle_heights.read(cx).room_generation == generation {
+                            Self::refit(&settle_fraction, &settle_heights, true, window, cx);
+                        }
+                    });
+                })
+                .detach();
         });
         let body = match ids.scroll {
             Some(scroll_id) => scroll_view(scroll_id).size_full().child(measured).into_any_element(),

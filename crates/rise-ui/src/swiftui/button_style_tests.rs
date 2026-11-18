@@ -159,3 +159,48 @@ fn button_chrome_sets_a_single_hover_style() {
     let _ = button_chrome(div().id("default-hover"), false, None);
     let _ = button_chrome_hover(div().id("own-hover"), false, None, |style| style.opacity(0.5));
 }
+
+const HOVER_ROWS: [&str; 6] = ["row-0", "row-1", "row-2", "row-3", "row-4", "row-5"];
+
+struct HoverRows {
+    renders: Rc<Cell<u32>>,
+}
+
+impl Render for HoverRows {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders.set(self.renders.get() + 1);
+        div().size_full().children(HOVER_ROWS.iter().map(|name| {
+            div()
+                .debug_selector(|| name.to_string())
+                .w(px(200.))
+                .h(px(40.))
+                .hover(|style| style.bg(hsla(0.0, 0.0, 1.0, 0.08)))
+        }))
+    }
+}
+
+#[gpui::test]
+fn a_row_without_an_id_redraws_when_the_mouse_enters_or_leaves_it_and_not_while_it_moves_inside(cx: &mut TestAppContext) {
+    let renders = Rc::new(Cell::new(0));
+    let probe = HoverRows { renders: renders.clone() };
+    let (_, cx) = cx.add_window_view(move |_, _| probe);
+    cx.run_until_parked();
+    let first = cx.debug_bounds(HOVER_ROWS[0]).expect("first row laid out");
+    let fifth = cx.debug_bounds(HOVER_ROWS[4]).expect("fifth row laid out");
+    cx.simulate_mouse_move(first.origin + gpui::point(px(300.), px(10.)), None, Modifiers::none());
+    cx.run_until_parked();
+    let before = renders.get();
+
+    cx.simulate_mouse_move(first.origin + gpui::point(px(10.), px(10.)), None, Modifiers::none());
+    cx.run_until_parked();
+    let after_enter = renders.get();
+    assert!(after_enter > before, "the mouse entering a row without an id lights it");
+
+    cx.simulate_mouse_move(first.origin + gpui::point(px(30.), px(20.)), None, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(renders.get(), after_enter, "a move inside the hovered row draws nothing");
+
+    cx.simulate_mouse_move(fifth.origin + gpui::point(px(10.), px(10.)), None, Modifiers::none());
+    cx.run_until_parked();
+    assert!(renders.get() > after_enter, "a jump to another row redraws so the old row dims and the new one lights");
+}

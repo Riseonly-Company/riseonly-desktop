@@ -8,12 +8,11 @@ use gpui::{
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_ui::swiftui::animated::Animated;
-use rise_ui::swiftui::environment::env;
 use rise_ui::swiftui::motion::{MotionSpec, ease_in_out};
 use rise_ui::swiftui::shapes::pass_through;
 use rise_widgets::wrappers::list_shell_header_collapse_hooks::ListShellHeaderCollapseHooks;
 
-use crate::core::widgets::wrappers::list_shell_ui::ListShellFloatingTopInsetKey;
+use crate::core::widgets::wrappers::list_shell_ui::list_shell_floating_top_inset;
 
 /// geometry of a chrome that folds under the title bar as the list scrolls
 pub struct ListShellHeaderCollapsePolicy;
@@ -372,7 +371,7 @@ impl ListShellBelowCollapsedChrome {
 
 impl RenderOnce for ListShellBelowCollapsedChrome {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let inset = list_shell_floating_top_inset(cx);
         let offset = self.collapse.read(cx).presented_offset(window);
         div().size_full().pt(px((inset - offset).max(0.0))).child(self.content)
     }
@@ -400,7 +399,7 @@ impl RenderOnce for ListShellClipBelowCollapsedChrome {
         if !self.active {
             return div().size_full().child(self.content);
         }
-        let inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let inset = list_shell_floating_top_inset(cx);
         let clip = (inset - self.collapse.read(cx).presented_offset(window)).max(0.0);
         div().relative().size_full().child(
             div()

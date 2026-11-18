@@ -214,7 +214,7 @@ impl NavigationStore {
             return;
         }
         if self.path.len() <= index + 1 {
-            self.push(route, NavigationStoreSettlingPush::Drop, cx);
+            self.push_settings_section(route, cx);
             return;
         }
         self.deferred_push_generation = None;
@@ -226,7 +226,22 @@ impl NavigationStore {
         if self.deferred_push_generation.is_some() {
             return;
         }
-        self.push(route, NavigationStoreSettlingPush::Wait, cx);
+        self.push_settings_section(route, cx);
+    }
+
+    /// a section beside the settings list opens at once, it never waits out the touch hold
+    fn push_settings_section(&mut self, route: RootRoute, cx: &mut Context<Self>) {
+        if self.opens_in_aside(&route) || BotMiniAppPresentation::from_route(&route).is_some() {
+            self.push(route, NavigationStoreSettlingPush::Wait, cx);
+            return;
+        }
+        if self.path.last() == Some(&route) {
+            return;
+        }
+        self.drop_embedded_forum_request();
+        self.deferred_push_generation = None;
+        self.cancel_pending_repeated_chat_push();
+        self.perform_push(route, cx);
     }
 
     /// window shell tells whether the right panel is a column beside the centre

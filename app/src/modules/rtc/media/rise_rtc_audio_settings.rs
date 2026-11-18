@@ -37,6 +37,7 @@ use crate::core::lib::canon_format::RiseFormat;
 use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::lib::rise_call_app_volume::RiseCallAppVolume;
 use crate::core::lib::rise_call_audio_ownership::RiseCallAudioOwnership;
+use crate::modules::music::shared::utils::music::music_output_volume::MusicOutputVolume;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::sai::Sai;
 use crate::core::widgets::wrappers::list_shell_ui::{
@@ -689,7 +690,22 @@ impl RenderOnce for RiseRTCAudioSettingsContent {
                     ),
                 ),
             )
-            .child(RiseRTCAppVolumeCard { theme: theme.clone() })
+            .child(RiseRTCAppVolumeCard {
+                id: "rtc-app-volume",
+                title: tr("rtc_app_volume_title"),
+                description: tr("desktop_rtc_app_volume_description"),
+                read: RiseCallAppVolume::level,
+                write: |value, _| RiseCallAppVolume::set_level(value),
+                theme: theme.clone(),
+            })
+            .child(RiseRTCAppVolumeCard {
+                id: "rtc-music-volume",
+                title: tr("editor_volume_music"),
+                description: tr("desktop_rtc_music_volume_description"),
+                read: MusicOutputVolume::level,
+                write: MusicOutputVolume::set_level,
+                theme: theme.clone(),
+            })
             .child(
                 div().w_full().min_w_0().px(px(GroupedCardMetrics::TITLE_HORIZONTAL_PADDING)).child(
                     MainText::new(tr("rtc_voice_processing_default_note"))
@@ -878,14 +894,24 @@ impl RiseRTCAudioDevicesCard {
 
 #[derive(IntoElement)]
 struct RiseRTCAppVolumeCard {
+    id: &'static str,
+    title: String,
+    description: String,
+    read: fn() -> f32,
+    write: fn(f32, &mut App),
     theme: AppTheme,
 }
 
 impl RenderOnce for RiseRTCAppVolumeCard {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = self.theme;
-        let level = window.use_keyed_state("rtc-app-volume-level", cx, |_, _| f64::from(RiseCallAppVolume::level()));
-        let current = *level.read(cx);
+        let (read, write) = (self.read, self.write);
+        let level = window.use_keyed_state(SharedString::from(format!("{}-level", self.id)), cx, move |_, _| f64::from(read()));
+        let live = f64::from(read());
+        if (*level.read(cx) - live).abs() > 0.001 {
+            level.update(cx, |level, _| *level = live);
+        }
+        let current = live;
 
         div().w_full().px(px(GroupedCardMetrics::HORIZONTAL_PADDING)).child(
             GroupedCardMetrics::SHAPE.round(
@@ -903,12 +929,12 @@ impl RenderOnce for RiseRTCAppVolumeCard {
                                     .min_w_0()
                                     .flex_shrink_1()
                                     .child(
-                                        MainText::new(tr("rtc_app_volume_title"))
+                                        MainText::new(self.title)
                                             .px(15.0)
                                             .font_weight(FontWeight::SEMIBOLD),
                                     )
                                     .child(
-                                        MainText::new(tr("rtc_app_volume_description"))
+                                        MainText::new(self.description)
                                             .px(12.0)
                                             .color(theme.text.secondary),
                                     ),
@@ -925,13 +951,13 @@ impl RenderOnce for RiseRTCAppVolumeCard {
                     )
                     .child(
                         slider(
-                            "rtc-app-volume",
+                            self.id,
                             Binding::entity(
                                 level,
                                 |level: &f64| *level,
-                                |level: &mut f64, value: f64, cx| {
+                                move |level: &mut f64, value: f64, cx| {
                                     *level = value;
-                                    RiseCallAppVolume::set_level(value as f32);
+                                    write(value as f32, cx);
                                     cx.notify();
                                 },
                             ),

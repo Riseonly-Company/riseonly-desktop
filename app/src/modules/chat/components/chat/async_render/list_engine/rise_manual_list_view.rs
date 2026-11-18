@@ -3,18 +3,19 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::{Index, Range};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{
-    AccessibleAction, AnyElement, AnyView, App, AppContext, Bounds, Context, Edges, ElementId, EntityId, Hsla, InteractiveElement,
+    AccessibleAction, AnyElement, AnyView, App, AppContext, Bounds, Context, Edges, ElementId, Entity, EntityId, Hsla,
+    InteractiveElement,
     IntoElement, ParentElement, PathBuilder, Pixels, Point, Render, RenderImage, Role, Size, StatefulInteractiveElement, Styled,
     Subscription, Task, Window, div, fill, point, px, size, white,
 };
 use gpui::{
-    AnyWindowHandle, FocusHandle, KeyDownEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle,
-    ScrollWheelEvent, StyleRefinement, TouchPhase, canvas,
+    AnyWindowHandle, DispatchPhase, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle,
+    ScrollWheelEvent, StyleRefinement, TouchPhase, WHEEL_LINE_HEIGHT, WheelGlide, canvas, wheel_glides,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_i18n::tr;
@@ -22,6 +23,7 @@ use rise_platform::accessibility::reduce_motion;
 use rise_ui::keyboard_dismiss::ScreenFocus;
 use rise_ui::swiftui::environment::{LayoutDirection, layout_direction};
 use rise_ui::swiftui::motion::Spring;
+use rise_ui::swiftui::text_selection::selectable_text_took_press;
 use rise_platform::display_cadence::maximum_frames_per_second;
 use rise_ui::hold_context_menu_ui::rise_strict_tap_gesture_recognizer::{
     RiseScrollMotionProbe, RiseStrictTapGestureRecognizer, RiseStrictTapGestureRecognizerState,
@@ -42,7 +44,9 @@ use crate::modules::chat::components::chat::async_render::list_engine::rise_manu
 use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_scroll_view::RiseManualListScrollView;
 use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_view_hooks::RiseManualListViewHooks;
 use crate::modules::chat::components::chat::async_render::list_engine::rise_manual_list_types::{
-    RiseManualListBottomStickyHeader, RiseManualListBottomStickyHeaderLayout, RiseManualListCubicBezier, RiseManualListItem, RiseManualListItemMountPolicy,
+    RiseManualListBottomStickyHeader, RiseManualListBottomStickyHeaderLayout, RiseManualListCubicBezier, RiseManualListDragSelectionStart,
+    RiseManualListTextSource, RiseManualListTextSweep, RiseManualListTextSweepSlot,
+    RiseManualListItem, RiseManualListItemMountPolicy,
     RiseManualListKeyboardPresentationPolicy, RiseManualListScrollAnimationPolicy, RiseManualListScrollMetrics,
     RiseManualListSelectionPresentation, RiseManualListTransaction, RiseManualListTransactionAnchor,
     RiseManualListTransactionEdgeMutation, RiseManualListTransactionJumpAnimation,
@@ -198,10 +202,34 @@ struct RiseManualListSelectionOverlayViewRow {
     accessibility_label: String,
 }
 
+struct RiseManualListDragSelection {
+    item_id: String,
+    top: Pixels,
+    bottom: Pixels,
+    text: bool,
+    press: Point<Pixels>,
+    pointer: Point<Pixels>,
+    started: bool,
+}
+
+struct RiseManualListSelectionSweep {
+    anchor_id: String,
+    selects: bool,
+    initially_selected: HashSet<String>,
+    toggled: HashSet<String>,
+    start_y: Pixels,
+    pointer: Point<Pixels>,
+    engaged: bool,
+    top_reach: Pixels,
+    bottom_reach: Pixels,
+}
+
 /// selection circles drawn over the rows while selection mode is on
 /// list paints it above its rows and forwards the pointer only while active
 struct RiseManualListSelectionOverlayView {
     tap_gesture: RiseStrictTapGestureRecognizer,
+    sweep: Option<RiseManualListSelectionSweep>,
+    range_anchor_id: Option<String>,
     rows: Vec<RiseManualListSelectionOverlayViewRow>,
     on_toggle: Option<RiseManualListSelectionToggle>,
     indicator_fill_color: Hsla,
@@ -218,10 +246,16 @@ impl RiseManualListSelectionOverlayView {
     const INDICATOR_RING_WIDTH: f32 = 1.8;
     const CHECKMARK_LINE_WIDTH: f32 = 1.35;
     const CHECKMARK_OPACITY: f32 = 0.96;
+    const SWEEP_START_SLOP: f32 = 4.0;
+    const AUTOSCROLL_EDGE: f32 = 64.0;
+    const AUTOSCROLL_MAX_SPEED: f32 = 900.0;
+    const AUTOSCROLL_MAX_DEPTH: f32 = 3.0;
 
     fn new() -> Self {
         let mut overlay = Self {
             tap_gesture: RiseStrictTapGestureRecognizer::new(),
+            sweep: None,
+            range_anchor_id: None,
             rows: Vec::new(),
             on_toggle: None,
             indicator_fill_color: Hsla::transparent_black(),
@@ -291,6 +325,8 @@ impl RiseManualListSelectionOverlayView {
         if !active {
             self.accessibility_elements = None;
             self.tap_gesture.reset();
+            self.sweep = None;
+            self.range_anchor_id = None;
         }
     }
 
@@ -403,17 +439,168 @@ impl RiseManualListSelectionOverlayView {
 
     /// pointer up, location is in the list own space
     /// the press stays with the rows under the overlay too
-    fn touches_ended(&mut self, window_location: Point<Pixels>, location: Point<Pixels>, window: &mut Window, cx: &mut App) {
+    fn touches_ended(
+        &mut self,
+        window_location: Point<Pixels>,
+        location: Point<Pixels>,
+        extends_range: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         if !self.is_user_interaction_enabled {
             return;
         }
+        if self.sweep.take().is_some_and(|sweep| sweep.engaged) {
+            self.tap_gesture.reset();
+            return;
+        }
         if self.tap_gesture.touches_ended(window_location) {
+            if extends_range && self.extend_range(location, window, cx) {
+                return;
+            }
             self.handle_tap(self.tap_gesture.state(), location, window, cx);
         }
     }
 
+    fn row_index(&self, y: Pixels) -> Option<usize> {
+        if self.rows.is_empty() {
+            return None;
+        }
+        Some(self.rows.iter().position(|row| y < row.frame.bottom()).unwrap_or(self.rows.len() - 1))
+    }
+
+    fn begin_sweep(&mut self, location: Point<Pixels>, pointer: Point<Pixels>, band: Range<Pixels>) {
+        self.sweep = None;
+        if !self.is_user_interaction_enabled {
+            return;
+        }
+        let Some(anchor) = self.row_index(location.y).map(|index| &self.rows[index]) else {
+            return;
+        };
+        let edge = px(Self::AUTOSCROLL_EDGE);
+        self.sweep = Some(RiseManualListSelectionSweep {
+            anchor_id: anchor.selection_id.clone(),
+            selects: !anchor.is_selected,
+            initially_selected: self.rows.iter().filter(|row| row.is_selected).map(|row| row.selection_id.clone()).collect(),
+            toggled: HashSet::new(),
+            start_y: pointer.y,
+            pointer,
+            engaged: false,
+            top_reach: (pointer.y - band.start).max(Pixels::ZERO).min(edge),
+            bottom_reach: (band.end - pointer.y).max(Pixels::ZERO).min(edge),
+        });
+    }
+
+    fn begin_engaged_sweep(&mut self, anchor_id: String, pointer: Point<Pixels>, band: Range<Pixels>) {
+        let edge = px(Self::AUTOSCROLL_EDGE);
+        self.tap_gesture.reset();
+        self.range_anchor_id = Some(anchor_id.clone());
+        self.sweep = Some(RiseManualListSelectionSweep {
+            anchor_id,
+            selects: true,
+            initially_selected: self.rows.iter().filter(|row| row.is_selected).map(|row| row.selection_id.clone()).collect(),
+            toggled: HashSet::new(),
+            start_y: pointer.y,
+            pointer,
+            engaged: true,
+            top_reach: (pointer.y - band.start).max(Pixels::ZERO).min(edge),
+            bottom_reach: (band.end - pointer.y).max(Pixels::ZERO).min(edge),
+        });
+    }
+
+    fn move_sweep(&mut self, pointer: Point<Pixels>) -> bool {
+        let Some(sweep) = self.sweep.as_mut() else {
+            return false;
+        };
+        sweep.pointer = pointer;
+        if !sweep.engaged && (pointer.y - sweep.start_y).abs() >= px(Self::SWEEP_START_SLOP) {
+            sweep.engaged = true;
+            self.range_anchor_id = Some(sweep.anchor_id.clone());
+            self.tap_gesture.reset();
+        }
+        sweep.engaged
+    }
+
+    fn apply_sweep(&mut self, y: Pixels, window: &mut Window, cx: &mut App) {
+        let Some(finger) = self.row_index(y) else {
+            return;
+        };
+        let Some(sweep) = self.sweep.as_mut().filter(|sweep| sweep.engaged) else {
+            return;
+        };
+        let Some(anchor) = self.rows.iter().position(|row| row.selection_id == sweep.anchor_id) else {
+            return;
+        };
+        let range = anchor.min(finger)..=anchor.max(finger);
+        let mut changed = Vec::new();
+        for (index, row) in self.rows.iter().enumerate() {
+            let id = &row.selection_id;
+            let wanted = if range.contains(&index) { sweep.selects } else { sweep.initially_selected.contains(id) };
+            let shown = sweep.initially_selected.contains(id) != sweep.toggled.contains(id);
+            if wanted == shown {
+                continue;
+            }
+            if !sweep.toggled.remove(id) {
+                sweep.toggled.insert(id.clone());
+            }
+            changed.push(id.clone());
+        }
+        if let Some(on_toggle) = self.on_toggle.as_ref() {
+            for id in changed {
+                on_toggle(id, window, cx);
+            }
+        }
+    }
+
+    fn sweep_autoscroll_depth(&mut self, band: Range<Pixels>) -> f32 {
+        let Some(sweep) = self.sweep.as_mut().filter(|sweep| sweep.engaged) else {
+            return 0.0;
+        };
+        let edge = px(Self::AUTOSCROLL_EDGE);
+        let from_top = sweep.pointer.y - band.start;
+        let from_bottom = band.end - sweep.pointer.y;
+        sweep.top_reach = sweep.top_reach.max(from_top.min(edge));
+        sweep.bottom_reach = sweep.bottom_reach.max(from_bottom.min(edge));
+        if from_top < sweep.top_reach {
+            -(f32::from(sweep.top_reach - from_top) / Self::AUTOSCROLL_EDGE).min(Self::AUTOSCROLL_MAX_DEPTH)
+        } else if from_bottom < sweep.bottom_reach {
+            (f32::from(sweep.bottom_reach - from_bottom) / Self::AUTOSCROLL_EDGE).min(Self::AUTOSCROLL_MAX_DEPTH)
+        } else {
+            0.0
+        }
+    }
+
+    fn sweep_pointer(&self) -> Option<Point<Pixels>> {
+        self.sweep.as_ref().filter(|sweep| sweep.engaged).map(|sweep| sweep.pointer)
+    }
+
+    fn extend_range(&mut self, location: Point<Pixels>, window: &mut Window, cx: &mut App) -> bool {
+        let Some(clicked) = self.row_index(location.y) else {
+            return false;
+        };
+        let Some(anchor) = self
+            .range_anchor_id
+            .as_ref()
+            .and_then(|anchor_id| self.rows.iter().position(|row| &row.selection_id == anchor_id))
+        else {
+            return false;
+        };
+        self.range_anchor_id = Some(self.rows[clicked].selection_id.clone());
+        let unselected: Vec<String> = self.rows[anchor.min(clicked)..=anchor.max(clicked)]
+            .iter()
+            .filter(|row| !row.is_selected)
+            .map(|row| row.selection_id.clone())
+            .collect();
+        if let Some(on_toggle) = self.on_toggle.as_ref() {
+            for id in unselected {
+                on_toggle(id, window, cx);
+            }
+        }
+        true
+    }
+
     fn handle_tap(
-        &self,
+        &mut self,
         state: RiseStrictTapGestureRecognizerState,
         location: Point<Pixels>,
         window: &mut Window,
@@ -436,8 +623,10 @@ impl RiseManualListSelectionOverlayView {
             return;
         };
         tracing::warn!(target: "riseonly::X1870", y = ?location.y, selection_id = %row.selection_id, has_toggle = self.on_toggle.is_some(), "selection tap row");
+        let selection_id = row.selection_id.clone();
+        self.range_anchor_id = Some(selection_id.clone());
         if let Some(on_toggle) = self.on_toggle.as_ref() {
-            on_toggle(row.selection_id.clone(), window, cx);
+            on_toggle(selection_id, window, cx);
         }
     }
 }
@@ -1218,6 +1407,16 @@ pub struct RiseManualListView {
     window_activation_observer: Option<Subscription>,
     focus_handle: FocusHandle,
     wheel_settle_task: Option<Task<()>>,
+    wheel_glide: WheelGlide,
+    wheel_glide_scheduled: bool,
+    selection_autoscroll_scheduled: bool,
+    selection_autoscroll_at: Option<Instant>,
+    drag_selection_start: Option<RiseManualListDragSelectionStart>,
+    drag_selection: Option<RiseManualListDragSelection>,
+    text_source: Option<RiseManualListTextSource>,
+    text_sweep_order: Option<Vec<(String, Pixels, Pixels)>>,
+    text_autoscroll_scheduled: bool,
+    text_autoscroll_at: Option<Instant>,
     integration_scroll_handle: ScrollHandle,
     window_handle: AnyWindowHandle,
     main_tab_scroll_to_top_mount: MainTabScrollToTopListMount,
@@ -1230,6 +1429,7 @@ impl RiseManualListView {
     const JUMP_SLIDE_ANIMATION_KEY: &'static str = "rise.jump.slide";
     const KEYBOARD_STICKY_ANIMATION_KEY: &'static str = "rise.keyboard.sticky";
     const READABLE_ROW_SHARE: f32 = 0.5;
+    const DRAG_SELECTION_SLOP: f32 = 3.0;
 
     pub fn inter_item_spacing(&self) -> Pixels {
         self.inter_item_spacing
@@ -2116,6 +2316,16 @@ impl RiseManualListView {
             window_activation_observer: Some(window_activation_observer),
             focus_handle: cx.focus_handle(),
             wheel_settle_task: None,
+            wheel_glide: WheelGlide::default(),
+            wheel_glide_scheduled: false,
+            selection_autoscroll_scheduled: false,
+            selection_autoscroll_at: None,
+            drag_selection_start: None,
+            drag_selection: None,
+            text_source: None,
+            text_sweep_order: None,
+            text_autoscroll_scheduled: false,
+            text_autoscroll_at: None,
             integration_scroll_handle: ScrollHandle::new(),
             window_handle: window.window_handle(),
             main_tab_scroll_to_top_mount,
@@ -2377,6 +2587,9 @@ impl RiseManualListView {
             self.apply_selection_presentation_to_mounted_views(cx);
         }
         self.refresh_selection_overlay();
+        if mode_changed && is_active {
+            self.continue_drag_selection(window, cx);
+        }
         if mode_changed && !is_active {
             self.update_sticky_headers(window, cx);
         }
@@ -7884,7 +8097,44 @@ impl RiseManualListView {
             }
             TouchPhase::Moved => {}
         }
-        let delta = event.delta.pixel_delta(px(Self::LINE_SCROLL_STEP));
+        if wheel_glides(&event.delta) {
+            self.wheel_glide.add(event.delta.pixel_delta(WHEEL_LINE_HEIGHT));
+            if !self.wheel_glide_scheduled {
+                self.wheel_glide_frame(window, cx);
+            }
+            return;
+        }
+        self.wheel_glide.stop();
+        self.apply_wheel_delta(event.delta.pixel_delta(px(Self::LINE_SCROLL_STEP)), window, cx);
+    }
+
+    fn wheel_glide_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.wheel_glide_scheduled = false;
+        if !self.scroll_view.is_scroll_enabled || self.scroll_view.is_dragging {
+            self.wheel_glide.stop();
+            return;
+        }
+        let step = self.wheel_glide.step(Instant::now());
+        if step.y == Pixels::ZERO {
+            self.wheel_glide.stop();
+            return;
+        }
+        let before = self.scroll_view.content_offset.y;
+        self.apply_wheel_delta(step, window, cx);
+        if self.scroll_view.content_offset.y == before {
+            let remaining = self.wheel_glide.take_all();
+            if remaining.y != Pixels::ZERO {
+                self.apply_wheel_delta(remaining, window, cx);
+            }
+            return;
+        }
+        if !self.wheel_glide.is_idle() {
+            self.wheel_glide_scheduled = true;
+            cx.on_next_frame(window, |this, window, cx| this.wheel_glide_frame(window, cx));
+        }
+    }
+
+    fn apply_wheel_delta(&mut self, delta: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if delta.y != Pixels::ZERO
             && !self.scroll_view.is_dragging
             && self.natural_overshoot(self.scroll_view.content_offset.y, cx) != Pixels::ZERO
@@ -8007,17 +8257,215 @@ impl RiseManualListView {
 
     fn handle_pointer_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         ScreenFocus::claim(&self.focus_handle, window, cx);
+        self.drag_selection = None;
+        self.text_sweep_order = None;
+        RiseManualListTextSweepSlot::set(None, cx);
         let location = event.position - self.bounds.origin;
         if self.sticky_headers_pointer_down(event.position, location, window, cx) {
             cx.stop_propagation();
+            return;
+        }
+        if event.button == MouseButton::Left && event.click_count == 1 && !event.modifiers.shift {
+            self.arm_drag_selection(event.position);
+            if self.drag_selection.is_some() {
+                cx.notify();
+            }
         }
     }
 
-    fn handle_pointer_moved(&mut self, event: &MouseMoveEvent) {
+    fn handle_pointer_moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.pressed_button.is_none() {
+            self.drag_selection = None;
             return;
         }
         self.sticky_headers_pointer_moved(event.position);
+        if event.pressed_button == Some(MouseButton::Left) {
+            self.drag_selection_moved(event.position, window, cx);
+        }
+    }
+
+    fn arm_drag_selection(&mut self, position: Point<Pixels>) {
+        if self.selection_presentation.is_active || self.drag_selection_start.is_none() {
+            return;
+        }
+        let y = (position - self.bounds.origin - self.item_host_origin_in_list()).y;
+        let hit = self.item_by_id.iter().find_map(|(item_id, item)| {
+            let frame = self.resolved_frame(&item.borrow());
+            (frame.top() <= y && y < frame.bottom()).then(|| (item_id.clone(), frame.top(), frame.bottom()))
+        });
+        self.drag_selection = hit.map(|(item_id, top, bottom)| RiseManualListDragSelection {
+            item_id,
+            top,
+            bottom,
+            text: false,
+            press: position,
+            pointer: position,
+            started: false,
+        });
+    }
+
+    fn drag_selection_moved(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag_selection.as_mut() else {
+            return;
+        };
+        drag.pointer = position;
+        if drag.text {
+            self.text_sweep_moved(window, cx);
+            return;
+        }
+        if drag.started {
+            return;
+        }
+        if selectable_text_took_press(drag.press, cx) {
+            drag.text = true;
+            self.text_sweep_moved(window, cx);
+            return;
+        }
+        if (position.y - drag.press.y).abs() < px(Self::DRAG_SELECTION_SLOP) {
+            return;
+        }
+        drag.started = true;
+        let item_id = drag.item_id.clone();
+        let Some(start) = self.drag_selection_start.clone() else {
+            self.drag_selection = None;
+            return;
+        };
+        window.defer(cx, move |window, cx| start(&item_id, window, cx));
+    }
+
+    fn continue_drag_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag_selection.take().filter(|drag| drag.started) else {
+            return;
+        };
+        let Some(anchor_id) = self
+            .selection_presentation
+            .items_by_item_id
+            .get(&drag.item_id)
+            .and_then(|item| item.selection_id.clone())
+        else {
+            return;
+        };
+        let band = self.selection_rows_band();
+        self.selection_overlay_view.begin_engaged_sweep(anchor_id, drag.pointer, band);
+        let y = self.sweep_y_in_host(drag.pointer);
+        self.selection_overlay_view.apply_sweep(y, window, cx);
+        if !self.selection_autoscroll_scheduled {
+            self.selection_autoscroll_scheduled = true;
+            self.selection_autoscroll_at = None;
+            cx.on_next_frame(window, |this, window, cx| this.selection_autoscroll_frame(window, cx));
+        }
+    }
+
+    pub fn set_drag_selection_start(&mut self, start: Option<RiseManualListDragSelectionStart>) {
+        self.drag_selection_start = start;
+    }
+
+    pub fn set_text_source(&mut self, source: Option<RiseManualListTextSource>) {
+        self.text_source = source;
+    }
+
+    fn text_sweep_order(&mut self) -> &[(String, Pixels, Pixels)] {
+        let stale = self.text_sweep_order.as_ref().is_none_or(|order| order.len() != self.item_by_id.len());
+        if stale {
+            let mut order: Vec<(String, Pixels, Pixels)> = self
+                .item_by_id
+                .iter()
+                .map(|(id, item)| {
+                    let frame = self.resolved_frame(&item.borrow());
+                    (id.clone(), frame.top(), frame.bottom())
+                })
+                .collect();
+            order.sort_by(|lhs, rhs| lhs.1.cmp(&rhs.1));
+            self.text_sweep_order = Some(order);
+        }
+        self.text_sweep_order.as_deref().unwrap_or_default()
+    }
+
+    fn text_sweep_moved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((anchor_id, pointer, top, bottom)) =
+            self.drag_selection.as_ref().map(|drag| (drag.item_id.clone(), drag.pointer, drag.top, drag.bottom))
+        else {
+            return;
+        };
+        let y = self.sweep_y_in_host(pointer);
+        let inside_anchor = top <= y && y < bottom;
+        if inside_anchor && RiseManualListTextSweepSlot::current(cx).is_none() {
+            return;
+        }
+        let order = self.text_sweep_order();
+        let Some(anchor) = order.iter().position(|(id, _, _)| *id == anchor_id) else {
+            return;
+        };
+        let focus = if inside_anchor {
+            anchor
+        } else {
+            order.iter().position(|(_, _, row_bottom)| y < *row_bottom).unwrap_or(order.len().saturating_sub(1))
+        };
+        let ordered_ids: Vec<String> = order[anchor.min(focus)..=anchor.max(focus)].iter().map(|(id, _, _)| id.clone()).collect();
+        let focus_id = order[focus].0.clone();
+        let parts = RiseManualListTextSweepSlot::current(cx)
+            .filter(|sweep| sweep.anchor_id == anchor_id)
+            .map(|sweep| sweep.parts.clone())
+            .unwrap_or_default();
+        parts.borrow_mut().retain(|id, _| ordered_ids.contains(id));
+        RiseManualListTextSweepSlot::set(
+            Some(RiseManualListTextSweep {
+                anchor_id,
+                focus_id,
+                ordered_ids,
+                downward: focus > anchor,
+                pointer,
+                parts,
+                source: self.text_source.clone(),
+            }),
+            cx,
+        );
+        window.refresh();
+        if !self.text_autoscroll_scheduled && self.text_sweep_depth(pointer) != 0.0 {
+            self.text_autoscroll_scheduled = true;
+            self.text_autoscroll_at = None;
+            cx.on_next_frame(window, |this, window, cx| this.text_autoscroll_frame(window, cx));
+        }
+    }
+
+    fn text_sweep_depth(&self, pointer: Point<Pixels>) -> f32 {
+        let band = self.selection_rows_band();
+        let edge = RiseManualListSelectionOverlayView::AUTOSCROLL_EDGE;
+        let maximum = RiseManualListSelectionOverlayView::AUTOSCROLL_MAX_DEPTH;
+        let from_top = f32::from(pointer.y - band.start);
+        let from_bottom = f32::from(band.end - pointer.y);
+        if from_top < edge {
+            -((edge - from_top) / edge).min(maximum)
+        } else if from_bottom < edge {
+            ((edge - from_bottom) / edge).min(maximum)
+        } else {
+            0.0
+        }
+    }
+
+    fn text_autoscroll_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.text_autoscroll_scheduled = false;
+        let Some(pointer) = self.drag_selection.as_ref().filter(|drag| drag.text).map(|drag| drag.pointer) else {
+            self.text_autoscroll_at = None;
+            return;
+        };
+        let depth = self.text_sweep_depth(pointer);
+        if depth == 0.0 {
+            self.text_autoscroll_at = None;
+            return;
+        }
+        let now = Instant::now();
+        let elapsed =
+            self.text_autoscroll_at.map_or(0.0, |previous| now.duration_since(previous).as_secs_f32().min(1.0 / 30.0));
+        self.text_autoscroll_at = Some(now);
+        let step = depth * RiseManualListSelectionOverlayView::AUTOSCROLL_MAX_SPEED * elapsed;
+        if step != 0.0 {
+            self.apply_wheel_delta(point(Pixels::ZERO, px(-step)), window, cx);
+            self.text_sweep_moved(window, cx);
+            cx.notify();
+        }
+        self.text_autoscroll_scheduled = true;
+        cx.on_next_frame(window, |this, window, cx| this.text_autoscroll_frame(window, cx));
     }
 
     fn handle_selection_pointer_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -8027,13 +8475,113 @@ impl RiseManualListView {
         ScreenFocus::claim(&self.focus_handle, window, cx);
         tracing::warn!(target: "riseonly::X1870", position = ?event.position, button = ?event.button, "selection pointer down");
         self.selection_overlay_view.touches_began(event.position);
+        if event.button == MouseButton::Left {
+            let location_in_host = event.position - self.bounds.origin - self.item_host_origin_in_list();
+            let band = self.selection_rows_band();
+            self.selection_overlay_view.begin_sweep(location_in_host, event.position, band);
+        }
     }
 
-    fn handle_selection_pointer_moved(&mut self, event: &MouseMoveEvent) {
+    fn handle_selection_pointer_moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.pressed_button.is_none() && self.selection_overlay_view.sweep.take().is_some() {
+            self.selection_autoscroll_at = None;
+            cx.notify();
+        }
         if event.pressed_button.is_none() || !self.selection_presentation.is_active {
             return;
         }
         self.selection_overlay_view.touches_moved(event.position);
+        if !self.selection_overlay_view.move_sweep(event.position) {
+            return;
+        }
+        cx.stop_propagation();
+        let y = self.sweep_y_in_host(event.position);
+        self.selection_overlay_view.apply_sweep(y, window, cx);
+        if !self.selection_autoscroll_scheduled {
+            self.selection_autoscroll_scheduled = true;
+            self.selection_autoscroll_at = None;
+            cx.on_next_frame(window, |this, window, cx| this.selection_autoscroll_frame(window, cx));
+        }
+    }
+
+    fn track_drag_selection(entity: &Entity<Self>, window: &mut Window) {
+        let moved = entity.downgrade();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
+            if phase != DispatchPhase::Capture {
+                return;
+            }
+            let _ = moved.update(cx, |this, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    this.drag_selection_moved(event.position, window, cx);
+                } else {
+                    this.drag_selection = None;
+                }
+            });
+        });
+        let released = entity.downgrade();
+        window.on_mouse_event(move |_: &MouseUpEvent, phase: DispatchPhase, _: &mut Window, cx: &mut App| {
+            if phase == DispatchPhase::Capture {
+                let _ = released.update(cx, |this, _| this.drag_selection = None);
+            }
+        });
+    }
+
+    fn track_selection_sweep_outside(entity: &Entity<Self>, window: &mut Window) {
+        let moved = entity.downgrade();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
+            if phase == DispatchPhase::Bubble {
+                let _ = moved.update(cx, |this, cx| this.handle_selection_pointer_moved(event, window, cx));
+            }
+        });
+        let released = entity.downgrade();
+        window.on_mouse_event(move |_: &MouseUpEvent, phase: DispatchPhase, _: &mut Window, cx: &mut App| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            let _ = released.update(cx, |this, cx| {
+                if this.selection_overlay_view.sweep.take().is_some() {
+                    this.selection_overlay_view.tap_gesture.reset();
+                    this.selection_autoscroll_at = None;
+                    cx.notify();
+                }
+            });
+        });
+    }
+
+    fn sweep_y_in_host(&self, pointer: Point<Pixels>) -> Pixels {
+        let band = self.selection_rows_band();
+        let y = pointer.y.max(band.start).min((band.end - px(1.0)).max(band.start));
+        y - self.bounds.origin.y - self.item_host_origin_in_list().y
+    }
+
+    fn selection_rows_band(&self) -> Range<Pixels> {
+        let top = self.bounds.top() + self.viewport_insets.top;
+        let bottom = (self.bounds.bottom() - self.viewport_insets.bottom).max(top);
+        top..bottom
+    }
+
+    fn selection_autoscroll_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selection_autoscroll_scheduled = false;
+        let band = self.selection_rows_band();
+        let depth = self.selection_overlay_view.sweep_autoscroll_depth(band);
+        let Some(pointer) = self.selection_overlay_view.sweep_pointer().filter(|_| depth != 0.0) else {
+            self.selection_autoscroll_at = None;
+            return;
+        };
+        let now = Instant::now();
+        let elapsed = self
+            .selection_autoscroll_at
+            .map_or(0.0, |previous| now.duration_since(previous).as_secs_f32().min(1.0 / 30.0));
+        self.selection_autoscroll_at = Some(now);
+        let step = depth * RiseManualListSelectionOverlayView::AUTOSCROLL_MAX_SPEED * elapsed;
+        if step != 0.0 {
+            self.apply_wheel_delta(point(Pixels::ZERO, px(-step)), window, cx);
+            let y = self.sweep_y_in_host(pointer);
+            self.selection_overlay_view.apply_sweep(y, window, cx);
+            cx.notify();
+        }
+        self.selection_autoscroll_scheduled = true;
+        cx.on_next_frame(window, |this, window, cx| this.selection_autoscroll_frame(window, cx));
     }
 
     fn handle_selection_pointer_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -8042,11 +8590,19 @@ impl RiseManualListView {
         }
         let location_in_host = event.position - self.bounds.origin - self.item_host_origin_in_list();
         tracing::warn!(target: "riseonly::X1870", position = ?event.position, host_y = ?location_in_host.y, tap_state = ?self.selection_overlay_view.tap_gesture.state(), "selection pointer up");
-        self.selection_overlay_view.touches_ended(event.position, location_in_host, window, cx);
+        self.selection_overlay_view.touches_ended(
+            event.position,
+            location_in_host,
+            event.modifiers.shift,
+            window,
+            cx,
+        );
+        self.selection_autoscroll_at = None;
         cx.notify();
     }
 
     fn handle_pointer_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.drag_selection = None;
         let location = event.position - self.bounds.origin;
         if self.sticky_headers_pointer_up(event.position, location, window, cx) {
             cx.stop_propagation();
@@ -8410,8 +8966,8 @@ impl Render for RiseManualListView {
                 .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     this.handle_selection_pointer_down(event, window, cx);
                 }))
-                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
-                    this.handle_selection_pointer_moved(event);
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.handle_selection_pointer_moved(event, window, cx);
                 }))
                 .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
                     this.handle_selection_pointer_up(event, window, cx);
@@ -8438,6 +8994,12 @@ impl Render for RiseManualListView {
                     let origin = bounds.origin + this.viewport_clip_view.presentation_frame(now).origin
                         + this.presented_item_host_origin(now);
                     this.selection_overlay_view.paint(origin, window);
+                }
+                if this.selection_overlay_view.sweep.is_some() {
+                    Self::track_selection_sweep_outside(&entity, window);
+                }
+                if this.drag_selection.is_some() {
+                    Self::track_drag_selection(&entity, window);
                 }
                 entity.update(cx, |this, _| {
                     let now = current_media_time();
@@ -8468,8 +9030,8 @@ impl Render for RiseManualListView {
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 this.handle_pointer_down(event, window, cx);
             }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
-                this.handle_pointer_moved(event);
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.handle_pointer_moved(event, window, cx);
             }))
             .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
                 this.handle_pointer_up(event, window, cx);

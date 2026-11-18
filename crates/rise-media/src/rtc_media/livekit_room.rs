@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Sample;
@@ -11,7 +11,8 @@ use livekit::options::{
     AudioEncoding as SdkAudioEncoding, TrackPublishOptions, VideoCodec as SdkVideoCodec, VideoEncoding as SdkVideoEncoding,
 };
 use livekit::prelude::{
-    LocalAudioTrack, LocalTrack, LocalVideoTrack, RemoteTrack, Room, RoomEvent, RoomOptions, TrackSid,
+    LocalAudioTrack, LocalTrack, LocalTrackPublication, LocalVideoTrack, RemoteTrack, Room, RoomEvent, RoomOptions,
+    TrackSid,
 };
 use livekit::track::{TrackKind as SdkTrackKind, TrackSource as SdkTrackSource};
 use livekit::webrtc::audio_frame::AudioFrame;
@@ -47,6 +48,12 @@ const TESTER_INPUT_TICK: std::time::Duration = std::time::Duration::from_millis(
 const LEVEL_EVERY_BLOCKS: u32 = 8;
 const MICROPHONE_TEST_QUEUE_MS: u32 = 120;
 const MICROPHONE_TEST_TRACK: &str = "microphone-test";
+const DEVICE_WATCH_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+const PLAYOUT_STALL_TICKS: u32 = 2;
+const INPUT_STALL: std::time::Duration = std::time::Duration::from_secs(2);
+/// tries a silent device gets, pauses of 1 2 4 8 s give a replugged or waking device about 25 s
+const DEVICE_REOPEN_LIMIT: u32 = 4;
+const DEVICE_REOPEN_FIRST_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
 
 static MICROPHONE_TEST_HUSHES_CALL: AtomicBool = AtomicBool::new(false);
 
@@ -60,6 +67,8 @@ pub enum RtcEvent {
     LocalVideoWanted { source: TrackSource, device_id: Option<String>, include_system_audio: bool, shelf: VideoShelf },
     LocalVideoStopped { source: TrackSource },
     ScreenShareDeadPipe,
+    ScreenSharePublishFailed { code: &'static str },
+    AudioDeviceFailed { direction: DeviceDirection, reason: String },
     RemoteVideo(RemoteVideoFrame),
     RemoteVideoEnded { track_key: String },
 }
@@ -143,8 +152,10 @@ struct Call {
     mixer: Arc<Mutex<PlayoutMixer>>,
     playout: Arc<Mutex<RemotePlayout>>,
     output: Mutex<Option<DeviceThread>>,
+    output_health: Arc<OutputHealth>,
     microphone: Mutex<Option<Microphone>>,
     microphone_wanted: AtomicBool,
+    microphone_reopens: AtomicU32,
     gate: Arc<Mutex<InputNoiseGate>>,
     video: Mutex<HashMap<TrackSource, LocalVideo>>,
     screen_audio: Mutex<Option<ScreenAudio>>,
@@ -153,9 +164,19 @@ struct Call {
 
 struct Microphone {
     sid: TrackSid,
+    publication: LocalTrackPublication,
     source: NativeAudioSource,
+    rate: u32,
+    muted: Arc<AtomicBool>,
     _device: DeviceThread,
     pump: JoinHandle<()>,
+}
+
+/// pulse of the call output device, a callback that stops beating or a stream error reopens it
+#[derive(Default)]
+struct OutputHealth {
+    beats: AtomicU64,
+    failed: AtomicBool,
 }
 
 /// way into the share sound track
@@ -375,10 +396,7 @@ pub fn perform(os: &dyn RtcMediaEngine, host: HostOs, intent: &MediaIntent) -> R
             if let Some(call) = call_of(engine, session) {
                 let restart = call.microphone.lock().is_some();
                 if restart {
-                    engine.runtime.spawn(async move {
-                        set_microphone(engine, call.clone(), false).await;
-                        set_microphone(engine, call, true).await;
-                    });
+                    switch_microphone(engine, &call);
                 }
             }
             Ok(())
@@ -566,8 +584,10 @@ async fn run_call(engine: &'static Engine, request: ConnectRequest, generation: 
         )))),
         playout: Arc::new(Mutex::new(RemotePlayout::default())),
         output: Mutex::new(None),
+        output_health: Arc::new(OutputHealth::default()),
         microphone: Mutex::new(None),
         microphone_wanted: AtomicBool::new(false),
+        microphone_reopens: AtomicU32::new(0),
         screen_audio: Mutex::new(None),
         gate: Arc::new(Mutex::new(InputNoiseGate::new(settings.processing.input_sensitivity))),
         video: Mutex::new(HashMap::new()),
@@ -611,6 +631,7 @@ async fn run_call(engine: &'static Engine, request: ConnectRequest, generation: 
         }
     }
     open_output_off_thread(engine, call.clone()).await;
+    engine.runtime.spawn(watch_output(engine, Arc::downgrade(&call), generation));
 
     while let Some(event) = room_events.recv().await {
         if engine.generation.load(Ordering::SeqCst) != generation {
@@ -738,7 +759,11 @@ fn translate(engine: &'static Engine, call: &Arc<Call>, event: RoomEvent) -> Opt
 fn start_remote(engine: &'static Engine, call: &Arc<Call>, key: String, user_id: Option<String>, source: TrackSource, track: RemoteTrack) {
     let task = match track {
         RemoteTrack::Audio(track) => {
-            call.mixer.lock().add_track(&key, user_id);
+            if source == TrackSource::ScreenShareAudio {
+                call.mixer.lock().add_stream_track(&key, user_id);
+            } else {
+                call.mixer.lock().add_track(&key, user_id);
+            }
             let mixer = call.mixer.clone();
             let task_key = key.clone();
             engine.runtime.spawn(async move {
@@ -973,7 +998,13 @@ async fn publish_video(
         Err(error) => {
             let failure = classify_sdk_error(&error.to_string());
             tracing::warn!(code = failure_code(failure), name, "rtc video publish failed");
-            emit(engine, RtcEvent::Session(SessionOutput::Failure(failure_code(failure))));
+            let code = failure_code(failure);
+            let event = if screencast {
+                RtcEvent::ScreenSharePublishFailed { code }
+            } else {
+                RtcEvent::Session(SessionOutput::Failure(code))
+            };
+            emit(engine, event);
             return;
         }
     };
@@ -1072,17 +1103,17 @@ async fn pump_screen_audio(call: Arc<Call>, mut blocks: mpsc::Receiver<Vec<i16>>
     }
 }
 
+/// a mute keeps the device open and the track published, only muted
+/// reopening an input reconfigures the output on many hosts and the call went silent for a second
 async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool) {
-    let previous = call.microphone.lock().take();
-    if let Some(previous) = previous {
-        previous.pump.abort();
-        if let Err(error) = call.room.local_participant().unpublish_track(&previous.sid).await {
-            tracing::debug!(%error, "rtc microphone unpublish");
-        }
-        call.gate.lock().release();
-        emit(engine, RtcEvent::InputLevel(0.0));
+    if !enabled {
+        mute_microphone(engine, &call);
+        return;
     }
-    if !enabled || !call.microphone_wanted.load(Ordering::SeqCst) || !capture_allowed(engine, CaptureKind::Microphone).await {
+    if !call.microphone_wanted.load(Ordering::SeqCst) || unmute_microphone(&call) {
+        return;
+    }
+    if !capture_allowed(engine, CaptureKind::Microphone).await {
         return;
     }
     let settings = engine.settings.lock().clone();
@@ -1097,7 +1128,7 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
         Ok(opened) => opened,
         Err(reason) => {
             tracing::warn!(%reason, "rtc microphone did not open");
-            emit(engine, RtcEvent::Session(SessionOutput::Failure(CODE_AUDIO_FAILED)));
+            emit(engine, RtcEvent::AudioDeviceFailed { direction: DeviceDirection::Input, reason: reason.to_string() });
             return;
         }
     };
@@ -1114,7 +1145,13 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
         Err(error) => {
             let failure = classify_sdk_error(&error.to_string());
             tracing::warn!(code = failure_code(failure), "rtc microphone publish failed");
-            emit(engine, RtcEvent::Session(SessionOutput::Failure(CODE_AUDIO_FAILED)));
+            emit(
+                engine,
+                RtcEvent::AudioDeviceFailed {
+                    direction: DeviceDirection::Input,
+                    reason: format!("the microphone track was not published: {}", failure_code(failure)),
+                },
+            );
             return;
         }
     };
@@ -1125,10 +1162,21 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
         let stale = slot.is_some() || !call.microphone_wanted.load(Ordering::SeqCst);
         if !stale {
             call.gate.lock().initialize(rate);
-            let pump = engine.runtime.spawn(pump_microphone(engine, receiver, source.clone(), rate, channels, call.gate.clone()));
+            let muted = Arc::new(AtomicBool::new(false));
+            let pump = engine.runtime.spawn(pump_microphone(
+                engine,
+                Arc::downgrade(&call),
+                receiver,
+                source.clone(),
+                MicrophoneFormat { rate, channels },
+                muted.clone(),
+            ));
             *slot = Some(Microphone {
                 sid: sid.clone(),
+                publication,
                 source,
+                rate,
+                muted,
                 _device: device,
                 pump,
             });
@@ -1142,19 +1190,143 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
     }
 }
 
-async fn pump_microphone(
+fn mute_microphone(engine: &Engine, call: &Call) {
+    let slot = call.microphone.lock();
+    let Some(microphone) = slot.as_ref() else {
+        return;
+    };
+    if microphone.muted.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    microphone.publication.mute();
+    call.gate.lock().release();
+    emit(engine, RtcEvent::InputLevel(0.0));
+}
+
+/// true when an open mic came back, false when there is none to unmute
+fn unmute_microphone(call: &Call) -> bool {
+    let slot = call.microphone.lock();
+    let Some(microphone) = slot.as_ref() else {
+        return false;
+    };
+    if microphone.muted.swap(false, Ordering::SeqCst) {
+        call.gate.lock().initialize(microphone.rate);
+        microphone.publication.unmute();
+    }
+    true
+}
+
+/// drops the mic device and its track, for a device switch or a dead input
+async fn close_microphone(engine: &'static Engine, call: &Call) {
+    let previous = call.microphone.lock().take();
+    let Some(previous) = previous else {
+        return;
+    };
+    previous.pump.abort();
+    if let Err(error) = call.room.local_participant().unpublish_track(&previous.sid).await {
+        tracing::debug!(%error, "rtc microphone unpublish");
+    }
+    call.gate.lock().release();
+    emit(engine, RtcEvent::InputLevel(0.0));
+}
+
+/// boxed so the mic pump can spawn it, a call that ended during the pause is left alone
+fn reopen_microphone(
     engine: &'static Engine,
-    mut blocks: mpsc::Receiver<Vec<f32>>,
-    source: NativeAudioSource,
+    call: Weak<Call>,
+    generation: u64,
+    pause: std::time::Duration,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        tokio::time::sleep(pause).await;
+        if engine.generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(call) = call.upgrade() else {
+            return;
+        };
+        close_microphone(engine, &call).await;
+        set_microphone(engine, call, true).await;
+    })
+}
+
+/// a mic the person picked opens at once with a fresh count of tries
+fn switch_microphone(engine: &'static Engine, call: &Arc<Call>) {
+    call.microphone_reopens.store(0, Ordering::SeqCst);
+    let generation = engine.generation.load(Ordering::SeqCst);
+    engine.runtime.spawn(reopen_microphone(engine, Arc::downgrade(call), generation, std::time::Duration::ZERO));
+}
+
+/// pause before a reopen of a silent device, doubling from one second
+fn device_reopen_pause(attempt: u32) -> std::time::Duration {
+    DEVICE_REOPEN_FIRST_PAUSE * 2u32.pow(attempt.saturating_sub(1).min(8))
+}
+
+async fn give_up_microphone(engine: &'static Engine, call: Arc<Call>) {
+    tracing::warn!(attempts = DEVICE_REOPEN_LIMIT, "rtc microphone stays silent, the call goes on without it");
+    call.microphone_reopens.store(0, Ordering::SeqCst);
+    close_microphone(engine, &call).await;
+    emit(
+        engine,
+        RtcEvent::AudioDeviceFailed {
+            direction: DeviceDirection::Input,
+            reason: "the microphone delivers no sound".to_owned(),
+        },
+    );
+}
+
+struct MicrophoneFormat {
     rate: u32,
     channels: u16,
-    gate: Arc<Mutex<InputNoiseGate>>,
+}
+
+/// a mic that delivers nothing for INPUT_STALL is reopened, a stream error left it silent for the rest of the call
+async fn pump_microphone(
+    engine: &'static Engine,
+    call: Weak<Call>,
+    mut blocks: mpsc::Receiver<Vec<f32>>,
+    source: NativeAudioSource,
+    format: MicrophoneFormat,
+    muted: Arc<AtomicBool>,
 ) {
+    let MicrophoneFormat { rate, channels } = format;
+    let Some(gate) = call.upgrade().map(|call| call.gate.clone()) else {
+        return;
+    };
     let per_channel = rate / 100;
     let chunk = per_channel as usize * usize::from(channels);
     let mut pending: Vec<f32> = Vec::with_capacity(chunk * 2);
     let mut counted = 0u32;
-    while let Some(block) = blocks.recv().await {
+    let mut delivered = false;
+    loop {
+        let block = match tokio::time::timeout(INPUT_STALL, blocks.recv()).await {
+            Ok(Some(block)) => block,
+            Ok(None) => return,
+            Err(_) => {
+                if let Some(live) = call.upgrade() {
+                    let attempt = live.microphone_reopens.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt > DEVICE_REOPEN_LIMIT {
+                        engine.runtime.spawn(give_up_microphone(engine, live));
+                    } else {
+                        let pause = device_reopen_pause(attempt);
+                        tracing::warn!(attempt, ?pause, "rtc microphone delivered nothing, reopening it");
+                        let generation = engine.generation.load(Ordering::SeqCst);
+                        engine.runtime.spawn(reopen_microphone(engine, call, generation, pause));
+                    }
+                }
+                return;
+            }
+        };
+        if !delivered {
+            delivered = true;
+            if let Some(live) = call.upgrade() {
+                live.microphone_reopens.store(0, Ordering::SeqCst);
+            }
+        }
+        if muted.load(Ordering::Relaxed) {
+            pending.clear();
+            continue;
+        }
         pending.extend_from_slice(&block);
         while pending.len() >= chunk {
             let mut samples: Vec<f32> = pending.drain(..chunk).collect();
@@ -1191,16 +1363,80 @@ async fn open_output_off_thread(engine: &'static Engine, call: Arc<Call>) {
     };
     if let Some(reason) = failed {
         tracing::warn!(%reason, "rtc playout device did not open");
-        emit(engine, RtcEvent::Session(SessionOutput::Failure(CODE_AUDIO_FAILED)));
+        emit(engine, RtcEvent::AudioDeviceFailed { direction: DeviceDirection::Output, reason });
     }
 }
 
 fn start_output(engine: &Engine, call: &Call) -> Result<(), RtcUnavailable> {
     let chosen = engine.settings.lock().output.clone();
     call.output.lock().take();
-    let device = DeviceThread::open_output(call.host_id, chosen, call.mixer.clone(), call.playout.clone(), PlayoutRole::Call)?;
+    call.output_health.failed.store(false, Ordering::SeqCst);
+    let device = DeviceThread::open_output(
+        call.host_id,
+        chosen,
+        call.mixer.clone(),
+        call.playout.clone(),
+        PlayoutRole::Call,
+        Some(call.output_health.clone()),
+    )?;
     *call.output.lock() = Some(device);
     Ok(())
+}
+
+/// reopens the call output when its stream reports an error or its callback stops
+/// a dead stream only logged before and the call stayed silent until a route change
+async fn watch_output(engine: &'static Engine, call: Weak<Call>, generation: u64) {
+    let mut last_beats = 0u64;
+    let mut quiet_ticks = 0u32;
+    let mut reopens = 0u32;
+    loop {
+        tokio::time::sleep(DEVICE_WATCH_TICK).await;
+        if engine.generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(live) = call.upgrade() else {
+            return;
+        };
+        if live.output.lock().is_none() {
+            quiet_ticks = 0;
+            reopens = 0;
+            continue;
+        }
+        let beats = live.output_health.beats.load(Ordering::Relaxed);
+        quiet_ticks = if beats == last_beats { quiet_ticks + 1 } else { 0 };
+        if beats != last_beats && !live.output_health.failed.load(Ordering::SeqCst) {
+            reopens = 0;
+        }
+        last_beats = beats;
+        if !live.output_health.failed.load(Ordering::SeqCst) && quiet_ticks < PLAYOUT_STALL_TICKS {
+            continue;
+        }
+        quiet_ticks = 0;
+        reopens += 1;
+        if reopens > DEVICE_REOPEN_LIMIT {
+            tracing::warn!(attempts = DEVICE_REOPEN_LIMIT, "rtc playout stays silent, the call goes on without it");
+            live.output.lock().take();
+            emit(
+                engine,
+                RtcEvent::AudioDeviceFailed {
+                    direction: DeviceDirection::Output,
+                    reason: "the speaker plays no sound".to_owned(),
+                },
+            );
+            continue;
+        }
+        let pause = device_reopen_pause(reopens);
+        tracing::warn!(attempt = reopens, ?pause, "rtc playout stalled, reopening the output");
+        drop(live);
+        tokio::time::sleep(pause).await;
+        if engine.generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(live) = call.upgrade() else {
+            return;
+        };
+        open_output_off_thread(engine, live).await;
+    }
 }
 
 async fn teardown(engine: &'static Engine, call: Arc<Call>, close: bool) {
@@ -1236,11 +1472,7 @@ pub fn set_preferred_audio_devices(input: Option<String>, output: Option<String>
     };
     if let Some(call) = current_call(engine) {
         if input_changed && call.microphone.lock().is_some() {
-            let call = call.clone();
-            engine.runtime.spawn(async move {
-                set_microphone(engine, call.clone(), false).await;
-                set_microphone(engine, call, true).await;
-            });
+            switch_microphone(engine, &call);
         }
         if output_changed {
             engine.runtime.spawn(open_output_off_thread(engine, call));
@@ -1334,7 +1566,8 @@ fn open_microphone_test(engine: &'static Engine, host_id: cpal::HostId, host: Ho
     let mixer = Arc::new(Mutex::new(PlayoutMixer::new(capacity)));
     mixer.lock().add_track(MICROPHONE_TEST_TRACK, None);
     let playout = Arc::new(Mutex::new(RemotePlayout::default()));
-    let output = DeviceThread::open_output(host_id, settings.output.clone(), mixer.clone(), playout, PlayoutRole::MicrophoneTest)?;
+    let output =
+        DeviceThread::open_output(host_id, settings.output.clone(), mixer.clone(), playout, PlayoutRole::MicrophoneTest, None)?;
     let (blocks, receiver) = mpsc::channel::<Vec<f32>>(INPUT_BLOCKS);
     let (input, rate, channels) = DeviceThread::open_input(host_id, settings.input.clone(), blocks)?;
     let gate = Arc::new(Mutex::new(InputNoiseGate::new(settings.processing.input_sensitivity)));
@@ -1613,6 +1846,7 @@ impl DeviceThread {
         mixer: Arc<Mutex<PlayoutMixer>>,
         playout: Arc<Mutex<RemotePlayout>>,
         role: PlayoutRole,
+        health: Option<Arc<OutputHealth>>,
     ) -> Result<Self, RtcUnavailable> {
         Self::spawn("rtc-playout", DeviceDirection::Output, move || {
             let direction = DeviceDirection::Output;
@@ -1644,9 +1878,9 @@ impl DeviceThread {
                 buffer_size: cpal::BufferSize::Default,
             };
             let stream = match format {
-                cpal::SampleFormat::F32 => build_output::<f32>(&device, &config, mixer, playout, role),
-                cpal::SampleFormat::I16 => build_output::<i16>(&device, &config, mixer, playout, role),
-                cpal::SampleFormat::I32 => build_output::<i32>(&device, &config, mixer, playout, role),
+                cpal::SampleFormat::F32 => build_output::<f32>(&device, &config, mixer, playout, role, health),
+                cpal::SampleFormat::I16 => build_output::<i16>(&device, &config, mixer, playout, role, health),
+                cpal::SampleFormat::I32 => build_output::<i32>(&device, &config, mixer, playout, role, health),
                 _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
             }
             .map_err(|_| RtcUnavailable::Device {
@@ -1692,14 +1926,19 @@ fn build_output<T>(
     mixer: Arc<Mutex<PlayoutMixer>>,
     playout: Arc<Mutex<RemotePlayout>>,
     role: PlayoutRole,
+    health: Option<Arc<OutputHealth>>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
     let mut scratch: Vec<f32> = Vec::new();
+    let beating = health.clone();
     device.build_output_stream(
         config,
         move |out: &mut [T], _: &cpal::OutputCallbackInfo| {
+            if let Some(health) = beating.as_ref() {
+                health.beats.fetch_add(1, Ordering::Relaxed);
+            }
             scratch.resize(out.len(), 0.0);
             match (mixer.try_lock(), playout.try_lock()) {
                 (Some(mut mixer), Some(playout)) => mixer.mix_into(&mut scratch, &playout),
@@ -1713,7 +1952,12 @@ where
                 *slot = T::from_sample(*sample);
             }
         },
-        |error| tracing::warn!(%error, "rtc playout stream failed"),
+        move |error| {
+            tracing::warn!(%error, "rtc playout stream failed");
+            if let Some(health) = health.as_ref() {
+                health.failed.store(true, Ordering::SeqCst);
+            }
+        },
         None,
     )
 }

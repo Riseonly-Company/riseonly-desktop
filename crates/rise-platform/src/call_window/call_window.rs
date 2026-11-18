@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use gpui::{
-    Bounds, DisplayId, Pixels, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowKind, WindowOptions, point, px, size,
+    Bounds, DisplayId, Pixels, Point, ResizeEdge, WindowBackgroundAppearance, WindowBounds,
+    WindowDecorations, WindowKind, WindowOptions, point, px, size,
 };
 use parking_lot::Mutex;
 use thiserror::Error;
@@ -18,6 +18,8 @@ pub const FLOATING_WINDOW_HEIGHT: f32 = 180.0;
 pub const SCREEN_EDGE_INSET: f32 = 16.0;
 pub const INCOMING_WINDOW_WIDTH: f32 = 360.0;
 pub const INCOMING_WINDOW_HEIGHT: f32 = 112.0;
+pub const FLOATING_WINDOW_MIN_WIDTH: f32 = 200.0;
+pub const FLOATING_WINDOW_MIN_HEIGHT: f32 = 112.0;
 
 pub const CALL_TAG_KEY_PREFIX: &str = "call:";
 
@@ -79,6 +81,10 @@ impl FloatingCorner {
 
 pub fn floating_window_size() -> gpui::Size<Pixels> {
     size(px(FLOATING_WINDOW_WIDTH), px(FLOATING_WINDOW_HEIGHT))
+}
+
+pub fn floating_window_min_size() -> gpui::Size<Pixels> {
+    size(px(FLOATING_WINDOW_MIN_WIDTH), px(FLOATING_WINDOW_MIN_HEIGHT))
 }
 
 pub fn incoming_window_size() -> gpui::Size<Pixels> {
@@ -179,7 +185,61 @@ pub fn floating_window_options_for(
     display_id: Option<DisplayId>,
     corner: FloatingCorner,
 ) -> WindowOptions {
-    call_window_options(host, floating_window_bounds(visible, corner), display_id, false)
+    WindowOptions {
+        is_resizable: true,
+        window_min_size: Some(floating_window_min_size()),
+        ..call_window_options(host, floating_window_bounds(visible, corner), display_id, false)
+    }
+}
+
+/// corner of the floating window a drag resizes it from
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FloatingResizeCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl FloatingResizeCorner {
+    pub const ALL: [Self; 4] = [Self::TopLeft, Self::TopRight, Self::BottomLeft, Self::BottomRight];
+
+    pub const fn resize_edge(self) -> ResizeEdge {
+        match self {
+            Self::TopLeft => ResizeEdge::TopLeft,
+            Self::TopRight => ResizeEdge::TopRight,
+            Self::BottomLeft => ResizeEdge::BottomLeft,
+            Self::BottomRight => ResizeEdge::BottomRight,
+        }
+    }
+
+    pub const fn is_left(self) -> bool {
+        matches!(self, Self::TopLeft | Self::BottomLeft)
+    }
+
+    pub const fn is_top(self) -> bool {
+        matches!(self, Self::TopLeft | Self::TopRight)
+    }
+
+    /// frame while the pointer drags this corner, the opposite corner stays where it was at the press
+    pub fn dragged_frame(self, start: Bounds<Pixels>, pointer: Point<Pixels>) -> Bounds<Pixels> {
+        let min = floating_window_min_size();
+        let anchor_x = if self.is_left() { start.right() } else { start.left() };
+        let anchor_y = if self.is_top() { start.bottom() } else { start.top() };
+        let width = (if self.is_left() { anchor_x - pointer.x } else { pointer.x - anchor_x }).max(min.width);
+        let height = (if self.is_top() { anchor_y - pointer.y } else { pointer.y - anchor_y }).max(min.height);
+        let x = if self.is_left() { anchor_x - width } else { anchor_x };
+        let y = if self.is_top() { anchor_y - height } else { anchor_y };
+        Bounds::new(point(x, y), size(width, height))
+    }
+}
+
+/// who carries a corner resize on after the press
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CallWindowResize {
+    System,
+    App,
+    Unavailable,
 }
 
 /// floating_window_options_for on this host in the remembered corner
@@ -378,6 +438,48 @@ pub trait CallWindowLayer {
         window.start_window_move();
         Ok(())
     }
+
+    fn start_resize(
+        &self,
+        window: &gpui::Window,
+        corner: FloatingResizeCorner,
+    ) -> Result<CallWindowResize, CallWindowUnavailable> {
+        window.start_window_resize(corner.resize_edge());
+        Ok(CallWindowResize::System)
+    }
+
+    fn set_frame(
+        &self,
+        window: &gpui::Window,
+        frame: Bounds<Pixels>,
+    ) -> Result<(), CallWindowUnavailable> {
+        let _ = (window, frame);
+        Err(unavailable_by_default(HostOs::current()))
+    }
+}
+
+/// called from a mouse down on a corner grip of the floating window
+/// system means the os runs the drag, app means the window drives it with set_call_window_frame
+pub fn start_call_window_resize(
+    window: &gpui::Window,
+    corner: FloatingResizeCorner,
+) -> CallWindowResize {
+    match super::os::NativeCallWindow.start_resize(window, corner) {
+        Ok(resize) => resize,
+        Err(reason) => {
+            tracing::info!(target: "riseonly", %reason, "the floating window does not resize here");
+            CallWindowResize::Unavailable
+        }
+    }
+}
+
+/// places a call window at frame in screen coordinates, used while the app drives a resize
+pub fn set_call_window_frame(window: &gpui::Window, frame: Bounds<Pixels>) -> PlatformSupport {
+    let outcome = super::os::NativeCallWindow.set_frame(window, frame);
+    if let Err(reason) = &outcome {
+        tracing::debug!(target: "riseonly", %reason, "the call window frame was not set");
+    }
+    support_of(&outcome)
 }
 
 /// called by the window right after it opened (open_window callback or its first render)

@@ -23,12 +23,27 @@ use ::windows::core::{HSTRING, IInspectable, Interface as _, PCWSTR};
 
 use crate::app_info::AppIdentity;
 use crate::gpui_shim::PlatformSupport;
+use crate::host_os::HostOs;
 use crate::notifications::toast_document::*;
 use crate::notifications::*;
 
 const SILENT: bool = cfg!(debug_assertions);
 
 static IDENTITY: OnceLock<AppIdentity> = OnceLock::new();
+
+pub(super) fn open_settings(app: &mut gpui::App) -> PlatformSupport {
+    match notification_settings_url(HostOs::Windows) {
+        Some(url) => {
+            app.open_url(url);
+            PlatformSupport::Performed
+        }
+        None => PlatformSupport::Unsupported,
+    }
+}
+
+pub(super) fn settings_reachable() -> bool {
+    true
+}
 
 pub(super) fn host_precondition_met() -> bool {
     has_package_identity() || IDENTITY.get().is_some()

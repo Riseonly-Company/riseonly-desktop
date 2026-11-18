@@ -17,7 +17,6 @@ use rise_ui::button_ui::ButtonUi;
 use rise_ui::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use rise_ui::list_ui::list_ui::ListUi;
 use rise_ui::main_text::{MainText, TextAlignT};
-use rise_ui::official_badge::OfficialBadge;
 use rise_ui::search_field_ui::SearchFieldUi;
 use rise_ui::sheet_header_bar::SheetHeaderBar;
 use rise_ui::swiftui::animated::Animated;
@@ -32,9 +31,10 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws::SaiWs;
 use crate::core::rise_engine_bridge::rise_transport_status::RiseTransportStatus;
 use crate::core::lib::sai::modules::sai_debouncer::sai_debouncer::SaiDebouncer;
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_ui::BottomSheetUi;
-use crate::core::ui::premium_badge::PremiumBadge;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierSendOptions, NotifierType};
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
@@ -1066,24 +1066,10 @@ impl PeoplePickerParts {
         let excluded = store.excluded_ids().contains(&user.id);
         let is_on = store.is_selected(&user.id);
 
-        let mut names = hstack(4.0).child(
-            MainText::new(display_name(user))
-                .px(15.0)
-                .tac(TextAlignT::Left)
-                .font_weight(FontWeight::MEDIUM)
-                .number_of_lines(1),
-        );
-        if user.is_official {
-            names = names.child(OfficialBadge::new().size(px(14.0)));
-        }
-        if user.is_premium {
-            names = names.child(
-                PremiumBadge::new()
-                    .user_id(Some(SharedString::from(user.id.clone())))
-                    .emoji(user.premium_badge_emoji.clone().map(SharedString::from))
-                    .size(14.0),
-            );
-        }
+        let names = UserNameWithBadges::new(Some(SharedString::from(user.id.clone())), display_name(user))
+            .font(15.0, FontWeight::MEDIUM)
+            .official(user.is_official)
+            .premium(user.is_premium, user.premium_badge_emoji.clone(), user.name_color.clone());
         let mut labels = vstack(2.0).items_start().min_w_0().child(names);
         if !user.tag.is_empty() {
             labels = labels.child(
@@ -1118,8 +1104,12 @@ impl PeoplePickerParts {
                             .name(SharedString::from(user.name.clone()))
                             .user_id(SharedString::from(user.id.clone()))
                             .size(40.0)
-                            .show_story_ring(false)
-                            .open_story_on_press(false),
+                            .open_story_on_press(false)
+                            .gift_worn_frame(
+                                SharedString::from(format!("people-picker-row-frame-{}", user.id)),
+                                Some(user.id.clone()),
+                                40.0,
+                            ),
                     )
                     .child(labels)
                     .child(spacer_min_w(0.0))

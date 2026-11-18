@@ -9,6 +9,7 @@ use crate::core::lib::sai::modules::sai_ws::sai_ws::SaiWs;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::modules::analytics::stores::engagement::engagement_interactions::engagement_interactions::EngagementInteractionsStore;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
+use crate::modules::shorts::components::shorts_autoscroll::ShortsAutoscrollPreferences;
 use crate::modules::shorts::stores::shorts::shorts_actions::shorts_actions::ShortsActionsStore;
 use crate::modules::shorts::stores::shorts::shorts_services::shorts_services::ShortsServicesStore;
 use crate::modules::user::stores::user::user_actions::user_types::UserListRelationship;
@@ -52,6 +53,10 @@ impl ShortsInteractionsStore {
     pub fn tab_reselected(&mut self, cx: &mut Context<Self>) {
         Self::service(cx).update(cx, |service, cx| service.request_feed_top(cx));
         self.refresh(cx);
+    }
+
+    pub fn set_autoscroll(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        ShortsAutoscrollPreferences::shared(cx).update(cx, |preferences, cx| preferences.set_enabled(enabled, cx));
     }
 
     pub fn feed_chrome_hidden_changed(&mut self, hidden: bool, cx: &mut Context<Self>) {

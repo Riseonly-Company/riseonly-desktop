@@ -49,7 +49,7 @@ fn percent_from_capacity_rounds_half_up() {
 
 fn reading(percent: Option<u8>, state: BatteryState, low_power_mode: bool) -> PowerReading {
     PowerReading {
-        battery: BatteryReading { percent, state },
+        battery: BatteryReading { percent, state, present: Some(true) },
         low_power_mode,
     }
 }
@@ -114,13 +114,14 @@ fn snapshot_falls_back_with_reasons() {
     let snapshot =
         PowerSnapshot::from_results(Err(missing_mode.clone()), Err(missing_battery.clone()));
     assert_eq!(snapshot.reading, PowerReading::default());
-    assert_eq!(snapshot.reading.battery, BatteryReading::NO_BATTERY);
+    assert_eq!(snapshot.reading.battery, BatteryReading::UNKNOWN);
     assert!(!snapshot.reading.low_power_mode);
     assert_eq!(snapshot.unavailable, [missing_mode, missing_battery]);
 
     let battery = BatteryReading {
         percent: Some(80),
         state: BatteryState::Charging,
+        present: Some(true),
     };
     let answered = PowerSnapshot::from_results(Ok(true), Ok(battery));
     assert!(answered.unavailable.is_empty());
@@ -199,6 +200,7 @@ fn reading_from_upower_display_device() {
         BatteryReading {
             percent: Some(80),
             state: BatteryState::Unplugged,
+            present: Some(true),
         }
     );
 }
@@ -213,7 +215,7 @@ fn low_power_mode_is_the_power_saver_profile() {
 
 #[test]
 fn battery_from_system_power_status() {
-    let reading = |percent, state| BatteryReading { percent, state };
+    let reading = |percent, state| BatteryReading { percent, state, present: Some(true) };
     assert_eq!(battery_reading_from_system_power_status(0, 128, 255), BatteryReading::NO_BATTERY);
     assert_eq!(
         battery_reading_from_system_power_status(1, 128 | 8, 50),
@@ -222,7 +224,7 @@ fn battery_from_system_power_status() {
     );
     assert_eq!(
         battery_reading_from_system_power_status(1, 255, 50),
-        reading(Some(50), BatteryState::Unknown),
+        BatteryReading { percent: Some(50), state: BatteryState::Unknown, present: None },
         "flag 255 is unknown, not no battery"
     );
     assert_eq!(
@@ -270,4 +272,16 @@ fn missing_daemons_are_absent_not_failures() {
     assert!(is_absent_error_name("org.freedesktop.DBus.Error.UnknownProperty"));
     assert!(!is_absent_error_name("org.freedesktop.DBus.Error.AccessDenied"));
     assert!(!is_absent_error_name("org.freedesktop.DBus.Error.NoReply"));
+}
+
+#[test]
+fn battery_presence_is_said_by_the_system_not_guessed() {
+    assert_eq!(battery_reading_from_upower(false, 0.0, 0).present, Some(false));
+    assert_eq!(battery_reading_from_upower(true, 55.0, 2).present, Some(true));
+    assert_eq!(battery_reading_from_system_power_status(1, 128, 255).present, Some(false));
+    assert_eq!(battery_reading_from_system_power_status(1, 255, 255).present, None, "unreadable flag is no answer");
+    assert_eq!(battery_reading_from_system_power_status(0, 0, 255).present, Some(true));
+    let missing = unavailable_by_default(PowerReadingKind::Battery, HostOs::Windows);
+    let unanswered = PowerSnapshot::from_results(Ok(false), Err(missing));
+    assert_eq!(unanswered.reading.battery.present, None);
 }

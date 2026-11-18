@@ -722,6 +722,7 @@ impl Render for MapModeGlassControl {
             .id("map-mode-switch")
             .relative()
             .size_full()
+            .occlude()
             .cursor_pointer()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))

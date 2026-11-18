@@ -109,6 +109,7 @@ fn window_pixels(native: u64) -> Option<(u32, u32)> {
 }
 
 fn list(kind: CaptureSourceKind) -> Vec<CaptureSource> {
+    let _apartment = MtaApartment::enter().ok();
     let Some(capturer) = capturer(kind) else {
         return Vec::new();
     };
@@ -174,6 +175,13 @@ fn run_pump(
     stop: Arc<AtomicBool>,
     started: mpsc::Sender<Result<(), ScreenCaptureError>>,
 ) {
+    let _apartment = match MtaApartment::enter() {
+        Ok(apartment) => Some(apartment),
+        Err(error) => {
+            RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Failure, || format!("screen share: no COM apartment: {error}"));
+            None
+        }
+    };
     let Some(mut capturer) = capturer(kind) else {
         let _ = started.send(Err(ScreenCaptureError::StartFailed("libwebrtc made no capturer".into())));
         return;
@@ -295,7 +303,7 @@ fn activate_loopback_client() -> Result<IAudioClient, String> {
             },
         },
     };
-    let blob = PROPVARIANT {
+    let blob = ManuallyDrop::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
                 vt: VT_BLOB,
@@ -310,11 +318,11 @@ fn activate_loopback_client() -> Result<IAudioClient, String> {
                 },
             }),
         },
-    };
+    });
     let (done, activated) = mpsc::channel();
     let handler: IActivateAudioInterfaceCompletionHandler = LoopbackActivated { done }.into();
     let operation = unsafe {
-        ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, &IAudioClient::IID, Some(&raw const blob), &handler)
+        ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, &IAudioClient::IID, Some(&raw const *blob), &handler)
     }
     .map_err(text)?;
     activated.recv_timeout(SYSTEM_AUDIO_ACTIVATE_TIMEOUT).map_err(|_| "the loopback activation did not answer".to_owned())?;
@@ -397,7 +405,10 @@ pub(crate) struct NativeScreenCapture;
 impl ScreenCaptureBackend for NativeScreenCapture {
     fn support(&self) -> Result<(), ScreenCaptureError> {
         static SUPPORTED: OnceLock<bool> = OnceLock::new();
-        if *SUPPORTED.get_or_init(|| capturer(CaptureSourceKind::Display).is_some()) {
+        if *SUPPORTED.get_or_init(|| {
+            let _apartment = MtaApartment::enter().ok();
+            capturer(CaptureSourceKind::Display).is_some()
+        }) {
             Ok(())
         } else {
             Err(ScreenCaptureError::Unsupported(

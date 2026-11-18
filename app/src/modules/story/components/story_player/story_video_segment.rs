@@ -26,6 +26,7 @@ use crate::core::media::remote_media_disk_cache::{
 use crate::core::media::rise_media_streaming_asset::RiseMediaStreamingAsset;
 use crate::modules::music::shared::utils::music::music_external_audio_owner::MusicExternalAudioOwner;
 use crate::modules::music::shared::utils::music::music_listening_interruption_gate::MusicListeningInterruptionGate;
+use crate::modules::music::shared::utils::music::music_output_volume::MusicOutputVolume;
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
 use crate::modules::story::components::story_player::story_media_view::{StoryFrameAspect, StoryMediaPrefetcher};
 use crate::modules::story::shared::story_poster_cache::StoryPosterCache;
@@ -462,41 +463,9 @@ impl StoryVideoSegment {
         }
     }
 
+    /// desktop plays a story over the music and over a call, it asks nothing and mutes nothing
     fn activate_audio_session(&mut self, cx: &mut Context<Self>) {
-        let retry: Rc<dyn Fn(&mut App)> = {
-            let weak = cx.weak_entity();
-            Rc::new(move |cx| {
-                weak.update(cx, |this, cx| {
-                    if let Some(player) = this.player.clone() {
-                        player.update(cx, |player, cx| player.set_is_muted(false, cx));
-                    }
-                    this.activate_audio_session(cx);
-                })
-                .ok();
-            })
-        };
-        let on_cancel: Rc<dyn Fn(&mut App)> = {
-            let weak = cx.weak_entity();
-            Rc::new(move |cx| {
-                weak.update(cx, |this, cx| {
-                    if let Some(player) = this.player.clone() {
-                        player.update(cx, |player, cx| player.set_is_muted(true, cx));
-                    }
-                })
-                .ok();
-            })
-        };
-        let token = self.external_audio_owner.clone();
-        let allowed = MusicListeningInterruptionGate::shared(cx)
-            .update(cx, |gate, cx| gate.request_external_playback(Some(token), false, retry, Some(on_cancel), cx));
-        if !allowed {
-            if let Some(player) = self.player.clone() {
-                player.update(cx, |player, cx| player.set_is_muted(true, cx));
-            }
-            return;
-        }
-        let owner = self.external_audio_owner.clone();
-        MusicPlayerState::shared(cx).update(cx, |state, cx| state.suspend_for_external_audio(owner, false, cx));
+        MusicOutputVolume::duck(&self.external_audio_owner.raw_value, true, cx);
     }
 
     fn release_external_audio(&mut self, cx: &mut App) {
@@ -506,6 +475,7 @@ impl StoryVideoSegment {
         if let Some(streaming) = self.streaming_asset.take() {
             streaming.teardown();
         }
+        MusicOutputVolume::duck(&self.external_audio_owner.raw_value, false, cx);
         let token = self.external_audio_owner.clone();
         MusicListeningInterruptionGate::shared(cx).update(cx, |gate, cx| gate.invalidate_prompt(token, cx));
         let owner = self.external_audio_owner.clone();
@@ -538,6 +508,7 @@ impl StoryVideoSegment {
         if let Some(streaming) = self.streaming_asset.take() {
             streaming.teardown();
         }
+        MusicOutputVolume::duck(&self.external_audio_owner.raw_value, false, cx);
         let token = self.external_audio_owner.clone();
         MusicListeningInterruptionGate::shared(cx).update(cx, |gate, cx| gate.invalidate_prompt(token, cx));
         let owner = self.external_audio_owner.clone();

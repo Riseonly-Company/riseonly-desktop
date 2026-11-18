@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -311,6 +312,7 @@ impl HoldContextMenuActionList {
         ink: Hsla,
         state: &Entity<HoldContextMenuActionListState>,
         actions: &Rc<Vec<HoldContextMenuAction>>,
+        live_highlight: &Rc<RefCell<Option<String>>>,
         reduce_motion: bool,
     ) -> impl IntoElement {
         let text_color = if action.destructive { destructive_ink() } else { ink };
@@ -332,12 +334,14 @@ impl HoldContextMenuActionList {
                 Some(radius) => div().rounded(px(radius)),
                 None => div().rounded_full(),
             }
+            .flex_none()
             .size(px(LEADING_IMAGE_SIDE))
             .overflow_hidden()
             .child(picture);
             label = label.child(
                 div()
                     .flex()
+                    .flex_none()
                     .justify_center()
                     .w(px(HoldContextMenuMetrics::MENU_ROW_ICON_SLOT_WIDTH))
                     .opacity(content_opacity)
@@ -347,6 +351,7 @@ impl HoldContextMenuActionList {
             label = label.child(
                 div()
                     .flex()
+                    .flex_none()
                     .justify_center()
                     .w(px(HoldContextMenuMetrics::MENU_ROW_ICON_SLOT_WIDTH))
                     .opacity(content_opacity)
@@ -454,11 +459,13 @@ impl HoldContextMenuActionList {
         });
         if let Some(on_highlight) = self.on_highlight.clone() {
             let hovered_id = action.id.clone();
-            let highlighted = self.highlighted_action_id.clone();
+            let live_highlight = live_highlight.clone();
             row = row.on_hover(move |hovered, window, cx| {
                 if *hovered {
+                    *live_highlight.borrow_mut() = Some(hovered_id.clone());
                     on_highlight(Some(hovered_id.clone()), window, cx);
-                } else if highlighted.as_deref() == Some(hovered_id.as_str()) {
+                } else if live_highlight.borrow().as_deref() == Some(hovered_id.as_str()) {
+                    *live_highlight.borrow_mut() = None;
                     on_highlight(None, window, cx);
                 }
             });
@@ -536,6 +543,7 @@ impl HoldContextMenuActionList {
             );
         }
 
+        let live_highlight = Rc::new(RefCell::new(self.highlighted_action_id.clone()));
         for (idx, action) in self.actions.iter().enumerate() {
             if idx > 0 && action.section_break {
                 list = list.child(
@@ -549,7 +557,7 @@ impl HoldContextMenuActionList {
                         ),
                 );
             }
-            list = list.child(self.action_row(action, ink, &state, &actions, reduce_motion));
+            list = list.child(self.action_row(action, ink, &state, &actions, &live_highlight, reduce_motion));
         }
 
         let highlighted = self.highlighted_action_id.clone();

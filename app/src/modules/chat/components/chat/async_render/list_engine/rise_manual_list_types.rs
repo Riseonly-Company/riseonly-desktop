@@ -1,7 +1,8 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use gpui::{AnyView, App, Context, Hsla, Pixels, Point, Size, Window};
+use gpui::{AnyView, App, Context, Global, Hsla, Pixels, Point, Size, Window};
 use rise_core::foundation::foundation_date::TimeInterval;
 use rise_theme::Appearance;
 use rise_theme::ui_color_system::UIColor;
@@ -488,6 +489,83 @@ pub struct RiseManualListSelectionItem {
 
 /// on_toggle gets the selection id of the tapped row
 pub type RiseManualListSelectionPresentationOnToggle = Rc<dyn Fn(String, &mut Window, &mut App)>;
+
+pub type RiseManualListDragSelectionStart = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
+pub type RiseManualListTextSource = Rc<dyn Fn(&str) -> Option<(String, String)>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RiseManualListTextSweepRole {
+    Anchor,
+    Focus,
+    Full,
+}
+
+#[derive(Clone)]
+pub struct RiseManualListTextSweep {
+    pub anchor_id: String,
+    pub focus_id: String,
+    pub ordered_ids: Vec<String>,
+    pub downward: bool,
+    pub pointer: Point<Pixels>,
+    pub parts: Rc<RefCell<HashMap<String, String>>>,
+    pub source: Option<RiseManualListTextSource>,
+}
+
+impl RiseManualListTextSweep {
+    pub fn role(&self, item_id: &str) -> Option<RiseManualListTextSweepRole> {
+        if self.ordered_ids.len() < 2 || !self.ordered_ids.iter().any(|id| id == item_id) {
+            return None;
+        }
+        Some(if item_id == self.anchor_id {
+            RiseManualListTextSweepRole::Anchor
+        } else if item_id == self.focus_id {
+            RiseManualListTextSweepRole::Focus
+        } else {
+            RiseManualListTextSweepRole::Full
+        })
+    }
+
+    pub fn copy_text(&self) -> Option<String> {
+        if self.ordered_ids.len() < 2 {
+            return None;
+        }
+        let parts = self.parts.borrow();
+        let pieces: Vec<(String, String)> = self
+            .ordered_ids
+            .iter()
+            .filter_map(|id| {
+                let (sender, full) = self.source.as_ref().and_then(|source| source(id))?;
+                let text = parts.get(id).cloned().unwrap_or(full);
+                (!text.trim().is_empty()).then_some((sender, text))
+            })
+            .collect();
+        let several_senders = pieces.iter().any(|(sender, _)| Some(sender) != pieces.first().map(|(first, _)| first));
+        let lines: Vec<String> = pieces
+            .into_iter()
+            .map(|(sender, text)| if several_senders && !sender.is_empty() { format!("{sender}: {text}") } else { text })
+            .collect();
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+}
+
+#[derive(Default)]
+pub struct RiseManualListTextSweepSlot(pub Option<RiseManualListTextSweep>);
+
+impl Global for RiseManualListTextSweepSlot {}
+
+impl RiseManualListTextSweepSlot {
+    pub fn current(cx: &App) -> Option<&RiseManualListTextSweep> {
+        cx.try_global::<Self>().and_then(|slot| slot.0.as_ref())
+    }
+
+    pub fn set(sweep: Option<RiseManualListTextSweep>, cx: &mut App) {
+        if sweep.is_none() && Self::current(cx).is_none() {
+            return;
+        }
+        cx.set_global(Self(sweep));
+    }
+}
 
 #[derive(Clone)]
 pub struct RiseManualListSelectionPresentation {

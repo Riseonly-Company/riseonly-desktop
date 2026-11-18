@@ -186,6 +186,20 @@ impl ChatServicesStore {
             .filter(|chat| chat.id == chat_id)
     }
 
+    pub fn chat_topics_enabled(&self, chat_id: &str, cx: &App) -> bool {
+        if let Some(draft) = self.draft_direct_chat_by_id.get(chat_id) {
+            return draft.topics_enabled;
+        }
+        if let Some(presentation) = active_presentation(cx) {
+            return presentation.chat(chat_id).is_some_and(|chat| chat.topics_enabled);
+        }
+        self.rebuild_chat_info_index_if_needed(cx);
+        if let Some(chat) = self.chat_info_index.borrow().get(chat_id) {
+            return chat.topics_enabled;
+        }
+        self.community_preview_by_chat_id.get(chat_id).is_some_and(|preview| preview.topics_enabled)
+    }
+
     pub fn is_archive_mutation_pending(&self, chat_id: &str) -> bool {
         self.archive_mutations_by_chat.contains_key(chat_id)
     }

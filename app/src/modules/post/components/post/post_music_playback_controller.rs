@@ -22,6 +22,7 @@ use crate::core::media::rise_media_foreground_gate::RiseMediaForegroundGate;
 use crate::modules::auth::services::account_state_reset_coordinator::{AccountResettable, AccountStateResetRegistry};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::music::shared::utils::music::music_external_audio_owner::MusicExternalAudioOwner;
+use crate::modules::music::shared::utils::music::music_output_volume::MusicOutputVolume;
 use crate::modules::music::shared::utils::music::music_playback_disk_cache::MusicPlaybackDiskCache;
 use crate::modules::music::shared::utils::music::music_player_state::MusicPlayerState;
 use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
@@ -119,13 +120,10 @@ impl PostMusicPlaybackController {
         end_ms: i64,
         loop_: bool,
         resumes_last_position: bool,
-        consented_over_listening_session: bool,
+        _consented_over_listening_session: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         if end_ms <= start_ms {
-            return false;
-        }
-        if !consented_over_listening_session && MusicPlayerState::shared(cx).read(cx).listening_session.is_some() {
             return false;
         }
         let cache_key = Self::resolved_cache_key(track_id, url);
@@ -171,9 +169,6 @@ impl PostMusicPlaybackController {
         cx: &mut Context<Self>,
     ) {
         if end_ms <= start_ms {
-            return;
-        }
-        if MusicPlayerState::shared(cx).read(cx).listening_session.is_some() {
             return;
         }
         let cache_key = Self::resolved_cache_key(track_id, url);
@@ -250,6 +245,7 @@ impl PostMusicPlaybackController {
         self.capture_position(cx);
         self.teardown_item(cx);
         self.set_player_volume(1.0, cx);
+        MusicOutputVolume::duck(&MusicExternalAudioOwner::POST_AMBIENT.raw_value, false, cx);
         MusicPlayerState::shared(cx).update(cx, |state, cx| {
             state.resume_after_external_audio(MusicExternalAudioOwner::POST_AMBIENT, cx);
         });
@@ -428,10 +424,9 @@ impl PostMusicPlaybackController {
         }
     }
 
+    /// a post or reel sound plays over the music on desktop, the music steps back and keeps playing
     fn activate_ambient_audio_session(&self, cx: &mut Context<Self>) {
-        MusicPlayerState::shared(cx).update(cx, |state, cx| {
-            state.suspend_for_external_audio(MusicExternalAudioOwner::POST_AMBIENT, false, cx);
-        });
+        MusicOutputVolume::duck(&MusicExternalAudioOwner::POST_AMBIENT.raw_value, true, cx);
     }
 
     /// players own copy wins if the user already keeps the track

@@ -596,6 +596,14 @@ impl MapInteractionsStore {
         Self::actions(cx, |actions, cx| actions.open_action(true, cx));
     }
 
+    pub fn ensure_own_tracks(&mut self, cx: &mut Context<Self>) {
+        if self.routes_owner.is_some() || self.focused_profile_grid_id.is_some() {
+            self.show_own_routes(cx);
+            return;
+        }
+        Self::actions(cx, |actions, cx| actions.open_tracks_action(None, false, cx));
+    }
+
     pub fn set_panel_mode(&mut self, mode: MapPanelMode, cx: &mut Context<Self>) {
         if self.panel_mode == mode && self.selected_friend_id.is_none() && self.selected_grid_id.is_none() {
             return;

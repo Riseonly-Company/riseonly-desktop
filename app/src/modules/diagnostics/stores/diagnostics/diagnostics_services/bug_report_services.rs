@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use gpui::{App, Context, Entity};
-use rise_canon::{RiseBugReportSurface, RiseFeedbackKind, RiseGuideSignal};
+use rise_canon::{RiseBugReportPlatform, RiseBugReportSurface, RiseFeedbackKind, RiseGuideSignal};
 use rise_catalog::DIAGNOSTICS_FEEDBACK_KINDS_DEFAULT;
 use rise_core::foundation::foundation_compare::localized_case_insensitive_contains;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
@@ -48,6 +48,8 @@ pub struct BugReportServicesStore {
     is_confirming_discard: bool,
     drafts: HashMap<BugReportDraftKind, BugReportDraft>,
     editing_draft: Option<BugReportDraft>,
+    viewed_record: Option<BugReportRecord>,
+    opened_status_comment: Option<String>,
     message_was_valid_kinds: HashSet<BugReportDraftKind>,
     persistence_loaded: bool,
     drafts_before_lesson: Option<DraftsBeforeLesson>,
@@ -76,6 +78,8 @@ impl BugReportServicesStore {
             is_confirming_discard: false,
             drafts: Self::fresh_drafts(),
             editing_draft: None,
+            viewed_record: None,
+            opened_status_comment: None,
             message_was_valid_kinds: HashSet::new(),
             persistence_loaded: false,
             drafts_before_lesson: None,
@@ -261,7 +265,22 @@ impl BugReportServicesStore {
         self.is_message_valid()
     }
 
+    pub fn viewed_record(&self) -> Option<&BugReportRecord> {
+        self.viewed_record.as_ref()
+    }
+
+    pub fn opened_status_comment(&self) -> Option<&str> {
+        self.opened_status_comment.as_deref()
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.viewed_record.is_some()
+    }
+
     pub fn can_edit_draft(&self) -> bool {
+        if self.is_read_only() {
+            return false;
+        }
         match self.state {
             BugReportSubmissionState::Editing | BugReportSubmissionState::Failed { .. } => true,
             BugReportSubmissionState::Sending { .. } | BugReportSubmissionState::Sent => false,
@@ -269,7 +288,7 @@ impl BugReportServicesStore {
     }
 
     pub fn can_send(&self) -> bool {
-        if self.component_error().is_some() {
+        if self.is_read_only() || self.component_error().is_some() {
             return false;
         }
         match self.state {
@@ -315,6 +334,7 @@ impl BugReportServicesStore {
             || !draft.screenshots.is_empty()
             || draft.video.is_some()
             || draft.pages != draft.seeded_pages
+            || draft.fix_platforms.len() != RiseBugReportPlatform::ALL.len()
     }
 
     pub fn visible_pages(&self) -> Vec<RiseBugReportSurface> {
@@ -484,6 +504,8 @@ impl BugReportServicesStore {
 
     pub fn finish_editing(&mut self, cx: &mut Context<Self>) {
         self.editing_draft = None;
+        self.viewed_record = None;
+        self.opened_status_comment = None;
         self.loaded_draft = None;
         self.state = BugReportSubmissionState::Editing;
         self.is_confirming_discard = false;
@@ -498,6 +520,7 @@ impl BugReportServicesStore {
             pages: record.pages.clone(),
             seeded_pages: record.pages.clone(),
             component: record.component.clone().unwrap_or_default(),
+            fix_platforms: record.fix_platforms.clone(),
             ..BugReportDraft::new(Uuid::new_v4().uuid_string(), record.kind)
         };
         next.screenshots = record
@@ -541,6 +564,7 @@ impl BugReportServicesStore {
         }
         self.editing_draft = Some(next.clone());
         self.loaded_draft = Some(next);
+        self.opened_status_comment = record.status_comment.clone();
         self.active_kind = record.kind;
         self.page = record.kind.page();
         self.state = BugReportSubmissionState::Editing;
@@ -549,7 +573,14 @@ impl BugReportServicesStore {
         cx.notify();
     }
 
+    pub fn start_viewing(&mut self, record: &BugReportRecord, cx: &mut Context<Self>) {
+        self.start_editing(record, cx);
+        self.viewed_record = Some(record.clone());
+    }
+
     pub fn start_follow_up(&mut self, record: &BugReportRecord, cx: &mut Context<Self>) {
+        self.viewed_record = None;
+        self.opened_status_comment = None;
         self.editing_draft = Some(BugReportDraft {
             parent_report_id: Some(record.id.clone()),
             pages: record.pages.clone(),
@@ -580,6 +611,7 @@ impl BugReportServicesStore {
                 seeded_pages: persisted.seeded_pages,
                 component: persisted.component,
                 message: persisted.message,
+                fix_platforms: persisted.fix_platforms,
                 ..BugReportDraft::new(persisted.client_report_id, kind)
             };
             if Self::message_rule().is_satisfied(trimming_whitespaces_and_newlines(&next.message)) {
@@ -610,6 +642,7 @@ impl BugReportServicesStore {
                         component: draft.component.clone(),
                         pages: draft.pages.clone(),
                         seeded_pages: draft.seeded_pages.clone(),
+                        fix_platforms: draft.fix_platforms.clone(),
                     },
                 );
             }
@@ -704,6 +737,8 @@ impl BugReportServicesStore {
     pub fn reset_account_state(&mut self, cx: &mut Context<Self>) {
         self.route = BugReportRoute::Idle;
         self.editing_draft = None;
+        self.viewed_record = None;
+        self.opened_status_comment = None;
         self.loaded_draft = None;
         self.state = BugReportSubmissionState::Editing;
         self.page = BugReportSheetPage::Root;

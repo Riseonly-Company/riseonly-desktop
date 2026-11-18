@@ -7,6 +7,7 @@ use rise_core::foundation::foundation_text::{
 };
 use thiserror::Error;
 
+use crate::crash_diagnostics::NativeModalGuard;
 use crate::gpui_shim::PlatformSupport;
 use crate::host_os::HostOs;
 
@@ -561,6 +562,7 @@ fn tester_paths_for_request(paths: Vec<PathBuf>, multiple: bool) -> Vec<PathBuf>
 /// the dialog is raised before the future is built so the future borrows nothing
 pub fn open(app: &gpui::App, request: &OpenRequest) -> impl Future<Output = Selection> + use<> {
     let tester = take_tester_open_answer();
+    let modal = tester.is_none().then(NativeModalGuard::enter);
     let receiver = tester
         .is_none()
         .then(|| app.prompt_for_paths(request.prompt_options(HostOs::current())));
@@ -579,7 +581,9 @@ pub fn open(app: &gpui::App, request: &OpenRequest) -> impl Future<Output = Sele
         let Some(receiver) = receiver else {
             return Selection::Failed(FileDialogError::Abandoned);
         };
-        match receiver.await {
+        let answer = receiver.await;
+        drop(modal);
+        match answer {
             Ok(Ok(paths)) => Selection::from_paths(paths, &filter),
             Ok(Err(error)) => Selection::Failed(FileDialogError::System(error.to_string())),
             Err(_) => Selection::Failed(FileDialogError::Abandoned),
@@ -602,6 +606,7 @@ pub fn save(app: &gpui::App, request: &SaveRequest) -> impl Future<Output = Save
     let tester_path = TESTER_SAVE_DIRECTORY
         .get()
         .map(|directory| directory.join(suggested.filter(|name| !name.is_empty()).unwrap_or(TESTER_UNNAMED_FILE)));
+    let modal = tester_path.is_none().then(NativeModalGuard::enter);
     let receiver = tester_path.is_none().then(|| app.prompt_for_new_path(&request.directory, suggested));
     let filter = request.filter.clone();
 
@@ -609,7 +614,9 @@ pub fn save(app: &gpui::App, request: &SaveRequest) -> impl Future<Output = Save
         let Some(receiver) = receiver else {
             return SaveOutcome::from_path(tester_path, &filter);
         };
-        match receiver.await {
+        let answer = receiver.await;
+        drop(modal);
+        match answer {
             Ok(Ok(path)) => SaveOutcome::from_path(path, &filter),
             Ok(Err(error)) => SaveOutcome::Failed(FileDialogError::System(error.to_string())),
             Err(_) => SaveOutcome::Failed(FileDialogError::Abandoned),

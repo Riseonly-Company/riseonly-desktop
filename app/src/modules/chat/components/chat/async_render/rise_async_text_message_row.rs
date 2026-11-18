@@ -122,7 +122,10 @@ impl RiseAsyncTextMessageEligibility {
     /// asks the parsed entities and not the raw json
     /// the string heuristic said true for any non empty array, even kinds the parser drops
     pub fn has_renderable_entities(entities: &MessageNormalizedEntities) -> bool {
-        !entities.custom_emojis.is_empty() || !entities.role_mentions.is_empty() || !entities.topic_mentions.is_empty()
+        !entities.custom_emojis.is_empty()
+            || !entities.role_mentions.is_empty()
+            || !entities.topic_mentions.is_empty()
+            || !entities.text_links.is_empty()
     }
 
     pub fn supports_plain_text(text: &str) -> bool {

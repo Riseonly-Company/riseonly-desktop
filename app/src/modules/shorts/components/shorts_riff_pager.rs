@@ -100,8 +100,8 @@ pub struct ShortsRiffPager {
     corner_radius: f32,
     paging_enabled: bool,
     on_video_tap: PagerAction,
-    on_audio_declined: PagerAction,
     on_drawn_aspect: DrawnAspectAction,
+    holds_video_at_end: bool,
 }
 
 impl ShortsRiffPager {
@@ -135,13 +135,13 @@ impl ShortsRiffPager {
             corner_radius,
             paging_enabled,
             on_video_tap: Rc::new(on_video_tap),
-            on_audio_declined: Rc::new(|_, _| {}),
             on_drawn_aspect: Rc::new(|_, _, _, _| {}),
+            holds_video_at_end: false,
         }
     }
 
-    pub fn on_audio_declined(mut self, on_audio_declined: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        self.on_audio_declined = Rc::new(on_audio_declined);
+    pub fn holds_video_at_end(mut self, holds_video_at_end: bool) -> Self {
+        self.holds_video_at_end = holds_video_at_end;
         self
     }
 
@@ -176,8 +176,8 @@ struct ShortsRiffPagerPages {
     is_own: bool,
     policy: CleverImageCachePolicy,
     on_video_tap: PagerAction,
-    on_audio_declined: PagerAction,
     on_drawn_aspect: DrawnAspectAction,
+    holds_video_at_end: bool,
     memory: Entity<ShortsRiffPagerMemory>,
 }
 
@@ -195,7 +195,7 @@ impl ShortsRiffPagerPages {
         let aspect = server_aspect
             .map(|aspect| aspect as f32)
             .or_else(|| self.memory.read(cx).measured_image_aspects.get(&image_index).copied());
-        let gravity = aspect.map(ShortsFeedPlayer::gravity);
+        let gravity = aspect.map(|aspect| ShortsFeedPlayer::gravity(aspect, self.size));
         let memory = self.memory.clone();
         let on_drawn_aspect = self.on_drawn_aspect.clone();
         let drawn_url = url.to_owned();
@@ -240,7 +240,6 @@ impl ShortsRiffPagerPages {
         let aspect_memory = self.memory.clone();
         let on_drawn_aspect = self.on_drawn_aspect.clone();
         let drawn_url = url.to_owned();
-        let on_audio_declined = self.on_audio_declined.clone();
         let on_video_tap = self.on_video_tap.clone();
         let post = &self.post;
         div()
@@ -261,6 +260,8 @@ impl ShortsRiffPagerPages {
                 .paused(self.paused)
                 .playback(Some(self.playback.clone()))
                 .initial_aspect(self.memory.read(cx).video_aspect)
+                .holds_at_end(self.holds_video_at_end && is_current)
+                .page_size(self.size)
                 .corner_radius(self.corner_radius)
                 .on_aspect(move |aspect, window, cx| {
                     aspect_memory.update(cx, |memory, cx| {
@@ -272,8 +273,7 @@ impl ShortsRiffPagerPages {
                 .music_overlay(post.shorts_music_overlay())
                 .persists_post_media_to_disk(self.is_own)
                 .post_image_cache_policy(self.policy)
-                .releases_player_on_disappear(true)
-                .on_audio_declined(move |window, cx| on_audio_declined(window, cx)),
+                .releases_player_on_disappear(true),
             )
             .child(
                 div()
@@ -321,8 +321,8 @@ impl RenderOnce for ShortsRiffPager {
             is_own,
             policy,
             on_video_tap: self.on_video_tap,
-            on_audio_declined: self.on_audio_declined,
             on_drawn_aspect: self.on_drawn_aspect,
+            holds_video_at_end: self.holds_video_at_end,
             memory,
         });
 
@@ -403,8 +403,8 @@ impl RenderOnce for ShortsRiffPagingScroller {
         let right_to_left = LayoutDirection::current() == LayoutDirection::RightToLeft;
         let width = f32::from(self.size.width).max(1.0);
         let page = self.page;
-        controller.update(cx, |controller, _| {
-            controller.update(self.count, resolved, self.paging_enabled, right_to_left, width, page);
+        controller.update(cx, |controller, cx| {
+            controller.update(self.count, resolved, self.paging_enabled, right_to_left, width, page, cx);
         });
 
         let (offset, low, high) = {
@@ -570,6 +570,7 @@ impl ShortsRiffPagingController {
         right_to_left: bool,
         page_width: f32,
         binding: Binding<Option<i64>>,
+        cx: &App,
     ) {
         self.page = Some(binding);
         self.paging_enabled = paging_enabled;
@@ -578,7 +579,11 @@ impl ShortsRiffPagingController {
         self.count = count;
         self.right_to_left = right_to_left;
         let is_moving = self.claims_swipe == Some(true) || self.wheel.is_tracking();
-        if !is_moving && page != self.shown_page {
+        if !is_moving && !layout_changed && page == self.shown_page + 1 {
+            self.shown_page = page;
+            let target = self.slot(page) as f32;
+            self.offset.set_in(target, ease_out(Self::SETTLE_DURATION), RiseClock::monotonic(), cx);
+        } else if !is_moving && page != self.shown_page {
             self.shown_page = page;
             self.layout_pages();
         } else if layout_changed {

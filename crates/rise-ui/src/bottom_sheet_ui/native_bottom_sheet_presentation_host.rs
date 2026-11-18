@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use crate::bottom_sheet_ui::bottom_sheet_backdrop::BottomSheetBackdrop;
+use crate::context_menu_ui::DeferredLayerFloorKey;
 use crate::guide_anchor_ui::guide_anchor_registry::{GuideAnchorCoverKind, GuideAnchorCoverModifiers};
 use crate::bottom_sheet_ui::modal_sheet_surface::{
     ModalSheetFrame, ModalSheetMetrics, ModalSheetStack, modal_sheet_centering, modal_sheet_chrome, modal_sheet_cycle_focus,
@@ -387,7 +388,7 @@ impl RenderOnce for NativeBottomSheetPresentationHost {
         let anchor = div().size_0();
         let on_appear = wiring.clone();
         let anchor = if state.read(cx).native_presented {
-            TopPresenter::note_presented((self.id.clone(), "top-presenter"), window, cx);
+            TopPresenter::note_presented_sheet((self.id.clone(), "top-presenter"), &self.is_presented, window, cx);
             anchor.child(env_scope::<InsidePresentedLayerKey>(true).child(self.render_sheet(&wiring, window, cx)))
         } else {
             anchor
@@ -498,7 +499,10 @@ impl NativeBottomSheetPresentationHost {
                             on_backdrop.finish_dismissal(window, cx);
                         }
                     }))
-                    .child(modal_sheet_centering().child(surface))
+                    .child(
+                        env_scope::<DeferredLayerFloorKey>(self.layer_priority)
+                            .child(modal_sheet_centering().child(surface)),
+                    )
                     .guide_anchor_cover((self.id.clone(), "guide-cover"), GuideAnchorCoverKind::Layer),
             ),
         )

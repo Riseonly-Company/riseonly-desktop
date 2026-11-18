@@ -305,9 +305,53 @@ pub struct GiftCosmeticPlayback {
     once_deadline_task: Option<Task<()>>,
     awaits_first_frame: bool,
     did_start_once: bool,
+    retains_poster: bool,
+}
+
+/// playbacks of one sheet kept by element id, a cell that leaves the screen keeps its poster
+#[derive(Default)]
+pub struct GiftCosmeticPlaybackPool {
+    playbacks: HashMap<ElementId, Entity<GiftCosmeticPlayback>>,
+}
+
+impl GiftCosmeticPlaybackPool {
+    pub fn clear(&mut self) {
+        self.playbacks.clear();
+    }
+}
+
+/// pool the gift surfaces below take their playbacks from, none keeps them in element state
+pub struct GiftCosmeticPlaybackPoolKey;
+
+impl EnvKey for GiftCosmeticPlaybackPoolKey {
+    type Value = Option<Entity<GiftCosmeticPlaybackPool>>;
+
+    fn default_value() -> Self::Value {
+        None
+    }
 }
 
 impl GiftCosmeticPlayback {
+    /// playback of one surface id, from the enclosing pool when there is one
+    pub fn keyed(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        let id = id.into();
+        let Some(pool) = env::<GiftCosmeticPlaybackPoolKey>(cx) else {
+            return window.use_keyed_state(id, cx, |_, cx| GiftCosmeticPlayback::new(cx));
+        };
+        if let Some(playback) = pool.read(cx).playbacks.get(&id) {
+            return playback.clone();
+        }
+        let playback = cx.new(|cx| {
+            let mut playback = GiftCosmeticPlayback::new(cx);
+            playback.retains_poster = true;
+            playback
+        });
+        pool.update(cx, |pool, _| {
+            pool.playbacks.insert(id, playback.clone());
+        });
+        playback
+    }
+
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             participant: AnimatedMediaParticipantId::next(),
@@ -332,6 +376,7 @@ impl GiftCosmeticPlayback {
             once_deadline_task: None,
             awaits_first_frame: false,
             did_start_once: false,
+            retains_poster: false,
         }
     }
 
@@ -370,7 +415,11 @@ impl GiftCosmeticPlayback {
             });
         }
         if self.live_surfaces().is_empty() {
-            self.teardown(cx);
+            if self.retains_poster {
+                self.rest_detached(cx);
+            } else {
+                self.teardown(cx);
+            }
         } else {
             self.surface_visibility_changed(cx);
         }
@@ -943,6 +992,12 @@ impl GiftCosmeticPlayback {
                 surface.end_poster_dissolve(cx);
             });
         }
+    }
+
+    fn rest_detached(&mut self, cx: &mut Context<Self>) {
+        self.stop_player(cx);
+        self.release_slot(cx);
+        self.is_visible = false;
     }
 
     fn teardown(&mut self, cx: &mut Context<Self>) {

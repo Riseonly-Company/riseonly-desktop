@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, ElementId, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    AnyWindowHandle, App, Bounds, Context, ElementId, EntityId, FontWeight, Global, Hsla, InteractiveElement, IntoElement,
     ParentElement, Path, PathBuilder, Pixels, Point, RenderOnce, SharedString, Size, Styled, Subscription, Window,
     canvas, div, fill, point, px, size,
 };
@@ -152,6 +152,10 @@ impl ChatAudioProgressSwap {
     }
 }
 
+struct ChatAudioNowPlayingBarDismissal(Option<String>);
+
+impl Global for ChatAudioNowPlayingBarDismissal {}
+
 #[derive(IntoElement)]
 pub struct ChatAudioNowPlayingBar {
     id: ElementId,
@@ -171,6 +175,31 @@ impl ChatAudioNowPlayingBar {
 
     fn child_id(&self, name: impl Into<SharedString>) -> ElementId {
         ElementId::NamedChild(Arc::new(self.id.clone()), name.into())
+    }
+
+    fn playback_identity(player: &MusicPlayerState) -> Option<String> {
+        let track = player.current_track.as_ref()?;
+        Some(player.playback_scope_id().map_or_else(|| track.id.clone(), str::to_owned))
+    }
+
+    pub fn is_hidden(cx: &mut App) -> bool {
+        let Some(hidden) = cx.try_global::<ChatAudioNowPlayingBarDismissal>().and_then(|dismissal| dismissal.0.clone())
+        else {
+            return false;
+        };
+        Self::playback_identity(MusicPlayerState::shared(cx).read(cx)) == Some(hidden)
+    }
+
+    pub fn reveal(cx: &mut App) {
+        if cx.try_global::<ChatAudioNowPlayingBarDismissal>().is_some_and(|dismissal| dismissal.0.is_some()) {
+            cx.set_global(ChatAudioNowPlayingBarDismissal(None));
+        }
+    }
+
+    fn hide(host: EntityId, cx: &mut App) {
+        let identity = Self::playback_identity(MusicPlayerState::shared(cx).read(cx));
+        cx.set_global(ChatAudioNowPlayingBarDismissal(identity));
+        cx.notify(host);
     }
 
     fn play_pause_label(
@@ -290,9 +319,7 @@ impl RenderOnce for ChatAudioNowPlayingBar {
                     .child(
                         div().id(self.child_id("close-tooltip")).flex_none().tooltip_label(tr("close")).child(
                             plain(self.child_id("close"))
-                                .on_press(|_, cx| {
-                                    MusicPlayerState::shared(cx).update(cx, |player, cx| player.stop_and_clear(cx));
-                                })
+                                .on_press(move |_, cx| Self::hide(host, cx))
                                 .w(px(44.0))
                                 .h(px(30.0))
                                 .flex()

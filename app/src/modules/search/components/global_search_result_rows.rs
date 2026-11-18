@@ -14,6 +14,7 @@ use crate::core::ui::premium_badge::PremiumBadge;
 use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
+use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::search::stores::search_actions::search_types::SearchEntityRow;
 
 type RowTapHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -77,6 +78,10 @@ impl RenderOnce for GlobalSearchProfileResultRow {
                     .px(px(12.0))
                     .py(px(9.0))
                     .bg(theme.bg._100)
+                    .hover({
+                        let hover = row_hover_fill(&theme);
+                        move |style| style.bg(hover)
+                    })
                     .child(
                         UserLogoUi::new(SharedString::from(format!("global-search-profile-logo-{}", row.id)))
                             .source((!row.logo_url.is_empty()).then(|| SharedString::from(row.logo_url.clone())))
@@ -165,12 +170,26 @@ impl RenderOnce for GlobalSearchChatResultRow {
             Rc::new(move |_: &mut Window, cx: &mut App| {
                 let theme = rise_ui::theme(cx).clone();
                 let row = &content_row;
-                let symbol = if row.is_channel() { "megaphone.fill" } else { "person.3.fill" };
+                let is_forum = row
+                    .chat_id
+                    .as_deref()
+                    .is_some_and(|chat_id| ChatServicesStore::shared(cx).read(cx).chat_topics_enabled(chat_id, cx));
+                let symbol = if row.is_channel() {
+                    "megaphone.fill"
+                } else if is_forum {
+                    "person.3.fill"
+                } else {
+                    "person.2.fill"
+                };
                 hstack(10.0)
                     .w_full()
                     .px(px(12.0))
                     .py(px(9.0))
                     .bg(theme.bg._100)
+                    .hover({
+                        let hover = row_hover_fill(&theme);
+                        move |style| style.bg(hover)
+                    })
                     .child(
                         UserLogoUi::new(SharedString::from(format!("global-search-chat-logo-{}", row.id)))
                             .source((!row.logo_url.is_empty()).then(|| SharedString::from(row.logo_url.clone())))

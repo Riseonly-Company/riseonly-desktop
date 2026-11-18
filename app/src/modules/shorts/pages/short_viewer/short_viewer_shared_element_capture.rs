@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use gpui::{AnyWindowHandle, App, AppContext as _, Bounds, Pixels};
+use rise_media::video::av_player::AVLayerVideoGravity;
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
-use rise_media::video::av_player::AVLayerVideoGravity;
 use rise_ui::window_screen_frame_reader::MediaCellScreenFrameRegistry;
 
 use crate::core::lib::canon_identity::RiseIdentity;
@@ -107,7 +107,7 @@ impl ShortViewerSharedElementCapture {
             tracing::warn!(target: "riseonly::X1625", item = %source_key.item_id, "viewer capture refused: photo not sharp in memory");
             return None;
         };
-        let fills = ShortsFeedPlayer::gravity(bitmap.aspect) == AVLayerVideoGravity::ResizeAspectFill;
+        let fills = ShortsFeedPlayer::fills(bitmap.aspect, clip.size);
         let flying_identity = ProfileGridPreviewSourcePolicy::source(None, Some(url.as_str()), None)
             .unwrap_or_else(|| bitmap.source.clone());
         Some(SharedElementCapture {
@@ -201,8 +201,8 @@ impl ShortViewerSharedElementCapture {
         let presentation = player.read(cx).presentation_size();
         let aspect = (presentation.width > 0.0 && presentation.height > 0.0)
             .then(|| presentation.width / presentation.height);
-        let gravity = aspect.map_or(AVLayerVideoGravity::ResizeAspectFill, ShortsFeedPlayer::gravity);
-        let fills = gravity == AVLayerVideoGravity::ResizeAspectFill;
+        let fills = aspect.is_none_or(|aspect| ShortsFeedPlayer::fills(aspect, clip.size));
+        let gravity = if fills { AVLayerVideoGravity::ResizeAspectFill } else { AVLayerVideoGravity::ResizeAspect };
         let content_rect = match aspect {
             Some(aspect) if fills => SharedElementGeometry::fill_rect(aspect, frame),
             Some(aspect) => SharedElementGeometry::fit_rect(aspect, frame),
@@ -244,7 +244,7 @@ impl ShortViewerSharedElementCapture {
         clip: Bounds<Pixels>,
         source_key: &SharedElementKey,
     ) -> SharedElementCapture {
-        let fills = ShortsFeedPlayer::gravity(poster.aspect) == AVLayerVideoGravity::ResizeAspectFill;
+        let fills = ShortsFeedPlayer::fills(poster.aspect, clip.size);
         let flying_identity = ProfileGridPreviewSourcePolicy::source(None, None, post.video_thumbnail.as_deref())
             .unwrap_or_else(|| poster.source.clone());
         SharedElementCapture {

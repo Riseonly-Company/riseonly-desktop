@@ -11,8 +11,10 @@ use rise_limits::limit::{DIAGNOSTICS_QUEUE_BYTES, DIAGNOSTICS_QUEUE_PAYLOADS};
 use rise_platform::AppPaths;
 use rise_platform::app_info::AppInfo;
 use rise_platform::crash_diagnostics::{
-    DiagnosticPayload, DiagnosticsSubscription, PayloadSink, install, prepare_directory,
+    DiagnosticPayload, DiagnosticsSubscription, PayloadSink, install, main_thread_beat,
+    main_thread_beat_interval, main_thread_beats_needed, prepare_directory,
 };
+use rise_platform::host_os::HostOs;
 use rise_platform::file_manager::{DirectoryEnumerationOptions, FileAttributeType, FileManager};
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +88,20 @@ impl RiseDiagnostics {
                 tracing::warn!(target: "riseonly", %reason, "crash and metric reports are off");
             }
         }
+    }
+
+    /// where the system cant tell a hung window the main thread beats for the hang watch
+    pub fn start_main_thread_beats(cx: &mut gpui::App) {
+        if !main_thread_beats_needed(HostOs::current()) {
+            return;
+        }
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor().timer(main_thread_beat_interval()).await;
+                main_thread_beat();
+            }
+        })
+        .detach();
     }
 
     /// application support and not the cache dir, caches get evicted under disk pressure

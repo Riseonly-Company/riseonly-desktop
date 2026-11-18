@@ -1,15 +1,17 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
-use gpui::{AnyElement, AnyView, App, AppContext, Context, Div, Entity, EntityId, EventEmitter, Global, Stateful, IntoElement, Render, StyleRefinement, Subscription, Visibility, WeakEntity, Window, div, prelude::*};
+use gpui::{AnyElement, AnyView, App, AppContext, Bounds, Context, Div, Edges, Element, ElementId, Entity, EntityId, EventEmitter, Global, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels, Position, Render, Stateful, Style, StyleRefinement, Subscription, Visibility, WeakEntity, Window, div, prelude::*};
 use rise_i18n::tr;
-use rise_ui::IconUi;
-use rise_ui::swiftui::button_style::plain;
 use rise_ui::swiftui::environment::env_scope;
 use rise_ui::page_header_ui::PageBesideSplitListKey;
+use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
+use crate::core::widgets::wrappers::list_shell_ui::{PanelStripInset, PanelStripInsetKey};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_screen_refresh::SaiActiveScreen;
 use crate::app::router::root_route_destination::RootRouteDestination;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
@@ -59,9 +61,11 @@ pub struct AsideNavigator {
     account: Option<String>,
     recalled: bool,
     comments_docked: bool,
+    comments_thread_docked: bool,
     panel_shown: bool,
     top_drawn: Option<EntityId>,
     drawn_pages: HashSet<EntityId>,
+    strip_floats: Rc<RefCell<HashMap<EntityId, bool>>>,
     section_visits: u64,
     comments_dock: Entity<DockedCommentsSheetHost>,
     dock_row_steps_back: bool,
@@ -89,6 +93,11 @@ impl AsideNavigator {
                 }
                 cx.notify();
             }
+            let thread_docked = docked && comments.read(cx).thread_root().is_some();
+            if thread_docked != navigator.comments_thread_docked {
+                navigator.comments_thread_docked = thread_docked;
+                cx.notify();
+            }
         });
         Self {
             store,
@@ -104,9 +113,11 @@ impl AsideNavigator {
             account: None,
             recalled: false,
             comments_docked: false,
+            comments_thread_docked: false,
             panel_shown: false,
             top_drawn: None,
             drawn_pages: HashSet::new(),
+            strip_floats: Rc::new(RefCell::new(HashMap::new())),
             section_visits: 0,
             comments_dock: cx.new(|_| DockedCommentsSheetHost::default()),
             dock_row_steps_back: false,
@@ -121,6 +132,7 @@ impl AsideNavigator {
             (AsideSection::Posts, RootRoute::MyProfile),
             (AsideSection::Chats, RootRoute::MyProfile),
             (AsideSection::Search, RootRoute::MyProfile),
+            (AsideSection::Maps, RootRoute::MapFriends),
         ])
     }
 
@@ -277,6 +289,19 @@ impl AsideNavigator {
         cx.emit(AsideReveal { toggles: false });
     }
 
+    pub fn open_over_default(&mut self, route: RootRoute, cx: &mut Context<Self>) {
+        if self.pages.is_empty() {
+            self.open(route, cx);
+            return;
+        }
+        self.reset_to_default(cx);
+        if self.default_page.as_ref().is_some_and(|page| page.route == route) {
+            cx.emit(AsideReveal { toggles: false });
+            return;
+        }
+        self.open(route, cx);
+    }
+
     pub fn replace(&mut self, route: RootRoute, cx: &mut Context<Self>) {
         if self.pages.is_empty() {
             self.open(route, cx);
@@ -308,7 +333,12 @@ impl AsideNavigator {
 
     /// true when the panel back arrow should show, a page on the stack or docked comments over a page
     pub fn can_step_back(&self, cx: &App) -> bool {
-        self.can_go_back() || (self.shows_docked_comments(cx) && self.top_route().is_some())
+        self.can_go_back()
+            || (self.shows_docked_comments(cx) && (self.top_route().is_some() || Self::docked_thread_open(cx)))
+    }
+
+    fn docked_thread_open(cx: &App) -> bool {
+        rise_ui::shared::try_read::<CommentInteractionsStore>(cx).is_some_and(|store| store.thread_root().is_some())
     }
 
     fn refresh_dock_row(&mut self, cx: &mut Context<Self>) {
@@ -321,6 +351,10 @@ impl AsideNavigator {
     }
 
     pub fn back(&mut self, cx: &mut Context<Self>) {
+        if self.comments_docked && Self::docked_thread_open(cx) {
+            CommentInteractionsStore::shared(cx).update(cx, |store, cx| store.close_thread(cx));
+            return;
+        }
         if self.comments_docked && self.top_route().is_some() {
             tracing::info!(target: "riseonly::X1634", pages = self.pages.len(), "panel back closes docked comments");
             self.undock_comments(cx);
@@ -672,23 +706,12 @@ impl AsideNavigator {
         id: &'static str,
         symbol: &'static str,
         label_key: &'static str,
-        theme: &rise_theme::AppTheme,
         action: impl Fn(&mut AsideNavigator, &mut Context<AsideNavigator>) + 'static,
         this: WeakEntity<AsideNavigator>,
     ) -> Stateful<Div> {
-        let side = theme.shell.rail_icon_size;
-        div().id(id).tooltip_label(tr(label_key)).child(
-            plain(id)
-                .size(side + theme.shell.rail_padding)
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(theme.radius._100)
-                .children(IconUi::sized(symbol, side * 0.7, theme.text.secondary, false))
-                .on_press(move |_window, cx| {
-                    let _ = this.update(cx, |navigator, cx| action(navigator, cx));
-                }),
-        )
+        div().id(id).tooltip_label(tr(label_key)).child(PageHeaderIconButton::new(id, symbol, move |_window, cx| {
+            let _ = this.update(cx, |navigator, cx| action(navigator, cx));
+        }))
     }
 }
 
@@ -712,20 +735,18 @@ impl AsideHeaderButtons {
 
 impl Render for AsideHeaderButtons {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = rise_ui::theme(cx as &App).clone();
         let navigator = self.navigator.upgrade();
         let wants_centre = navigator
             .as_ref()
             .is_some_and(|navigator| navigator.read(cx).top_wants_centre() && !navigator.read(cx).shows_docked_comments(cx));
         let can_step_back = navigator.as_ref().is_some_and(|navigator| navigator.read(cx).can_step_back(cx));
         let pin_state = navigator.as_ref().and_then(|navigator| navigator.read(cx).pin_state());
-        let mut row = div().size_full().flex().flex_row().items_center().gap(theme.shell.rail_item_gap);
+        let mut row = div().size_full().flex().flex_row().items_center().gap(gpui::px(PageHeaderMetrics::BUTTON_GAP));
         if can_step_back {
             row = row.child(AsideNavigator::header_button(
                 "aside.back",
                 BACK_SYMBOL,
                 BACK_KEY,
-                &theme,
                 |navigator, cx| navigator.back(cx),
                 self.navigator.clone(),
             ));
@@ -735,7 +756,6 @@ impl Render for AsideHeaderButtons {
                 "aside.pin",
                 if pinned { UNPIN_SYMBOL } else { PIN_SYMBOL },
                 if pinned { UNPIN_KEY } else { PIN_KEY },
-                &theme,
                 |navigator, cx| navigator.toggle_pin(cx),
                 self.navigator.clone(),
             ));
@@ -746,7 +766,6 @@ impl Render for AsideHeaderButtons {
                     "aside.open_in_centre",
                     OPEN_IN_CENTRE_SYMBOL,
                     OPEN_IN_CENTRE_KEY,
-                    &theme,
                     |navigator, cx| navigator.open_top_in_centre(cx),
                     self.navigator.clone(),
                 ));
@@ -777,6 +796,8 @@ impl Render for AsideNavigator {
         }
         self.drawn_pages.retain(|id| stack_pages.iter().any(|view| view.entity_id() == *id));
         let top_drawn = self.top_drawn;
+        let strip = PageHeaderMetrics::PANEL_STRIP_HEIGHT;
+        self.strip_floats.borrow_mut().retain(|id, _| self.drawn_pages.contains(id));
         let slots: Vec<AnyElement> = stack_pages
             .into_iter()
             .filter(|view| self.drawn_pages.contains(&view.entity_id()))
@@ -788,7 +809,12 @@ impl Render for AsideNavigator {
                 } else {
                     slot.style().visibility = Some(Visibility::Hidden);
                 }
-                slot.child(view.cached(StyleRefinement::default().size_full()).replay_when_moved()).into_any_element()
+                let page_id = view.entity_id();
+                let inset = PanelStripInset::new(strip, page_id, self.strip_floats.clone());
+                let page = env_scope::<PanelStripInsetKey>(Some(inset))
+                    .child(view.cached(StyleRefinement::default().size_full()).replay_when_moved());
+                slot.child(PanelStripSlot { page: page_id, strip, floats: self.strip_floats.clone(), child: page.into_any_element() })
+                    .into_any_element()
             })
             .collect();
         let docked_comments = self.comments_docked.then(|| {
@@ -817,6 +843,80 @@ impl Render for AsideNavigator {
                     )
                     .children(docked_comments),
             )
+    }
+}
+
+/// page slot of the panel, it lays the page out first and then knows whether the page floats under the strip
+struct PanelStripSlot {
+    page: EntityId,
+    strip: f32,
+    floats: Rc<RefCell<HashMap<EntityId, bool>>>,
+    child: AnyElement,
+}
+
+impl IntoElement for PanelStripSlot {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for PanelStripSlot {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let child = self.child.request_layout(window, cx);
+        let floats = self.floats.borrow().get(&self.page).copied().unwrap_or(false);
+        let mut style = Style::default();
+        style.position = Position::Absolute;
+        style.inset = Edges {
+            top: gpui::px(if floats { 0.0 } else { self.strip }).into(),
+            right: gpui::px(0.0).into(),
+            bottom: gpui::px(0.0).into(),
+            left: gpui::px(0.0).into(),
+        };
+        (window.request_layout(style, [child], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
     }
 }
 
@@ -893,6 +993,10 @@ pub fn take_handed_page(route: &RootRoute, cx: &mut App) -> Option<AnyView> {
 
 pub fn open(route: RootRoute, cx: &mut App) {
     with_frontmost(cx, |navigator, cx| navigator.open(route, cx));
+}
+
+pub fn open_over_default(route: RootRoute, cx: &mut App) {
+    with_frontmost(cx, |navigator, cx| navigator.open_over_default(route, cx));
 }
 
 /// swaps the top page of the panel

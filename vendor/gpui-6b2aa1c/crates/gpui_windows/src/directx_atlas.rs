@@ -1,28 +1,33 @@
 use collections::FxHashMap;
 use etagere::BucketedAtlasAllocator;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use windows::Win32::Graphics::{
     Direct3D11::{
-        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-        ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+        ID3D11ShaderResourceView, ID3D11Texture2D,
     },
     Dxgi::Common::*,
 };
+use windows::core::Interface;
 
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    PlatformAtlas, PlatformImageUploader, Point, Size,
 };
 
-pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
+pub(crate) struct DirectXAtlas(Arc<Mutex<DirectXAtlasState>>);
 
 struct DirectXAtlasState {
     device: ID3D11Device,
     device_context: ID3D11DeviceContext,
+    multithread: Option<ID3D11Multithread>,
     monochrome_textures: AtlasTextureList<DirectXAtlasTexture>,
     polychrome_textures: AtlasTextureList<DirectXAtlasTexture>,
     subpixel_textures: AtlasTextureList<DirectXAtlasTexture>,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    generation: u64,
 }
 
 struct DirectXAtlasTexture {
@@ -36,14 +41,16 @@ struct DirectXAtlasTexture {
 
 impl DirectXAtlas {
     pub(crate) fn new(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Self {
-        DirectXAtlas(Mutex::new(DirectXAtlasState {
+        DirectXAtlas(Arc::new(Mutex::new(DirectXAtlasState {
             device: device.clone(),
             device_context: device_context.clone(),
+            multithread: device_context.cast::<ID3D11Multithread>().ok(),
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             subpixel_textures: Default::default(),
             tiles_by_key: Default::default(),
-        }))
+            generation: 0,
+        })))
     }
 
     pub(crate) fn get_texture_view(
@@ -63,10 +70,12 @@ impl DirectXAtlas {
         let mut lock = self.0.lock();
         lock.device = device.clone();
         lock.device_context = device_context.clone();
+        lock.multithread = device_context.cast::<ID3D11Multithread>().ok();
         lock.monochrome_textures = AtlasTextureList::default();
         lock.polychrome_textures = AtlasTextureList::default();
         lock.subpixel_textures = AtlasTextureList::default();
         lock.tiles_by_key.clear();
+        lock.generation += 1;
     }
 }
 
@@ -101,12 +110,158 @@ impl PlatformAtlas for DirectXAtlas {
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        lock.release(tile);
+    }
+
+    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
+        self.0.lock().multithread.as_ref()?;
+        Some(Arc::new(DirectXImageUploader(self.0.clone())))
+    }
+}
+
+struct DirectXImageUploader(Arc<Mutex<DirectXAtlasState>>);
+
+// SAFETY: a worker creates textures on the ID3D11Device only inside the device critical section
+// of ID3D11Multithread and never calls the immediate context, which stays with the render thread.
+unsafe impl Send for DirectXImageUploader {}
+unsafe impl Sync for DirectXImageUploader {}
+
+struct DirectXMultithreadSection<'a>(&'a ID3D11Multithread);
+
+impl<'a> DirectXMultithreadSection<'a> {
+    fn enter(multithread: &'a ID3D11Multithread) -> Self {
+        unsafe { multithread.Enter() };
+        Self(multithread)
+    }
+}
+
+impl Drop for DirectXMultithreadSection<'_> {
+    fn drop(&mut self) {
+        unsafe { self.0.Leave() };
+    }
+}
+
+impl PlatformImageUploader for DirectXImageUploader {
+    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) {
+        if key.texture_kind() != AtlasTextureKind::Polychrome {
+            return;
+        }
+        let (device, multithread, generation) = {
+            let lock = self.0.lock();
+            if lock.tiles_by_key.contains_key(key) {
+                return;
+            }
+            let Some(multithread) = lock.multithread.clone() else {
+                return;
+            };
+            (lock.device.clone(), multithread, lock.generation)
+        };
+        let width = size.width.0.max(0) as u32;
+        let height = size.height.0.max(0) as u32;
+        let row_bytes = width * 4;
+        if width == 0 || height == 0 || bytes.len() < row_bytes as usize * height as usize {
+            return;
+        }
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let initial_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: bytes.as_ptr() as _,
+            SysMemPitch: row_bytes,
+            SysMemSlicePitch: 0,
+        };
+        let mut texture: Option<ID3D11Texture2D> = None;
+        let mut view = None;
+        {
+            let _section = DirectXMultithreadSection::enter(&multithread);
+            unsafe {
+                if device
+                    .CreateTexture2D(&texture_desc, Some(&initial_data), Some(&mut texture))
+                    .is_err()
+                {
+                    return;
+                }
+                let Some(texture) = texture.as_ref() else {
+                    return;
+                };
+                if device
+                    .CreateShaderResourceView(texture, None, Some(&mut view))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+        let Some(texture) = texture else {
+            return;
+        };
+        let mut lock = self.0.lock();
+        if lock.generation != generation || lock.tiles_by_key.contains_key(key) {
+            return;
+        }
+        if let Some(tile) = lock.adopt_texture(texture, [view], size) {
+            lock.tiles_by_key.insert(key.clone(), tile);
+        }
+    }
+
+    fn is_resident(&self, key: &AtlasKey) -> bool {
+        self.0.lock().tiles_by_key.contains_key(key)
+    }
+}
+
+impl DirectXAtlasState {
+    fn adopt_texture(
+        &mut self,
+        texture: ID3D11Texture2D,
+        view: [Option<ID3D11ShaderResourceView>; 1],
+        size: Size<DevicePixels>,
+    ) -> Option<AtlasTile> {
+        let texture_list = &mut self.polychrome_textures;
+        let index = texture_list.free_list.pop();
+        let mut atlas_texture = DirectXAtlasTexture {
+            id: AtlasTextureId {
+                index: index.unwrap_or(texture_list.textures.len()) as u32,
+                kind: AtlasTextureKind::Polychrome,
+            },
+            bytes_per_pixel: 4,
+            allocator: etagere::BucketedAtlasAllocator::new(device_size_to_etagere(size)),
+            texture,
+            view,
+            live_atlas_keys: 0,
+        };
+        let Some(tile) = atlas_texture.allocate(size) else {
+            if let Some(ix) = index {
+                texture_list.free_list.push(ix);
+            }
+            return None;
+        };
+        if let Some(ix) = index {
+            texture_list.textures[ix] = Some(atlas_texture);
+        } else {
+            texture_list.textures.push(Some(atlas_texture));
+        }
+        Some(tile)
+    }
+
+    fn release(&mut self, tile: AtlasTile) {
         let id = tile.texture_id;
 
         let textures = match id.kind {
-            AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
-            AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
-            AtlasTextureKind::Subpixel => &mut lock.subpixel_textures,
+            AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+            AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
+            AtlasTextureKind::Subpixel => &mut self.subpixel_textures,
         };
 
         let Some(texture_slot) = textures.textures.get_mut(id.index as usize) else {

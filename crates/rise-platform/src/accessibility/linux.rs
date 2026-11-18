@@ -52,7 +52,7 @@ impl AccessibilitySettings for NativeAccessibility {
         std::thread::Builder::new()
             .name("rise-reduce-motion".into())
             .spawn(move || {
-                let ended = zbus::block_on(async move {
+                let ended = crate::dbus_block_on::block_on(async move {
                     let watch = std::pin::pin!(watch_motion(&sink));
                     match select(watch, stopped).await {
                         Either::Left((ended, _)) => ended,
@@ -98,7 +98,7 @@ fn start_one_off_read() {
     let started = std::thread::Builder::new()
         .name("rise-reduce-motion-read".into())
         .spawn(|| {
-            let read = zbus::block_on(async {
+            let read = crate::dbus_block_on::block_on(async {
                 tokio::time::timeout(READ_TIMEOUT, read_motion_settings()).await
             });
             match read {

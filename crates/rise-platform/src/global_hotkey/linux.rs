@@ -339,7 +339,7 @@ impl PortalWorker {
         let (changes, receiver) = unbounded();
         let (ready, answer) = mpsc::sync_channel(1);
         let started = std::thread::Builder::new().name("rise-hotkey-portal".into()).spawn(move || {
-            zbus::block_on(run_portal(receiver, ready));
+            crate::dbus_block_on::block_on(run_portal(receiver, ready));
         });
         if let Err(error) = started {
             tracing::warn!(target: "riseonly", %error, "global hotkeys: the portal thread did not start");

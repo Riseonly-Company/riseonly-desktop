@@ -331,16 +331,22 @@ fn build_bridge(
     let bridge_include_dirs: Vec<PathBuf> =
         BRIDGE_INCLUDE_DIRS.iter().map(|p| root.join(p)).collect();
     let mut build = cxx_build::bridge(BRIDGE_RS);
-    build
-        .includes(&bridge_include_dirs)
-        .includes(include_dirs)
-        .flag_if_supported("-std=c++20")
+    // Riseonly: the msvc target (clang-cl or cl) takes /std, keeps RTTI like the core, and the
+    // Windows SDK headers warn under clang-cl, so warnings do not stop that build.
+    let msvc = env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    build.includes(&bridge_include_dirs).includes(include_dirs).warnings(true);
+    if msvc {
+        build
+            .std("c++20")
+            .define("NOMINMAX", None)
+            .define("_USE_MATH_DEFINES", None)
+            .define("GHC_WIN_DISABLE_WSTRING_STORAGE_TYPE", None)
+            .warnings_into_errors(false);
+    } else {
         // mbgl-core defaults to no RTTI (CMake `MLN_WITH_RTTI=OFF` adds `-fno-rtti` on GCC/Clang).
         // The bridge uses no `dynamic_cast`/`typeid`, so `-fno-rtti` is safe.
-        // (MSVC keeps RTTI on both sides)
-        .flag_if_supported("-fno-rtti")
-        .warnings(true)
-        .warnings_into_errors(true);
+        build.flag_if_supported("-std=c++20").flag_if_supported("-fno-rtti").warnings_into_errors(true);
+    }
 
     // Some public MLN types (notably RunLoop) have NDEBUG-dependent layouts.
     // Compile inline bridge code with the same ABI layout as the linked core.
@@ -450,13 +456,16 @@ fn bundle_precompiled() -> Info {
 
     // These `cargo:rustc-link-lib` must be done before curl and GL,
     // especially on Linux before 1.90 (1.90 introduced new linker on Linux)
-    let lib_name = cpp_root
+    let file_name = cpp_root
         .file_name()
         .expect("static library base has a file name")
         .to_string_lossy()
-        .to_string()
-        .replacen("lib", "", 1)
-        .replace(".a", "");
+        .to_string();
+    // Riseonly: an msvc archive is named <name>.lib and linked by that name.
+    let lib_name = match file_name.strip_suffix(".lib") {
+        Some(stem) => stem.to_string(),
+        None => file_name.replacen("lib", "", 1).replace(".a", ""),
+    };
 
     Info { lib_name, include_dirs, cpp_root }
 }
@@ -860,11 +869,22 @@ fn build_mln() {
         println!("cargo:rustc-link-lib=jpeg"); // sudo dnf install libjpeg-turbo-devel
         println!("cargo:rustc-link-lib=webp"); // sudo dnf install libwebp-devel
     }
-    if !is_apple {
-        println!("cargo:rustc-link-lib=uv"); // sudo dnf install libuv-devel
+    // Riseonly: the Windows amalgam (scripts/build-maplibre-core-windows.sh) carries libuv, curl
+    // and zlib; what they and mbgl need from the system comes from these import libraries.
+    if target_os == "windows" {
+        for system in [
+            "ws2_32", "crypt32", "secur32", "bcrypt", "advapi32", "iphlpapi", "userenv", "psapi", "user32",
+            "shell32", "ole32", "dbghelp", "normaliz",
+        ] {
+            println!("cargo:rustc-link-lib={system}");
+        }
+    } else {
+        if !is_apple {
+            println!("cargo:rustc-link-lib=uv"); // sudo dnf install libuv-devel
+        }
+        println!("cargo:rustc-link-lib=curl");
+        println!("cargo:rustc-link-lib=z");
     }
-    println!("cargo:rustc-link-lib=curl");
-    println!("cargo:rustc-link-lib=z");
 
     if is_apple {
         println!("cargo:rustc-link-lib=framework=Foundation");

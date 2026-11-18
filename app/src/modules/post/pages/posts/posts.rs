@@ -20,7 +20,7 @@ use rise_theme::AppTheme;
 use rise_ui::animated_tabs_ui::animated_tabs_types::{AnimatedTabsMetrics, TabHeaderConfig};
 use rise_ui::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use rise_ui::hold_context_menu_ui::hold_context_menu_types::HoldContextMenuLocksScrollKey;
-use rise_ui::page_header_toolbar_button::PageHeaderMetrics;
+use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
 use rise_ui::scroll_chrome_shadow_ui::ScrollChromeShadowStyle;
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::environment::{env, env_scope};
@@ -300,6 +300,16 @@ impl Posts {
         });
     }
 
+    /// scrolls the open feed to the top and reloads it with its stories
+    fn refresh_selected_feed(view: &WeakEntity<Posts>, window: &mut Window, cx: &mut App) {
+        if MainTabScrollToTop::perform(true, window, cx) {
+            return;
+        }
+        let _ = view.update(cx, |view, cx| {
+            PostsFeedPage::refresh_feed_and_stories(view.selected_tab, cx).detach();
+        });
+    }
+
     fn push(nav_store: &Option<Entity<NavigationStore>>, route: RootRoute, cx: &mut App) {
         if let Some(nav_store) = nav_store {
             nav_store.update(cx, |store, cx| store.push(route, NavigationStoreSettlingPush::Drop, cx));
@@ -388,6 +398,7 @@ impl Render for Posts {
 
         let bell_nav = nav_store.clone();
         let refresh_view = weak.clone();
+        let refresh_button_view = weak.clone();
         let logo_nav = nav_store.clone();
         let profile = self.auth.read(cx).profile();
         let source = profile.map(|profile| {
@@ -429,7 +440,12 @@ impl Render for Posts {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(PageHeaderMetrics::BUTTON_GAP))
+                    .child(div().id(("posts-refresh-label", entity_id)).tooltip_label(tr("desktop_feed_refresh")).child(
+                        PageHeaderIconButton::new(("posts-refresh", entity_id), "arrow.clockwise", move |window, cx| {
+                            Self::refresh_selected_feed(&refresh_button_view, window, cx)
+                        }),
+                    ))
                     .child(NotificationsBellButton::new(("posts-notifications-bell", entity_id), move |_, cx| {
                         Self::push(&bell_nav, RootRoute::Notifications, cx);
                     })),
@@ -452,14 +468,7 @@ impl Render for Posts {
             .content(
                 PageRefreshKeys::new(
                     ("posts-refresh-keys", entity_id),
-                    move |window, cx| {
-                        if MainTabScrollToTop::perform(true, window, cx) {
-                            return;
-                        }
-                        let _ = refresh_view.update(cx, |view, cx| {
-                            PostsFeedPage::refresh_feed_and_stories(view.selected_tab, cx).detach();
-                        });
-                    },
+                    move |window, cx| Self::refresh_selected_feed(&refresh_view, window, cx),
                     div()
                         .relative()
                         .size_full()
@@ -566,7 +575,7 @@ impl PostsFeedTabsHeader {
             sum + width.ceil() + horizontal_padding * 2.0
         });
         let natural = labels + f32::from(AnimatedTabsMetrics::BAR_INNER_PADDING) * 2.0;
-        let side = 8.0 + PageHeaderMetrics::TOOLBAR_BUTTON_SIZE + 4.0;
+        let side = 8.0 + PageHeaderMetrics::TOOLBAR_BUTTON_SIZE * 2.0 + 4.0 + PageHeaderMetrics::BUTTON_GAP;
         center_width.map_or(natural, |width| natural.min(width - 2.0 * side)).max(0.0)
     }
 }
@@ -618,6 +627,7 @@ struct PostsFeedPage {
     drawn_page: Option<RisePostPagePresentation>,
     drawn_props: Option<(bool, Option<String>)>,
     posts_id: Option<gpui::EntityId>,
+    stories_header_row: Entity<StoriesHeaderRow>,
     _subscriptions: Vec<Subscription>,
     _connection_ready: RiseSubscription,
     _delivery: Task<()>,
@@ -677,6 +687,7 @@ impl PostsFeedPage {
             drawn_page: None,
             drawn_props: None,
             posts_id: None,
+            stories_header_row: cx.new(|_| StoriesHeaderRow),
             _subscriptions: vec![
                 cx.observe(&service, |view, service, cx| {
                     let kind = view.tab.kind();
@@ -807,7 +818,7 @@ impl PostsFeedPage {
                 }
             },
         )
-        .header((tab == HomeFeedTab::All).then(Self::stories_header))
+        .header((tab == HomeFeedTab::All).then(|| self.stories_header()))
         .top_padding(5.0)
         .bottom_inset(main_tab_bar_underlap(cx).max(80.0))
         .is_active(is_active)
@@ -829,11 +840,12 @@ impl PostsFeedPage {
         view.into_any_element()
     }
 
-    fn stories_header() -> PostListHeader {
+    fn stories_header(&self) -> PostListHeader {
+        let row = self.stories_header_row.clone();
         PostListHeader {
             id: "feed.header.stories".to_owned(),
             height: 102.0,
-            content: Rc::new(|_: &mut Window, cx: &mut App| AnyView::from(cx.new(|_| StoriesHeaderRow))),
+            content: Rc::new(move |_: &mut Window, _: &mut App| AnyView::from(row.clone())),
         }
     }
 
@@ -867,13 +879,8 @@ impl PostsFeedPage {
         let min_height = (self.geometry_height - if tab == HomeFeedTab::All { 102.0 } else { 20.0 }).max(280.0);
         let top_inset = list_shell_floating_top_inset(cx);
         let skeleton_variant = Self::skeleton_variant(tab);
-        let refresh_view = cx.weak_entity();
         scroll_view(("posts-feed-scroll", entity_id))
             .shows_indicators(false)
-            .refreshable(move |_, cx| {
-                Self::release_held_page(&refresh_view, cx);
-                Self::refresh_feed_and_stories(tab, cx)
-            })
             .child(
                 vstack(5.0)
                     .w_full()

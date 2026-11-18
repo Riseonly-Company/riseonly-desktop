@@ -43,6 +43,8 @@ pub struct SearchServicesStore {
 
     pub hashtag_current_tag: Option<String>,
 
+    field_focus_request: u64,
+
     search_post_last_error: Option<String>,
     hashtag_post_last_error: Option<String>,
     tag_entity_last_error: Option<String>,
@@ -67,6 +69,7 @@ impl SearchServicesStore {
             query_string: String::new(),
             results_tab: SearchResultsTab::POST,
             hashtag_current_tag: None,
+            field_focus_request: 0,
             search_post_last_error: None,
             hashtag_post_last_error: None,
             tag_entity_last_error: None,
@@ -80,6 +83,15 @@ impl SearchServicesStore {
                 cx.observe(&post_services, |_, _, cx| cx.notify()),
             ],
         }
+    }
+
+    pub fn field_focus_request(&self) -> u64 {
+        self.field_focus_request
+    }
+
+    pub fn request_field_focus(&mut self, cx: &mut Context<Self>) {
+        self.field_focus_request = self.field_focus_request.wrapping_add(1);
+        cx.notify();
     }
 
     pub fn search_posts_limit() -> i64 {

@@ -5,8 +5,11 @@ use rise_ui::swiftui::prelude::*;
 use crate::modules::notify::components::notification_avatar_stack::NotificationAvatarStack;
 use crate::modules::notify::engine::rise_notifications_presentation::RiseNotificationRow;
 use crate::modules::notify::stores::notify_actions::notify_types::NotificationKind;
+use crate::modules::user::components::achievements::achievement_card::AchievementCard;
+use crate::modules::user::stores::user_achievements::user_achievements_services::user_achievements_services::UserAchievementsServicesStore;
 
 const FONT_SIZE: f32 = 14.5;
+const AVATAR_SIDE: f32 = 46.0;
 
 /// one feed row, strings arrive prepared
 /// the row only lays out runs and applies the theme
@@ -53,19 +56,31 @@ impl RenderOnce for NotifyRow {
         let theme = rise_ui::theme(cx).clone();
         let row = self.row;
         let avatar_id = ElementId::Name(format!("notify-row-avatar-{}", row.id).into());
+        let achievement = row.item.achievement_id().and_then(|id| UserAchievementsServicesStore::own_achievement(id, cx));
+        let avatar = match achievement {
+            Some(achievement) => div()
+                .flex_none()
+                .size(px(AVATAR_SIDE))
+                .child(AchievementCard::new(achievement, AVATAR_SIDE).shows_title(false).shows_badge(false))
+                .into_any_element(),
+            None => NotificationAvatarStack::new(avatar_id, row.facepile.clone())
+                .badge_symbol(row.badge_symbol.to_owned())
+                .badge_color(row.item.badge_color(&theme))
+                .container_size(AVATAR_SIDE)
+                .empty_glyph(row.item.empty_avatar_glyph(&theme))
+                .into_any_element(),
+        };
         hstack(12.0)
             .w_full()
             .items_center()
             .px(px(14.0))
             .py(px(11.0))
             .bg(if row.is_read { theme.bg._100 } else { theme.bg._200 })
-            .child(
-                NotificationAvatarStack::new(avatar_id, row.facepile.clone())
-                    .badge_symbol(row.badge_symbol.to_owned())
-                    .badge_color(row.item.badge_color(&theme))
-                    .container_size(46.0)
-                    .empty_glyph(row.item.empty_avatar_glyph(&theme)),
-            )
+            .hover({
+                let hover = row_hover_fill(&theme);
+                move |style| style.bg(hover)
+            })
+            .child(avatar)
             .child(
                 div()
                     .flex_1()

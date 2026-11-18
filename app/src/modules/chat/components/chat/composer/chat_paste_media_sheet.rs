@@ -28,8 +28,8 @@ use rise_ui::media_spoiler_overlay_view::MediaSpoilerOverlay;
 use rise_ui::bottom_sheet_ui::modal_sheet_surface::{
     ModalSheetFrame, ModalSheetMetrics, modal_sheet_centering, modal_sheet_chrome, modal_sheet_outline,
 };
-use rise_ui::page_header_toolbar_button::PageHeaderIconButton;
-use rise_ui::scroll_edge_blur_ui::ScrollEdgeBlurUi;
+use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
+use rise_ui::scroll_edge_blur_ui::{ScrollEdgeBlurFalloff, ScrollEdgeBlurUi};
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::motion::ease_in_out;
 use rise_ui::swiftui::prelude::*;
@@ -278,7 +278,8 @@ impl ChatPasteMediaSheet {
     const SPOILER_ACTION_ID: &'static str = "chat_paste_spoiler";
     const HEIGHT_FRACTION: f32 = 0.74;
     const MIN_HEIGHT: f32 = 320.0;
-    const TOP_BLUR_HEIGHT: f32 = 96.0;
+    const HEADER_TOP_PADDING: f32 = 8.0;
+    const HEADER_FADE: f32 = 12.0;
 
     /// builds the sheet, caption custom emojis default to none
     pub fn new(
@@ -591,7 +592,7 @@ impl ChatPasteMediaSheet {
         vstack(0.0)
             .size_full()
             .child(
-                div().w_full().pt(px(8.0)).child(self.header(theme, state, selection)),
+                div().w_full().pt(px(Self::HEADER_TOP_PADDING)).child(self.header(theme, state, selection)),
             )
             .child(
                 div().w_full().flex().justify_center().pt(px(10.0)).pb(px(10.0)).child(
@@ -648,6 +649,10 @@ impl RenderOnce for ChatPasteMediaSheet {
         let frame = ModalSheetFrame::for_window(window, cx);
         let container_height = f32::from(WindowCoverFrame::resolve(window, cx).size.height);
         let height = frame.filled_height((container_height * Self::HEIGHT_FRACTION).max(Self::MIN_HEIGHT));
+        let (top_blur_height, top_blur_solid_end) = ScrollEdgeBlurFalloff::header_band(
+            Self::HEADER_TOP_PADDING + PageHeaderMetrics::TOOLBAR_BUTTON_SIZE,
+            Self::HEADER_FADE,
+        );
         let surface = div()
             .relative()
             .w(px(frame.width))
@@ -666,8 +671,8 @@ impl RenderOnce for ChatPasteMediaSheet {
                             .top_0()
                             .left_0()
                             .w_full()
-                            .h(px(Self::TOP_BLUR_HEIGHT))
-                            .child(ScrollEdgeBlurUi::new()),
+                            .h(px(top_blur_height))
+                            .child(ScrollEdgeBlurUi::new().solid_end(top_blur_solid_end).fit_height(top_blur_height)),
                     ),
             )
             .child(div().relative().size_full().child(panel));

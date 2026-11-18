@@ -14,7 +14,7 @@ use rise_ui::swiftui::environment::{EnvKey, EnvScope, env, env_scope};
 use rise_ui::swiftui::measure::measure;
 
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::{SaiSliceState, SaiWsSliceStatus};
-use crate::core::widgets::wrappers::list_shell_ui::{ListShellCoordinateSpace, ListShellFloatingTopInsetKey};
+use crate::core::widgets::wrappers::list_shell_ui::{ListShellCoordinateSpace, list_shell_floating_top_inset};
 
 /// builds a state view on demand
 pub type SaiDataRenderBuilder = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
@@ -296,7 +296,7 @@ pub struct SaiDataRenderDefaultsEmpty {
 impl RenderOnce for SaiDataRenderDefaultsEmpty {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let text_primary = ThemeStore::shared(cx).read(cx).current_theme().text.primary;
-        let floating_top_inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let floating_top_inset = list_shell_floating_top_inset(cx);
         let content_space = ListShellCoordinateSpace::Content.frame(cx);
         let state = window.use_keyed_state(self.geometry_key.clone(), cx, |_, _| SaiDataRenderGeometry(None));
         let frame = state.read(cx).0;

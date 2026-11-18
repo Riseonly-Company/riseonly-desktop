@@ -1,4 +1,7 @@
-use rise_canon::{RiseBugReportStatus, RiseBugReportSurface, RiseDiagnosticReportKind, RiseFeedbackKind, rise_response, rise_view};
+use rise_canon::{
+    RiseBugReportPlatform, RiseBugReportStatus, RiseBugReportSurface, RiseDiagnosticReportKind, RiseFeedbackKind,
+    rise_response, rise_view,
+};
 use rise_core::foundation::foundation_text::{character_count, trimming_whitespaces_and_newlines};
 use rise_core::foundation::foundation_url::UrlComponents;
 
@@ -34,6 +37,8 @@ pub struct BugReportRecord {
     pub updated_at_ms: Option<i64>,
     pub attempt_count: i64,
     pub reopened_from: Option<RiseBugReportStatus>,
+    pub fix_platforms: Vec<RiseBugReportPlatform>,
+    pub status_comment: Option<String>,
 }
 
 impl BugReportRecord {
@@ -42,6 +47,8 @@ impl BugReportRecord {
             return None;
         }
         let wire_kind = RiseDiagnosticReportKind::from_wire(&dto.kind).unwrap_or(RiseDiagnosticReportKind::UserReport);
+        let platforms: Vec<RiseBugReportPlatform> =
+            dto.fix_platforms.iter().filter_map(|wire| RiseBugReportPlatform::from_wire(wire)).collect();
         Some(Self {
             id: dto.id.clone(),
             kind: BugReportDraftKind::from_kind(wire_kind).unwrap_or(BugReportDraftKind::Bug),
@@ -59,6 +66,8 @@ impl BugReportRecord {
             updated_at_ms: dto.updated_at,
             attempt_count: dto.follow_up_count.saturating_add(1).max(1),
             reopened_from: dto.reopened_from.as_deref().and_then(RiseBugReportStatus::from_wire),
+            fix_platforms: if platforms.is_empty() { RiseBugReportPlatform::ALL.to_vec() } else { platforms },
+            status_comment: dto.status_comment.as_deref().and_then(nil_if_blank),
         })
     }
 
@@ -67,7 +76,9 @@ impl BugReportRecord {
     }
 
     pub fn is_editable(&self) -> bool {
-        self.status == RiseBugReportStatus::Pending || self.status == RiseBugReportStatus::Reopened
+        self.status == RiseBugReportStatus::Pending
+            || self.status == RiseBugReportStatus::Reopened
+            || self.status == RiseBugReportStatus::NotDetailed
     }
 
     pub fn can_refile(&self) -> bool {

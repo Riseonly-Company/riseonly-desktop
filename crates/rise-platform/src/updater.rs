@@ -825,7 +825,7 @@ fn swap_in_place(staged: &Path, installed: &Path, displaced: &Path) -> Result<()
         std::fs::rename(installed, displaced).map_err(|error| failure(installed, &error))?;
     }
 
-    match std::fs::rename(staged, installed) {
+    match move_into_place(staged, installed) {
         Ok(()) => {
             let _ = remove_any(displaced);
             Ok(())
@@ -836,6 +836,28 @@ fn swap_in_place(staged: &Path, installed: &Path, displaced: &Path) -> Result<()
             }
             Err(failure(staged, &error))
         }
+    }
+}
+
+fn move_into_place(staged: &Path, installed: &Path) -> std::io::Result<()> {
+    match std::fs::rename(staged, installed) {
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            let name = installed.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            let incoming = installed.with_file_name(format!(".{name}.incoming"));
+            remove_any(&incoming)?;
+            let copied = if std::fs::symlink_metadata(staged)?.is_dir() {
+                copy_tree(staged, &incoming)
+            } else {
+                std::fs::copy(staged, &incoming).map(|_| ())
+            };
+            if let Err(error) = copied.and_then(|()| std::fs::rename(&incoming, installed)) {
+                let _ = remove_any(&incoming);
+                return Err(error);
+            }
+            let _ = remove_any(staged);
+            Ok(())
+        }
+        other => other,
     }
 }
 
@@ -2009,6 +2031,30 @@ mod tests {
         assert_eq!(install(&plan).unwrap(), PlatformSupport::Performed);
         assert_eq!(std::fs::read_to_string(&installed).unwrap(), "new");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_appimage_swap_never_opens_the_installed_file_for_writing() {
+        let dir = scratch("appimage-read-only");
+        let installed = dir.join("Riseonly.AppImage");
+        let staging = dir.join("stage");
+        std::fs::write(&installed, "old").unwrap();
+        let mut permissions = std::fs::metadata(&installed).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&installed, permissions).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("Riseonly.AppImage"), "new").unwrap();
+
+        let plan = InstallPlan {
+            method: InstallMethod::ReplaceFile,
+            staged: staging.join("Riseonly.AppImage"),
+            installed: installed.clone(),
+            displaced: displaced_path(&installed, &staging),
+        };
+
+        assert_eq!(install(&plan).unwrap(), PlatformSupport::Performed);
+        assert_eq!(std::fs::read_to_string(&installed).unwrap(), "new");
         std::fs::remove_dir_all(&dir).ok();
     }
 

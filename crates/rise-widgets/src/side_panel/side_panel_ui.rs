@@ -1,10 +1,11 @@
 use gpui::{
-    AnyView, App, ClickEvent, Context, Div, Entity, EventEmitter, Global, IntoElement, KeyBinding,
+    AnyView, App, Context, Div, Entity, EventEmitter, Global, IntoElement, KeyBinding,
     MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Render, SharedString, StyleRefinement, Window, actions, div,
     prelude::*,
 };
 use rise_theme::{AppTheme, PanelMetrics};
-use rise_ui::IconUi;
+use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
+use rise_ui::scroll_edge_blur_ui::ScrollEdgeBlurUi;
 
 use super::panel_gestures::{self, ResizeOutcome};
 use super::side_panel_preferences::SidePanelPreferences;
@@ -68,6 +69,9 @@ pub struct SidePanelUi {
     shows_close: bool,
     header_leading: Option<AnyView>,
     header_overlays: bool,
+    grip_trailing: bool,
+    grip_outside: bool,
+    header_blurred: bool,
 }
 
 impl EventEmitter<SidePanelEvent> for SidePanelUi {}
@@ -98,6 +102,9 @@ impl SidePanelUi {
             shows_close: true,
             header_leading: None,
             header_overlays: false,
+            grip_trailing: false,
+            grip_outside: false,
+            header_blurred: false,
         }
     }
 
@@ -188,6 +195,46 @@ impl SidePanelUi {
         cx.notify();
     }
 
+    /// the panel stands before the centre, its resize grip moves to the edge that faces the centre
+    pub fn set_grip_trailing(&mut self, trailing: bool, cx: &mut Context<Self>) {
+        if self.grip_trailing == trailing {
+            return;
+        }
+        self.grip_trailing = trailing;
+        cx.notify();
+    }
+
+    pub fn set_grip_outside(&mut self, outside: bool, cx: &mut Context<Self>) {
+        if self.grip_outside == outside {
+            return;
+        }
+        self.grip_outside = outside;
+        cx.notify();
+    }
+
+    pub fn begin_resize(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let metrics = rise_ui::theme(cx).panel;
+        self.begin(event, &metrics, cx);
+    }
+
+    pub fn resize_to_pointer(&mut self, pointer_x: Pixels, cx: &mut Context<Self>) {
+        let theme = rise_ui::theme(cx).clone();
+        self.resize_to(pointer_x, &theme, cx);
+    }
+
+    pub fn end_resize(&mut self, cx: &mut Context<Self>) {
+        let theme = rise_ui::theme(cx).clone();
+        self.release(&theme, cx);
+    }
+
+    pub fn set_header_blurred(&mut self, blurred: bool, cx: &mut Context<Self>) {
+        if self.header_blurred == blurred {
+            return;
+        }
+        self.header_blurred = blurred;
+        cx.notify();
+    }
+
     pub fn set_header_overlays(&mut self, header_overlays: bool, cx: &mut Context<Self>) {
         if self.header_overlays == header_overlays {
             return;
@@ -254,11 +301,8 @@ impl SidePanelUi {
             return;
         };
 
-        let width = panel_gestures::width_during_drag(
-            &theme.panel,
-            drag.start_width,
-            pointer_x - drag.start_x,
-        );
+        let travel = if self.grip_trailing { drag.start_x - pointer_x } else { pointer_x - drag.start_x };
+        let width = panel_gestures::width_during_drag(&theme.panel, drag.start_width, travel);
 
         if width != self.width {
             self.width = width;
@@ -288,41 +332,42 @@ impl SidePanelUi {
     }
 
     fn header(
-        theme: &AppTheme,
         shows_close: bool,
         overlays: bool,
+        blurred: bool,
         leading: Option<AnyView>,
         cx: &mut Context<Self>,
     ) -> Div {
-        let side = theme.shell.rail_icon_size;
-
         div()
             .when(overlays, |header| header.absolute().top_0().left_0().right_0())
+            .when(overlays && blurred, |header| {
+                header.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(ScrollEdgeBlurUi::new().fit_height(PageHeaderMetrics::PANEL_STRIP_HEIGHT)),
+                )
+            })
             .flex()
             .flex_row()
             .justify_end()
             .flex_shrink_0()
-            .h(theme.shell.window_drag_height)
-            .px(theme.shell.rail_padding)
+            .h(gpui::px(PageHeaderMetrics::PANEL_STRIP_HEIGHT))
+            .pt(gpui::px(PageHeaderMetrics::TOP_INSET))
+            .px(gpui::px(PageHeaderMetrics::BAR_EDGE_INSET))
+            .gap(gpui::px(PageHeaderMetrics::BUTTON_GAP))
             .items_center()
             .children(leading.map(|leading| {
                 div().flex_1().h_full().child(leading.cached(StyleRefinement::default().size_full()))
             }))
             .when(shows_close, |header| {
+                let panel = cx.entity().downgrade();
                 header.child(
-                    div()
-                        .id("side_panel.close")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(side + theme.shell.rail_padding)
-                        .rounded(theme.radius._100)
-                        .cursor_pointer()
-                        .hover(|button| button.bg(theme.bg._200))
-                        .children(IconUi::sized(CLOSE_SYMBOL, side * 0.7, theme.text.secondary, false))
-                        .on_click(cx.listener(|panel, _: &ClickEvent, _window, cx| {
-                            panel.set_open(false, cx);
-                        })),
+                    PageHeaderIconButton::new("side_panel.close", CLOSE_SYMBOL, move |_, cx| {
+                        let _ = panel.update(cx, |panel, cx| panel.set_open(false, cx));
+                    }),
                 )
             })
     }
@@ -341,7 +386,7 @@ impl Render for SidePanelUi {
         let release_theme = theme.clone();
         let release_out_theme = theme.clone();
         let overlays = !self.shows_close || self.header_overlays;
-        let header = Self::header(&theme, self.shows_close, overlays, self.header_leading.clone(), cx);
+        let header = Self::header(self.shows_close, overlays, self.header_blurred, self.header_leading.clone(), cx);
         let (flow_header, overlay_header) = if overlays { (None, Some(header)) } else { (Some(header), None) };
 
         div()
@@ -388,16 +433,16 @@ impl Render for SidePanelUi {
                             .child(self.content.clone()),
                     )
                     .children(overlay_header)
-                    .child(
+                    .when(!self.grip_outside, |column| column.child(
                         div()
                             .id("side_panel.grip")
                             .absolute()
                             .top_0()
                             .bottom_0()
-                            .left_0()
+                            .when(self.grip_trailing, |grip| grip.right_0())
+                            .when(!self.grip_trailing, |grip| grip.left_0())
                             .w(theme.panel.grip_width)
                             .cursor_col_resize()
-                            .when(self.drag.is_some(), |grip| grip.bg(theme.primary._100))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |panel, event: &MouseDownEvent, _window, cx| {
@@ -411,7 +456,7 @@ impl Render for SidePanelUi {
                                 },
                                 |_, _, _, cx| cx.new(|_| ResizeGhost),
                             ),
-                    ),
+                    )),
             )
             .into_any_element()
     }

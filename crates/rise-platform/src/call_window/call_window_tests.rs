@@ -75,7 +75,7 @@ fn call_windows_float_by_kind_except_on_linux() {
 }
 
 #[test]
-fn floating_window_opens_without_focus_and_fixed_size() {
+fn floating_window_opens_without_focus_and_resizes_from_corners() {
     let options = floating_window_options_for(
         HostOs::MacOs,
         screen(),
@@ -83,7 +83,7 @@ fn floating_window_opens_without_focus_and_fixed_size() {
         FloatingCorner::BottomLeading,
     );
     assert!(!options.focus);
-    assert!(!options.is_resizable);
+    assert!(options.is_resizable, "the corners resize the floating window");
     assert!(!options.is_minimizable);
     assert!(options.titlebar.is_none());
     assert_eq!(
@@ -264,4 +264,16 @@ fn screen_point_lparam_keeps_negative_monitor_coordinates() {
     let lparam = screen_point_lparam(-1920, -8);
     assert_eq!((lparam & 0xffff) as u16 as i16, -1920);
     assert_eq!(((lparam >> 16) & 0xffff) as u16 as i16, -8);
+}
+
+#[test]
+fn a_corner_drag_keeps_the_opposite_corner_and_the_minimum_size() {
+    let start = Bounds::new(point(px(100.0), px(100.0)), size(px(320.0), px(180.0)));
+    let grown = FloatingResizeCorner::TopLeft.dragged_frame(start, point(px(50.0), px(60.0)));
+    assert_eq!(grown.right(), start.right());
+    assert_eq!(grown.bottom(), start.bottom());
+    assert_eq!(grown.size, size(px(370.0), px(220.0)));
+    let shrunk = FloatingResizeCorner::BottomRight.dragged_frame(start, point(px(110.0), px(110.0)));
+    assert_eq!(shrunk.origin, start.origin);
+    assert_eq!(shrunk.size, floating_window_min_size());
 }

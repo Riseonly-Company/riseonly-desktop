@@ -371,6 +371,14 @@ static GET_USER_FAVORITES: LazyLock<RisePostEndpoint> = LazyLock::new(|| {
     )
 });
 
+static GET_USER_LIKED: LazyLock<RisePostEndpoint> = LazyLock::new(|| {
+    RisePostEndpoint::new(
+        rise_wire_methods::post::SERVICE,
+        rise_wire_methods::post::GET_USER_LIKED,
+        RiseEndpointKind::Read,
+    )
+});
+
 static RECORD_POST_SHARE: LazyLock<RisePostEndpoint> = LazyLock::new(|| {
     RisePostEndpoint::new(
         rise_wire_methods::post::SERVICE,
@@ -537,6 +545,10 @@ impl RisePostEndpoints {
         &GET_USER_FAVORITES
     }
 
+    pub fn get_user_liked() -> &'static RisePostEndpoint {
+        &GET_USER_LIKED
+    }
+
     pub fn record_post_share() -> &'static RisePostEndpoint {
         &RECORD_POST_SHARE
     }
@@ -584,6 +596,7 @@ impl RisePostEndpoints {
             Self::get_post_collaborators(),
             Self::get_user_mentions(),
             Self::get_user_favorites(),
+            Self::get_user_liked(),
         ]
     }
 
@@ -603,6 +616,7 @@ impl RisePostEndpoints {
             RisePostProfileKind::Reposts => Self::get_user_reposts(),
             RisePostProfileKind::Mentions => Self::get_user_mentions(),
             RisePostProfileKind::Favorites => Self::get_user_favorites(),
+            RisePostProfileKind::Liked => Self::get_user_liked(),
         }
     }
 

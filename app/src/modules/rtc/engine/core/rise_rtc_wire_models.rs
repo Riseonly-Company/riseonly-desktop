@@ -68,6 +68,8 @@ impl RiseRTCWireModel for Participant {
             screen_share_enabled: self.screen_share_enabled,
             server_muted: self.server_muted,
             server_deafened: self.server_deafened,
+            server_camera_blocked: self.server_camera_blocked,
+            server_screen_share_blocked: self.server_screen_share_blocked,
             deafened: self.deafened,
             hand_raised: self.hand_raised,
             joined_at_ms: self.joined_at_ms,

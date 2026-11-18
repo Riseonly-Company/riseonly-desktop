@@ -118,6 +118,7 @@ windows-core.workspace = true
 # Screen share system sound (screen_capture/linux.rs, P245); links libpipewire-0.3 at load time.
 pipewire = "0.8"
 x11rb.workspace = true
+zbus.workspace = true
 
 # Linux and Windows: the poster of a remote chat video (video_export remote_poster, P153) feeds
 # libavformat through ranged GET requests, because the LGPL prefix ships without network protocols
@@ -131,10 +132,10 @@ rustls-platform-verifier = { workspace = true, optional = true }
 
 # Maps: MapLibre Native, the engine iOS draws with (docs/DEPENDENCIES.md). build.rs links
 # the prebuilt amalgam core, from a local copy when MLN_CORE_LIBRARY_PATH and
-# MLN_CORE_LIBRARY_HEADERS_PATH are set: Metal on macOS, Vulkan on Linux.
-# maplibre-native publishes no Windows core and build.rs refuses Windows, so the crate is not a
-# Windows dependency and map_view answers there with the reason (map_view/windows.rs).
-[target.'cfg(not(target_os = "windows"))'.dependencies]
+# MLN_CORE_LIBRARY_HEADERS_PATH are set: Metal on macOS, Vulkan on Linux and Windows. The released
+# Windows core is /MD and incomplete, so Windows links the static one scripts/build-maplibre-core-windows.sh
+# builds (scripts/windows-check.sh points MLN_CORE_LIBRARY_PATH at it).
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 maplibre_native = { version = "=0.10.0", default-features = false, features = ["geojson", "json"] }
 
 [build-dependencies]

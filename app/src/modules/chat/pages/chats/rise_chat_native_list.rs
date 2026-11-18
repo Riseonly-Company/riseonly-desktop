@@ -12,16 +12,15 @@ use gpui::{
     AnyElement, AnyView, App, AppContext, AsyncApp, AvailableSpace, Bounds, Context, Edges, ElementId, EmptyView, Entity,
     EntityId,
     InteractiveElement, IntoElement, ParentElement, Pixels, Render, RenderOnce, SharedString, Size, StyleRefinement, Styled,
-    WeakEntity, Window, canvas, deferred, div, px,
+    WeakEntity, Window, canvas, deferred, div, px, BoxShadow, hsla, point,
 };
 use rise_core::foundation::foundation_calendar::TimeZone;
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_i18n::language_store::LanguageStore;
 use rise_theme::ThemeStore;
 use rise_ui::frame_request::is_painted_on_screen;
-use rise_ui::swiftui::animated::Animated;
+use rise_ui::reorder_grip::ReorderMotion;
 use rise_ui::swiftui::environment::{env_scope, layout_direction};
-use rise_ui::swiftui::motion::{MotionSpec, spring};
 use rise_ui::swiftui::page_refresh::PageRefreshKeys;
 
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
@@ -95,7 +94,9 @@ pub struct RiseChatNativeListControl {
     list: RefCell<Option<WeakEntity<RiseManualListView>>>,
     first_rows: RefCell<Option<Entity<RiseChatNativeListFirstRows>>>,
     initial_top_offset: Cell<f32>,
-    row_shifts: RefCell<HashMap<String, f32>>,
+    motion: RefCell<ReorderMotion<String>>,
+    motion_base: RefCell<Vec<String>>,
+    motion_strides: RefCell<HashMap<String, f32>>,
     lifted_row_id: RefCell<Option<String>>,
     settling_order: RefCell<Option<Vec<String>>>,
     settle_generation: Cell<u64>,
@@ -109,7 +110,6 @@ pub struct RiseChatNativeListControl {
 impl RiseChatNativeListControl {
     const SETTLE_DEADLINE: Duration = Duration::from_millis(1_500);
     const SETTLE_MAX_EXTENSIONS: u32 = 3;
-    const SHIFT_DURATION: Duration = Duration::from_millis(300);
 
     pub fn new() -> Self {
         Self::default()
@@ -123,8 +123,62 @@ impl RiseChatNativeListControl {
         *self.requested_ids.borrow_mut() = ids;
     }
 
-    pub fn row_shift(&self, id: &str) -> f32 {
-        self.row_shifts.borrow().get(id).copied().unwrap_or(0.0)
+    /// starts a drag over the rows of base laid out in that order, each row with its stride
+    pub fn begin_reorder(&self, base: Vec<String>, strides: HashMap<String, f32>, cx: &mut App) {
+        self.settle_generation.set(self.settle_generation.get().wrapping_add(1));
+        *self.settling_order.borrow_mut() = None;
+        self.motion.borrow_mut().reset();
+        *self.motion_base.borrow_mut() = base;
+        *self.motion_strides.borrow_mut() = strides;
+        self.notify_rows(cx);
+    }
+
+    /// pointer travel of the dragged row since the press, true when a row changed its slot
+    pub fn drag_reorder(&self, id: &str, translation: f32, cx: &mut App) -> bool {
+        let base = self.motion_base.borrow().clone();
+        let strides = self.motion_strides.borrow().clone();
+        let swapped = self.motion.borrow_mut().drag(
+            &id.to_owned(),
+            translation,
+            &base,
+            |key| strides.get(key).copied().unwrap_or(0.0),
+            RiseClock::monotonic(),
+            cx.reduce_motion(),
+        );
+        self.notify_rows(cx);
+        swapped
+    }
+
+    /// the drop, hands back the order to save while the dragged row glides into its slot
+    pub fn end_reorder(&self, cx: &mut App) -> Option<Vec<String>> {
+        let order = self.motion.borrow_mut().end(RiseClock::monotonic(), cx.reduce_motion());
+        self.notify_rows(cx);
+        order
+    }
+
+    /// where a row draws from its slot in the list, asks for frames while the motion runs
+    pub fn row_offset(&self, id: &str, window: &Window) -> f32 {
+        let base = self.motion_base.borrow();
+        let strides = self.motion_strides.borrow();
+        self.motion.borrow().offset_from_base(
+            &id.to_owned(),
+            &base,
+            |key| strides.get(key).copied().unwrap_or(0.0),
+            window,
+        )
+    }
+
+    pub fn row_raise(&self, id: &str, window: &Window) -> f32 {
+        self.motion.borrow().lift(&id.to_owned(), window)
+    }
+
+    fn notify_rows(&self, cx: &mut App) {
+        let ids = self.motion_base.borrow().clone();
+        for id in &ids {
+            if let Some(host) = self.row_host(id, cx) {
+                host.update(cx, |_, cx| cx.notify());
+            }
+        }
     }
 
     fn row_host(&self, id: &str, cx: &App) -> Option<Entity<RiseChatNativeRowHost>> {
@@ -156,40 +210,6 @@ impl RiseChatNativeListControl {
         }
     }
 
-    pub fn shift_row(
-        &self,
-        id: &str,
-        y: f32,
-        animated: bool,
-        completion: Option<Box<dyn FnOnce(&mut App)>>,
-        cx: &mut App,
-    ) {
-        let current = self.row_shift(id);
-        if y == 0.0 {
-            self.row_shifts.borrow_mut().remove(id);
-        } else {
-            self.row_shifts.borrow_mut().insert(id.to_owned(), y);
-        }
-        let host = self.row_host(id, cx);
-        let Some(host) = host.filter(|_| animated && (current - y).abs() > 0.5) else {
-            if let Some(host) = self.row_host(id, cx) {
-                host.update(cx, |host, cx| host.set_shift(y, None, cx));
-            }
-            if let Some(completion) = completion {
-                completion(cx);
-            }
-            return;
-        };
-        host.update(cx, |host, cx| host.set_shift(y, Some(spring(0.3, 0.86)), cx));
-        if let Some(completion) = completion {
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(Self::SHIFT_DURATION).await;
-                let _ = cx.update(completion);
-            })
-            .detach();
-        }
-    }
-
     pub fn settle_row_shifts(self: &Rc<Self>, order: Vec<String>, cx: &mut App) {
         *self.settling_order.borrow_mut() = Some(order);
         self.settle_extensions.set(0);
@@ -216,19 +236,27 @@ impl RiseChatNativeListControl {
                     return;
                 }
                 *this.settling_order.borrow_mut() = None;
-                this.clear_row_shifts(true, cx);
+                this.clear_row_shifts(cx);
             });
         })
         .detach();
     }
 
-    pub fn clear_row_shifts(&self, animated: bool, cx: &mut App) {
+    /// drops every row offset at once, the list keeps its own order
+    pub fn clear_row_shifts(&self, cx: &mut App) {
         self.settle_generation.set(self.settle_generation.get().wrapping_add(1));
         *self.settling_order.borrow_mut() = None;
-        let ids: Vec<String> = self.row_shifts.borrow().keys().cloned().collect();
-        for id in ids {
-            self.shift_row(&id, 0.0, animated, None, cx);
-        }
+        self.motion.borrow_mut().reset();
+        self.notify_rows(cx);
+        self.lift_row(None, cx);
+    }
+
+    /// the dropped order is laid out, a glide still running goes on from the new slots
+    fn settle_rows(&self, cx: &mut App) {
+        self.settle_generation.set(self.settle_generation.get().wrapping_add(1));
+        *self.settling_order.borrow_mut() = None;
+        self.motion.borrow_mut().settle();
+        self.notify_rows(cx);
         self.lift_row(None, cx);
     }
 
@@ -247,8 +275,12 @@ impl RiseChatNativeListControl {
         if !self.lands_settling_order(ids) {
             return;
         }
+        self.settle_in_list(cx);
+    }
+
+    fn settle_in_list(self: &Rc<Self>, cx: &mut App) {
         self.list_busy.set(true);
-        self.clear_row_shifts(false, cx);
+        self.settle_rows(cx);
         self.list_busy.set(false);
         let missed = std::mem::take(&mut *self.missed_hosts.borrow_mut());
         if missed.is_empty() {
@@ -257,13 +289,13 @@ impl RiseChatNativeListControl {
         let this = self.clone();
         cx.defer(move |cx| {
             for id in missed {
-                if this.row_shifts.borrow().contains_key(&id) || this.lifted_row_id.borrow().as_deref() == Some(id.as_str()) {
+                if this.lifted_row_id.borrow().as_deref() == Some(id.as_str()) {
                     continue;
                 }
                 if let Some(host) = this.row_host(&id, cx) {
                     host.update(cx, |host, cx| {
-                        host.set_shift(0.0, None, cx);
                         host.set_lifted(false, cx);
+                        cx.notify();
                     });
                 }
             }
@@ -1336,7 +1368,7 @@ impl RiseChatNativeListCoordinator {
             };
             let row = row.clone();
             let row_activity = row_activity.clone();
-            let shift = shift_control.as_ref().map_or(0.0, |control| control.row_shift(id));
+            let row_control = shift_control.as_ref().map(Rc::downgrade);
             let version = row.version;
             RiseManualListItem::new(
                 height,
@@ -1354,15 +1386,16 @@ impl RiseChatNativeListCoordinator {
                     let row_id = SharedString::from(row.id.clone());
                     let content = row.content.clone();
                     let row_activity = row_activity.clone();
+                    let row_control = row_control.clone();
                     host.update(cx, |host, cx| {
                         host.configure(row_id, version, content, row_activity, cx);
-                        host.set_shift(shift, None, cx);
+                        host.control = row_control;
                     });
                     host.into()
                 }),
             )
         });
-        let transaction = RiseManualListTransaction::new(
+        let mut transaction = RiseManualListTransaction::new(
             ids.clone(),
             anchor,
             Some(width),
@@ -1374,6 +1407,13 @@ impl RiseChatNativeListCoordinator {
             HashSet::from([footer_id]),
             provider,
         );
+        if lands_reorder && let Some(control) = value.control.clone() {
+            transaction.before_layout = Some(Rc::new(
+                move |_: &mut RiseManualListView, _: &mut Window, cx: &mut Context<RiseManualListView>| {
+                    control.settle_in_list(cx);
+                },
+            ));
+        }
         let owner = self.this.clone();
         let discard_owner = self.this.clone();
         self.list.update(cx, |list, cx| {
@@ -1444,7 +1484,7 @@ impl RiseChatNativeListCoordinator {
 pub struct RiseChatNativeRowHost {
     hosted: Option<(SharedString, i64, RiseChatNativeListRowElement, Entity<ChatListRowActivity>)>,
     content: Entity<RiseChatNativeRowContent>,
-    shift: Animated<f32>,
+    control: Option<Weak<RiseChatNativeListControl>>,
     lifted: bool,
 }
 
@@ -1453,7 +1493,7 @@ impl RiseChatNativeRowHost {
         RiseManualListConformances::register_reusable_view::<Self>(cx);
         RiseManualListConformances::register_moved_replay_row::<Self>(cx);
         let content = cx.new(|_| RiseChatNativeRowContent { content: None, configured: None, last_env: 0 });
-        Self { hosted: None, content, shift: Animated::new(0.0), lifted: false }
+        Self { hosted: None, content, control: None, lifted: false }
     }
 
     fn configure(
@@ -1492,14 +1532,6 @@ impl RiseChatNativeRowHost {
         cx.notify();
     }
 
-    pub fn set_shift(&mut self, y: f32, spec: Option<MotionSpec>, cx: &mut Context<Self>) {
-        if *self.shift.target() == y {
-            return;
-        }
-        self.shift.set_in(y, spec, RiseClock::monotonic(), cx);
-        cx.notify();
-    }
-
     fn hosts_row(&self, id: &str) -> bool {
         self.hosted.as_ref().is_some_and(|(hosted_id, ..)| hosted_id.as_str() == id)
     }
@@ -1515,19 +1547,32 @@ impl RiseChatNativeRowHost {
 
 impl Render for RiseChatNativeRowHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some((id, _, content, row_activity)) = self.hosted.clone() else {
+        let Some((id, _, _, row_activity)) = self.hosted.clone() else {
             tracing::warn!(target: "riseonly::X1693", host = %cx.entity_id(), "chat row host drawn blank");
             return div().into_any_element();
         };
-        let shift = self.shift.frame_value(RiseClock::monotonic(), window);
-        let row = div().id(ElementId::Name(id)).relative().top(px(shift)).size_full();
+        let control = self.control.as_ref().and_then(Weak::upgrade);
+        let shift = control.as_ref().map_or(0.0, |control| control.row_offset(&id, window));
+        let raise = control.as_ref().map_or(0.0, |control| control.row_raise(&id, window));
+        let surface = rise_ui::theme(cx).bg._100;
+        let row = div().id(ElementId::Name(id)).relative().top(px(shift)).size_full().when(raise > 0.0, |row| {
+            row.bg(surface).shadow(vec![BoxShadow {
+                color: hsla(0.0, 0.0, 0.0, 0.24 * raise),
+                offset: point(px(0.0), px(6.0 * raise)),
+                blur_radius: px(18.0 * raise),
+                spread_radius: px(0.0),
+                inset: false,
+            }])
+        });
         let row = if self.lifted {
-            deferred(row.child(content(window, cx))).with_priority(1).into_any_element()
+            deferred(row.child(AnyView::from(self.content.clone()))).with_priority(1).into_any_element()
         } else {
             row.child(AnyView::from(self.content.clone()).cached(StyleRefinement::default().size_full()))
                 .into_any_element()
         };
-        env_scope::<ChatListRowActivityKey>(Some(row_activity)).child(row).into_any_element()
+        env_scope::<ChatListRowActivityKey>(Some(row_activity))
+            .child(div().relative().size_full().child(row))
+            .into_any_element()
     }
 }
 
@@ -1539,7 +1584,6 @@ impl RiseManualListReusableView for RiseChatNativeRowHost {
             row.configured = Some(SharedString::from("reuse"));
             cx.notify();
         });
-        self.shift.jump(0.0);
         self.lifted = false;
         cx.notify();
     }

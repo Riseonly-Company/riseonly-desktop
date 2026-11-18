@@ -65,10 +65,10 @@ impl PresenceActionsStore {
         );
     }
 
-    pub fn set_away_action(&self, status: String, cx: &mut App) {
+    pub fn set_away_action(&self, status: String, app_active: Option<bool>, cx: &mut App) {
         SaiWs::request_slice(
             &self.set_away_sai,
-            SetAway { status: Some(status) },
+            SetAway { status: Some(status), app_active },
             Self::presence_options(gateway::SET_AWAY),
             Some(Rc::new(|_: Option<Box<dyn Any>>, _: &mut App| {})),
             Some(Rc::new(|_: &anyhow::Error, _: &mut App| {})),

@@ -27,7 +27,9 @@ use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiSliceState;
 use crate::core::lib::sai::modules::sai_debouncer::sai_debouncer::SaiDebouncer;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_pending_registry::SaiWsPendingRegistry;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::wrappers::list_shell_ui::{SettingsWrapperUi, list_shell_floating_top_inset};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui::ChatProfileEmptyState;
@@ -445,7 +447,12 @@ impl PrivacyExceptionsScreenParts {
                             .name(SharedString::from(user.target_user_name.clone()))
                             .user_id(SharedString::from(id.clone()))
                             .size(40.0)
-                            .show_story_ring(false),
+                            .open_story_on_press(false)
+                            .gift_worn_frame(
+                                SharedString::from(format!("privacy-exceptions-row-frame-{id}")),
+                                Some(id.clone()),
+                                40.0,
+                            ),
                     )
                     .child(
                         vstack(2.0)
@@ -453,7 +460,8 @@ impl PrivacyExceptionsScreenParts {
                             .min_w_0()
                             .align(HorizontalAlignment::Leading)
                             .child(
-                                MainText::new(title).px(15.0).tac(TextAlignT::Left).font_weight(FontWeight::MEDIUM),
+                                UserNameWithBadges::new(Some(SharedString::from(id.clone())), title)
+                                    .font(15.0, FontWeight::MEDIUM),
                             )
                             .when(!user.target_user_tag.is_empty(), |labels| {
                                 labels.child(

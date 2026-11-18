@@ -21,6 +21,7 @@ use rise_platform::notifications::GpuiNotificationPresenter;
 
 use crate::app::shell::handover;
 use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, RiseSubscription};
+use crate::core::desktop_platform::rise_app_quit_drain::QuitDrain;
 use crate::core::lib::canon_errors::CanonErrors;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
@@ -39,6 +40,7 @@ use crate::modules::rtc::engine::rise_rtc_connection_wait_policy::{
 };
 use crate::modules::rtc::engine::rise_rtc_engine_models::RiseRTCStateError;
 use crate::modules::rtc::media::rise_rtc_ringback_player::RiseRTCRingbackPlayer;
+use crate::modules::rtc::stores::rtc::rtc_interactions::rtc_interactions::RTCInteractionsStore;
 use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 use crate::modules::rtc::system::rise_rtc_incoming_call_window::RiseRTCIncomingCallWindow;
 use crate::modules::rtc::system::rise_rtc_incoming_ringtone_player::RiseRTCIncomingRingtonePlayer;
@@ -68,6 +70,7 @@ const DEFERRED_SIGNALS_LIMIT: usize = 128;
 
 const TERMINAL_RECONCILE_WINDOW: Duration = Duration::from_secs(60);
 const MANAGED_CALL_REMOVAL_DELAY: Duration = Duration::from_secs(30);
+const TERMINATION_LEAVE_BUDGET: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 struct ManagedCall {
@@ -237,6 +240,21 @@ impl RiseRTCCallSystemCoordinator {
             }
         }));
         self.retry_vo_ip_registration(cx);
+    }
+
+    pub fn leave_before_termination(&mut self, cx: &mut Context<Self>) {
+        let interactions = RTCInteractionsStore::shared(cx);
+        if !interactions.update(cx, |interactions, cx| interactions.has_call_or_room_to_leave(cx)) {
+            return;
+        }
+        let lease = QuitDrain::lease("rtc.leave_before_termination", cx);
+        let leave = interactions.update(cx, |interactions, cx| interactions.leave_before_termination(cx));
+        let limit = cx.background_executor().timer(TERMINATION_LEAVE_BUDGET);
+        cx.spawn(async move |_: WeakEntity<Self>, _: &mut AsyncApp| {
+            let _ = select(leave, limit).await;
+            drop(lease);
+        })
+        .detach();
     }
 
     pub fn authenticated_account_did_activate(&mut self, raw_user_id: &str, cx: &mut Context<Self>) {

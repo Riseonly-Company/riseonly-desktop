@@ -709,13 +709,17 @@ impl Render for MusicSearchOverlayView {
                     MusicSearchOverlay::close(is_presented, window, cx);
                 }
             }))
-            .child(vstack(0.0).size_full().child(header).child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .child(AnyView::from(self.results.clone()).cached(StyleRefinement::default().size_full())),
-            ))
+            .child(
+                div().size_full().flex().justify_center().child(
+                    vstack(0.0).h_full().w_full().max_w(theme.shell.music_max_width).child(header).child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .child(AnyView::from(self.results.clone()).cached(StyleRefinement::default().size_full())),
+                    ),
+                ),
+            )
     }
 }
 

@@ -1187,6 +1187,8 @@ impl RiseRTCRepository {
             | RiseRTCMediaEvent::Disconnected { .. }
             | RiseRTCMediaEvent::Failure { .. }
             | RiseRTCMediaEvent::LocalScreenShareEnded { .. }
+            | RiseRTCMediaEvent::LocalMicrophoneLost { .. }
+            | RiseRTCMediaEvent::LocalPlayoutLost { .. }
             | RiseRTCMediaEvent::LocalBroadcastStarted { .. }
             | RiseRTCMediaEvent::LocalCameraPaused { .. }
             | RiseRTCMediaEvent::LocalCameraResumed { .. }
@@ -2129,6 +2131,8 @@ impl RiseRTCParticipantCanon for RiseRTCParticipant {
             screen_share_enabled: participant.screen_share_enabled,
             server_muted: participant.server_muted,
             server_deafened: participant.server_deafened,
+            server_camera_blocked: participant.server_camera_blocked,
+            server_screen_share_blocked: participant.server_screen_share_blocked,
             deafened: participant.deafened,
             hand_raised: participant.hand_raised,
             joined_at_ms: participant.joined_at_ms,

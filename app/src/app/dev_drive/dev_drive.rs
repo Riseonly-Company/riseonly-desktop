@@ -9,7 +9,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase, point,
     px, size,
 };
-use rise_core::foundation::foundation_date::RiseClock;
+use rise_core::foundation::foundation_date::{RiseClock, TestClock};
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_core::foundation::foundation_url::Url;
 use rise_media::audio::sound_mute;
@@ -462,6 +462,14 @@ pub enum DriveCommand {
         minimise_at_ms: Option<u64>,
         #[serde(default)]
         restore_at_ms: Option<u64>,
+        #[serde(default)]
+        step_ms: u64,
+        #[serde(default)]
+        end_hold_ms: u64,
+        #[serde(default)]
+        snap_every: usize,
+        #[serde(default)]
+        snap_stem: Option<String>,
     },
     Location {
         #[serde(default)]
@@ -1104,6 +1112,53 @@ pub fn drag_path(from: (f32, f32), waypoints: &[(f32, f32)], steps: usize) -> Ve
     points
 }
 
+/// pacing and snapshots of a drag while the button is down
+struct DragFilm<'a> {
+    step: Duration,
+    end_hold: Duration,
+    every: usize,
+    stem: &'a str,
+    dir: &'a Path,
+    window: usize,
+}
+
+impl DragFilm<'_> {
+    fn clock(&self) -> Option<TestClock> {
+        if self.step.is_zero() {
+            return None;
+        }
+        let now = RiseClock::now();
+        let clock = TestClock::new(now);
+        clock.advance(RiseClock::monotonic());
+        clock.set_now(now);
+        Some(clock)
+    }
+
+    async fn tick(
+        &self,
+        handle: AnyWindowHandle,
+        frame: usize,
+        clock: Option<&TestClock>,
+        paths: &mut Vec<PathBuf>,
+        cx: &AsyncApp,
+    ) -> Result<(), String> {
+        if !self.step.is_zero() {
+            cx.background_executor().timer(self.step).await;
+            if let Some(clock) = clock {
+                clock.advance(self.step);
+            }
+            cx.update(|cx| draw_window(handle, cx))?;
+        }
+        if self.every > 0 && frame % self.every == 0 {
+            let stem = format!("{}-{frame:03}", self.stem);
+            let reply = cx.update(|cx| drive_snapshot(self.dir, &stem, self.window, cx))?;
+            paths.extend(reply.path);
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn drive_drag(
     handle: AnyWindowHandle,
     from: (f32, f32),
@@ -1111,8 +1166,11 @@ async fn drive_drag(
     steps: usize,
     hold: Duration,
     mut window_plan: HoldWindowPlan,
+    film: Option<DragFilm<'_>>,
     cx: &AsyncApp,
-) -> Result<(), String> {
+) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::new();
+    let mut frame = 0;
     let button = MouseButton::Left;
     settle(handle, cx).await?;
     dispatch(handle, move_event(from.0, from.1), cx).await?;
@@ -1126,6 +1184,8 @@ async fn drive_drag(
     dispatch(handle, down, cx).await?;
     let pressed_at = RiseClock::monotonic();
     hold_down(handle, hold, None, &mut window_plan, pressed_at, cx).await?;
+    let clock = film.as_ref().and_then(DragFilm::clock);
+    let _clock = clock.clone().map(RiseClock::install_test);
     let to = waypoints.last().copied().unwrap_or(from);
     for (x, y) in drag_path(from, waypoints, steps) {
         let moved = PlatformInput::MouseMove(MouseMoveEvent {
@@ -1135,6 +1195,20 @@ async fn drive_drag(
         });
         dispatch(handle, moved, cx).await?;
         apply_window_plan(handle, &mut window_plan, Some(pressed_at), cx)?;
+        if let Some(film) = &film {
+            frame += 1;
+            film.tick(handle, frame, clock.as_ref(), &mut paths, cx).await?;
+        }
+    }
+    if let Some(film) = &film
+        && !film.step.is_zero()
+    {
+        let mut held = Duration::ZERO;
+        while held < film.end_hold {
+            frame += 1;
+            film.tick(handle, frame, clock.as_ref(), &mut paths, cx).await?;
+            held += film.step;
+        }
     }
     let up = PlatformInput::MouseUp(MouseUpEvent {
         button,
@@ -1143,7 +1217,18 @@ async fn drive_drag(
         click_count: 1,
     });
     dispatch(handle, up, cx).await?;
-    apply_window_plan(handle, &mut window_plan, None, cx)
+    apply_window_plan(handle, &mut window_plan, None, cx)?;
+    if let Some(film) = &film
+        && !film.step.is_zero()
+    {
+        let mut held = Duration::ZERO;
+        while held < film.end_hold {
+            frame += 1;
+            film.tick(handle, frame, clock.as_ref(), &mut paths, cx).await?;
+            held += film.step;
+        }
+    }
+    Ok(paths)
 }
 
 async fn drive_keystrokes(
@@ -1326,7 +1411,21 @@ async fn run_command(dir: &Path, request: DriveRequest, cx: &AsyncApp) -> Result
             let snapshot = drive_click(handle, (x, y), button.mouse_button(), count, hold, snap, plan, cx).await?;
             Ok(snapshot.unwrap_or(DriveReply { window: Some(index), ..DriveReply::default() }))
         }
-        DriveCommand::Drag { x1, y1, x2, y2, steps, hold_ms, then, minimise_at_ms, restore_at_ms } => {
+        DriveCommand::Drag {
+            x1,
+            y1,
+            x2,
+            y2,
+            steps,
+            hold_ms,
+            then,
+            minimise_at_ms,
+            restore_at_ms,
+            step_ms,
+            end_hold_ms,
+            snap_every,
+            snap_stem,
+        } => {
             let (index, handle) = target()?;
             let mut waypoints = vec![(x2, y2)];
             waypoints.extend(then);
@@ -1335,8 +1434,18 @@ async fn run_command(dir: &Path, request: DriveRequest, cx: &AsyncApp) -> Result
                 cx.update(|cx| check_position(handle, x, y, cx))?;
             }
             let plan = HoldWindowPlan::from_ms(minimise_at_ms, restore_at_ms);
-            drive_drag(handle, (x1, y1), &waypoints, steps, Duration::from_millis(hold_ms), plan, cx).await?;
-            Ok(DriveReply { window: Some(index), ..DriveReply::default() })
+            let stem = snap_stem.unwrap_or_else(|| "drag".to_owned());
+            let film = (step_ms > 0 || snap_every > 0).then(|| DragFilm {
+                step: Duration::from_millis(step_ms),
+                end_hold: Duration::from_millis(end_hold_ms),
+                every: snap_every,
+                stem: stem.as_str(),
+                dir,
+                window: index,
+            });
+            let paths =
+                drive_drag(handle, (x1, y1), &waypoints, steps, Duration::from_millis(hold_ms), plan, film, cx).await?;
+            Ok(DriveReply { window: Some(index), paths, ..DriveReply::default() })
         }
         DriveCommand::Location { latitude, longitude } => {
             drive_location(latitude, longitude)?;

@@ -333,7 +333,7 @@ impl RenderOnce for ExperimentalBottomSheetPresentationHost {
 
         let mut anchor = div().size_0();
         if let Some(layer) = coordinator.read(cx).layer {
-            TopPresenter::note_presented((self.id.clone(), "top-presenter"), window, cx);
+            TopPresenter::note_presented_sheet((self.id.clone(), "top-presenter"), &self.is_presented, window, cx);
             let priority = env::<SheetLayerFloorKey>(cx) + SHEET_LAYER_BASE_PRIORITY + SheetLayerStack::position(layer, cx);
             let cover = WindowCoverFrame::resolve(window, cx);
             let content = self.hosted_content(window, cx);

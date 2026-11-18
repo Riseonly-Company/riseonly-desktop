@@ -5,7 +5,7 @@ use gpui::{App, ElementId, Pixels, SharedString, Window};
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_ui::swiftui::prelude::*;
 
-use crate::core::widgets::wrappers::list_shell_ui::ListShellFloatingTopInsetKey;
+use crate::core::widgets::wrappers::list_shell_ui::list_shell_floating_top_inset;
 use crate::modules::chat::components::chat::async_render::chat_message_render_snapshot::ChatMessageRenderEntryKind;
 use crate::modules::chat::components::chat::async_render::rise_native_system_row_view::RiseNativeSystemRowView;
 use crate::modules::chat::components::chat::async_render::rise_message_list_view::{
@@ -60,6 +60,7 @@ pub struct ChatMessageFeed {
     pub message_selection_active: bool,
     pub selected_message_ids: HashSet<String>,
     pub on_toggle_message_selection: Option<RiseMessageListViewToggleSelectionHandler>,
+    pub on_begin_message_selection: Option<RiseMessageListViewToggleSelectionHandler>,
     pub on_reaction: Option<RiseMessageListViewStringPairHandler>,
     pub on_action: Option<RiseMessageListViewStringPairHandler>,
     pub on_open_sender_profile: Option<RiseMessageListViewOpenSenderProfileHandler>,
@@ -160,6 +161,7 @@ impl ChatMessageFeed {
             message_selection_active: false,
             selected_message_ids: HashSet::new(),
             on_toggle_message_selection: None,
+            on_begin_message_selection: None,
             on_reaction: None,
             on_action: None,
             on_open_sender_profile: None,
@@ -226,7 +228,7 @@ impl ChatMessageFeed {
     }
 
     fn empty_conversation_card(&self, window: &mut Window, cx: &mut App) -> AnyElement {
-        let floating_top_inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let floating_top_inset = list_shell_floating_top_inset(cx);
         let fit = window.use_keyed_state(self.child_id("empty-card-fit"), cx, |_, _| ChatMessageFeedEmptyCardFit::default());
         let measured = *fit.read(cx);
         let record = |write: fn(&mut ChatMessageFeedEmptyCardFit, f32)| {
@@ -337,6 +339,7 @@ impl RenderOnce for ChatMessageFeed {
         list.message_selection_active = self.message_selection_active;
         list.selected_message_ids = self.selected_message_ids;
         list.on_toggle_message_selection = self.on_toggle_message_selection;
+        list.on_begin_message_selection = self.on_begin_message_selection;
         list.initial_data_resolved = self.initial_data_resolved;
         list.can_load_older = self.can_load_older;
         list.can_load_newer = self.can_load_newer;

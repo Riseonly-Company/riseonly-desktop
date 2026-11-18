@@ -41,6 +41,10 @@ use super::system_audio_routing::*;
 const PICK_POLL: Duration = Duration::from_millis(100);
 const HELD_POLL: Duration = Duration::from_millis(500);
 const X11_START_TIMEOUT: Duration = Duration::from_secs(5);
+const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
+const PORTAL_OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
+const SCREEN_CAST_INTERFACE: &str = "org.freedesktop.portal.ScreenCast";
+const SCREEN_CAST_VERSION: &str = "version";
 
 static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 static PENDING: Mutex<Option<(String, Pump)>> = Mutex::new(None);
@@ -387,6 +391,20 @@ fn start_x11(
         Ok(Err(error)) => Err(error),
         Err(_) => Err(ScreenCaptureError::StartFailed("the capture thread did not start".into())),
     }
+}
+
+fn screen_cast_portal() -> Result<(), ScreenCaptureError> {
+    let missing = |error: zbus::Error| ScreenCaptureError::PortalMissing(error.to_string());
+    let connection = zbus::blocking::Connection::session().map_err(missing)?;
+    zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&connection)
+        .destination(PORTAL_BUS_NAME)
+        .and_then(|builder| builder.path(PORTAL_OBJECT_PATH))
+        .and_then(|builder| builder.interface(SCREEN_CAST_INTERFACE))
+        .map(|builder| builder.cache_properties(zbus::proxy::CacheProperties::No))
+        .and_then(|builder| builder.build())
+        .and_then(|proxy| proxy.get_property::<u32>(SCREEN_CAST_VERSION))
+        .map(|_| ())
+        .map_err(missing)
 }
 
 fn on_main_thread() -> bool {
@@ -739,6 +757,7 @@ impl ScreenCaptureBackend for NativeScreenCapture {
         if on_main_thread() {
             return Err(ScreenCaptureError::MainThread);
         }
+        screen_cast_portal()?;
         if let Some((_, previous)) = PENDING.lock().take() {
             previous.stop();
         }
