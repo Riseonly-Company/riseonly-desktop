@@ -12,6 +12,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
     APPIMAGE_EXTRACT_AND_RUN=1
 
+RUN printf 'Acquire::Retries "10";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/80-retries
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg git rsync python3 build-essential pkg-config cmake ninja-build meson \
         software-properties-common \
