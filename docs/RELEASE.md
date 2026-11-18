@@ -73,8 +73,8 @@ the bundle id differ. On Windows the product name in the file properties is `Ris
 Linux and Windows the file is plain and editable; the backend, not the client, decides who gets in.
 
 A kept binary is found by the key of the sources that go into it: every file but `.github/workflows`,
-`docs`, `scripts/bundle-*` and the packaging scripts of `scripts/ci` (`python3 scripts/ci/plan.py key`
-prints it), so a
+`docs`, `scripts/bundle-*` and everything in `scripts/ci` but the `build-*.sh` scripts, the Linux
+and Windows toolchain image included (`python3 scripts/ci/plan.py key` prints it), so a
 change to those compiles nothing again. A binary compiled on another machine joins a release the
 same way: `scripts/ci/payload.sh <build> macos-aarch64=<riseonly> macos-x86_64=<riseonly>` stores
 them in the prerelease `payload-<key>-v<version>-b<build>`, and the macOS jobs of the next release of these
