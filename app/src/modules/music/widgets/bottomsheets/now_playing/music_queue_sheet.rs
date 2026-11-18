@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gpui::{
     App, Context, ElementId, Entity, FontWeight, Hsla, ScrollStrategy, SharedString, Svg, UniformListScrollHandle, Window,
-    black, point, rgb, uniform_list, white,
+    black, point, uniform_list, white,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_i18n::tr;
@@ -35,7 +35,6 @@ use crate::modules::music::widgets::music_mini_player_bottom_padding::observed_m
 use crate::modules::music::widgets::music_player_quick_actions::MusicPlayerQuickActions;
 use crate::modules::music::widgets::music_track_cover_image::MusicCoverImage;
 
-const ACCENT_COLOR: u32 = 0xE84393;
 const QUEUE_ROW_HEIGHT: f32 = 68.5;
 const MINIMUM_VISIBLE_QUEUE_HEIGHT: f32 = 2. * QUEUE_ROW_HEIGHT;
 const EMPTY_QUEUE_HEIGHT: f32 = 84.;
@@ -50,10 +49,6 @@ fn child_id(id: &ElementId, name: &'static str) -> ElementId {
 
 fn icon(name: &str, size: f32, color: Hsla) -> Option<Svg> {
     IconUi::sized(name, px(size), color, name.ends_with(".fill"))
-}
-
-fn accent() -> Hsla {
-    Hsla::from(rgb(ACCENT_COLOR))
 }
 
 /// music right panel follows the app theme
@@ -440,13 +435,14 @@ impl MusicQueueSheetParts {
             (player.is_shuffled(cx), player.is_playing, player.repeat_mode(cx))
         };
         let inactive = white().opacity(0.7);
+        let active = rise_ui::theme(cx).primary._100;
 
         hstack(0.)
             .w_full()
             .child(self.transport_button(
                 "shuffle",
                 tr("music_shuffle"),
-                div().children(icon("shuffle", 19., if is_shuffled { accent() } else { inactive })),
+                div().children(icon("shuffle", 19., if is_shuffled { active } else { inactive })),
                 |player, cx| player.toggle_shuffle(cx),
             ))
             .child(self.transport_button(
@@ -479,7 +475,7 @@ impl MusicQueueSheetParts {
                 div().children(icon(
                     repeat_mode.icon(),
                     19.,
-                    if repeat_mode != MusicRepeatMode::Off { accent() } else { inactive },
+                    if repeat_mode != MusicRepeatMode::Off { active } else { inactive },
                 )),
                 |player, cx| player.cycle_repeat_mode(cx),
             ))

@@ -3,39 +3,38 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Context, ElementId, Entity, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
+    AnyElement, App, BoxShadow, Context, ElementId, Entity, FocusHandle, Hsla, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, RenderOnce, SharedString, Styled, Task, Window, deferred, div, hsla, point,
+    prelude::FluentBuilder, px,
 };
-use rise_canon::RiseTabBarButton;
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_i18n::tr;
-use rise_platform::haptics::selection_changed;
 use rise_ui::IconUi;
 use rise_ui::grouped_btns::{GroupedBtn, GroupedBtns, GroupedCardMetrics};
 use rise_ui::main_text::MainText;
-use rise_ui::reorder_grip::ReorderGripHandle;
-use rise_ui::swiftui::animated::Animated;
-use rise_ui::swiftui::motion::spring;
+use rise_ui::reorder_grip::ReorderMotion;
+use rise_ui::swiftui::drag_gesture::{DragGesture, DragGestureModifiers, DragGestureValue};
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 
-use crate::core::widgets::navigations::main_tab_bar_buttons::RiseTabBarButtonExt;
+use crate::core::widgets::navigations::main_tab_bar::MainTabBarMoreEntry;
+use crate::core::widgets::navigations::main_tab_bar_buttons::{RailEntry, RiseTabBarButtonExt};
 use crate::core::widgets::navigations::main_tab_bar_settings::RiseTabBarSettings;
 
-pub type TabBarOrderOnCommit = Rc<dyn Fn(Vec<RiseTabBarButton>, &mut App)>;
+pub type TabBarOrderOnCommit = Rc<dyn Fn(Vec<RailEntry>, &mut App)>;
 
 const ROW_HEIGHT: f32 = 56.0;
 const ROW_STRIDE: f32 = ROW_HEIGHT + 0.5;
+const GRIP_DRAG_DISTANCE: f32 = 2.0;
 const COMMITTED_ORDER_TIMEOUT: Duration = Duration::from_secs(3);
 const GRIP_WIDTH: f32 = 44.0;
 const GLYPH_SIDE: f32 = 17.0;
 const ICON_CORNER_RADIUS: f32 = 11.0;
-const DROP_SPRING_RESPONSE: f64 = 0.3;
-const DROP_SPRING_DAMPING: f64 = 0.86;
 
 #[derive(IntoElement)]
 pub struct TabBarOrderGroup {
     settings: RiseTabBarSettings,
     surface: Hsla,
+    hint: Option<String>,
     on_commit: TabBarOrderOnCommit,
 }
 
@@ -43,55 +42,71 @@ impl TabBarOrderGroup {
     pub fn new(
         settings: RiseTabBarSettings,
         surface: Hsla,
-        on_commit: impl Fn(Vec<RiseTabBarButton>, &mut App) + 'static,
+        on_commit: impl Fn(Vec<RailEntry>, &mut App) + 'static,
     ) -> Self {
         Self {
             settings,
             surface,
+            hint: None,
             on_commit: Rc::new(on_commit),
         }
     }
 
-    fn store_order(settings: &RiseTabBarSettings) -> Vec<RiseTabBarButton> {
-        if settings.more_tab { settings.more_mode_order() } else { settings.button_order.to_vec() }
+    pub fn hint(mut self, hint: String) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
-    fn title(button: RiseTabBarButton) -> String {
-        button.item().map(|item| tr(item.title_key)).unwrap_or_else(|| button.wire().to_owned())
+    /// buttons the left bar shows, gated ones are hidden
+    fn store_order(settings: &RiseTabBarSettings, cx: &mut App) -> Vec<RailEntry> {
+        RailEntry::saved(&settings.button_order, cx)
+    }
+
+    fn title(entry: RailEntry) -> String {
+        match entry {
+            RailEntry::Button(button) => {
+                button.item().map(|item| tr(item.title_key)).unwrap_or_else(|| button.wire().to_owned())
+            }
+            RailEntry::Settings => tr(MainTabBarMoreEntry::settings().title_key),
+        }
+    }
+
+    fn symbol(entry: RailEntry) -> &'static str {
+        match entry {
+            RailEntry::Button(button) => button.item().map(|item| item.symbol).unwrap_or("circle"),
+            RailEntry::Settings => "gearshape",
+        }
+    }
+
+    fn key(entry: RailEntry) -> &'static str {
+        match entry {
+            RailEntry::Button(button) => button.wire(),
+            RailEntry::Settings => "settings",
+        }
     }
 }
 
-/// group state, drag_offset_motion is the drawn drag offset so a drop can spring back
+/// group state, the shared reorder motion draws the drag and the drop
 struct TabBarOrderGroupState {
-    dragging_id: Option<RiseTabBarButton>,
-    drag_offset_y: f32,
-    drag_offset_motion: Animated<f32>,
-    offset_owner: Option<RiseTabBarButton>,
-    row_focus: Vec<(RiseTabBarButton, FocusHandle)>,
-    working_order: Vec<RiseTabBarButton>,
-    accumulated_shift: f32,
-    committed_order: Vec<RiseTabBarButton>,
-    observed_store_order: Vec<RiseTabBarButton>,
+    motion: ReorderMotion<RailEntry>,
+    row_focus: Vec<(RailEntry, FocusHandle)>,
+    committed_order: Vec<RailEntry>,
+    observed_store_order: Vec<RailEntry>,
     release_task: Option<Task<()>>,
 }
 
 impl TabBarOrderGroupState {
-    fn new(store_order: Vec<RiseTabBarButton>) -> Self {
+    fn new(store_order: Vec<RailEntry>) -> Self {
         Self {
-            dragging_id: None,
-            drag_offset_y: 0.0,
-            drag_offset_motion: Animated::new(0.0),
-            offset_owner: None,
+            motion: ReorderMotion::new(),
             row_focus: Vec::new(),
-            working_order: Vec::new(),
-            accumulated_shift: 0.0,
             committed_order: Vec::new(),
             observed_store_order: store_order,
             release_task: None,
         }
     }
 
-    fn row_focus(&mut self, button: RiseTabBarButton, cx: &mut Context<Self>) -> FocusHandle {
+    fn row_focus(&mut self, button: RailEntry, cx: &mut Context<Self>) -> FocusHandle {
         if let Some((_, focus)) = self.row_focus.iter().find(|(candidate, _)| *candidate == button) {
             return focus.clone();
         }
@@ -100,15 +115,13 @@ impl TabBarOrderGroupState {
         focus
     }
 
-    fn shown_order(&self, store_order: &[RiseTabBarButton]) -> Vec<RiseTabBarButton> {
-        if self.dragging_id.is_some() {
-            return self.working_order.clone();
-        }
-        if self.committed_order.is_empty() { store_order.to_vec() } else { self.committed_order.clone() }
+    fn shown_order(&self, store_order: &[RailEntry]) -> Vec<RailEntry> {
+        let base = if self.committed_order.is_empty() { store_order.to_vec() } else { self.committed_order.clone() };
+        self.motion.shown_order(&base)
     }
 
     /// reacts to a change of the store order
-    fn observe(&mut self, store_order: &[RiseTabBarButton]) -> bool {
+    fn observe(&mut self, store_order: &[RailEntry]) -> bool {
         if self.observed_store_order == store_order {
             return false;
         }
@@ -117,50 +130,28 @@ impl TabBarOrderGroupState {
     }
 
     fn release_committed_order(&mut self) -> bool {
-        if self.committed_order.is_empty() || self.dragging_id.is_some() {
+        if self.committed_order.is_empty() || self.motion.dragging().is_some() {
             return false;
         }
         self.committed_order.clear();
         true
     }
 
-    fn update_drag(&mut self, button: RiseTabBarButton, translation_y: f32, order: &[RiseTabBarButton]) {
-        if self.dragging_id != Some(button) {
-            self.dragging_id = Some(button);
-            self.working_order = order.to_vec();
-            self.accumulated_shift = 0.0;
-            self.offset_owner = Some(button);
-            let _ = selection_changed();
-        }
-        self.drag_offset_y = translation_y - self.accumulated_shift;
-        let Some(index) = self.working_order.iter().position(|candidate| *candidate == button) else {
-            return;
-        };
-        if self.drag_offset_y > ROW_STRIDE * 0.6 && index + 1 < self.working_order.len() {
-            self.working_order.swap(index, index + 1);
-            self.accumulated_shift += ROW_STRIDE;
-            self.drag_offset_y = translation_y - self.accumulated_shift;
-        } else if self.drag_offset_y < -ROW_STRIDE * 0.6 && index > 0 {
-            self.working_order.swap(index, index - 1);
-            self.accumulated_shift -= ROW_STRIDE;
-            self.drag_offset_y = translation_y - self.accumulated_shift;
-        }
-        self.drag_offset_motion.jump(self.drag_offset_y);
+    fn update_drag(&mut self, entry: RailEntry, translation_y: f32, order: &[RailEntry], reduce_motion: bool) {
+        self.motion.drag(&entry, translation_y, order, |_| ROW_STRIDE, RiseClock::monotonic(), reduce_motion);
     }
 
-    fn end_drag(&mut self, cx: &mut Context<Self>) -> Option<Vec<RiseTabBarButton>> {
-        let order = std::mem::take(&mut self.working_order);
-        let changed = !order.is_empty() && order != self.observed_store_order;
-        self.committed_order = if changed { order.clone() } else { Vec::new() };
-        self.drag_offset_y = 0.0;
-        self.drag_offset_motion.set_in(
-            0.0,
-            spring(DROP_SPRING_RESPONSE, DROP_SPRING_DAMPING),
-            RiseClock::monotonic(),
-            cx,
-        );
-        self.dragging_id = None;
-        self.accumulated_shift = 0.0;
+    fn end_drag(&mut self, reduce_motion: bool) -> Option<Vec<RailEntry>> {
+        let base = if self.committed_order.is_empty() {
+            self.observed_store_order.clone()
+        } else {
+            self.committed_order.clone()
+        };
+        let order = self.motion.end(RiseClock::monotonic(), reduce_motion)?;
+        let changed = !order.is_empty() && order != base;
+        if changed {
+            self.committed_order = order.clone();
+        }
         changed.then_some(order)
     }
 }
@@ -168,7 +159,7 @@ impl TabBarOrderGroupState {
 impl RenderOnce for TabBarOrderGroup {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = rise_ui::theme(cx).clone();
-        let store_order = Self::store_order(&self.settings);
+        let store_order = Self::store_order(&self.settings, cx);
         let initial = store_order.clone();
         let state = window.use_keyed_state(
             ElementId::Name(SharedString::from("tab-bar-order-group-state")),
@@ -184,69 +175,78 @@ impl RenderOnce for TabBarOrderGroup {
             order
         });
         let order = Arc::new(order);
+        let count = order.len();
 
         let items: Vec<GroupedBtn> = order
             .iter()
-            .map(|button| {
-                let button = *button;
-                let (offset, focus) = state.update(cx, |state, cx| {
-                    let offset = if state.offset_owner == Some(button) {
-                        state.drag_offset_motion.frame_value(RiseClock::monotonic(), window)
-                    } else {
-                        0.0
-                    };
-                    (offset, state.row_focus(button, cx))
+            .enumerate()
+            .map(|(index, entry)| {
+                let entry = *entry;
+                let corners = (index == 0, index + 1 == count);
+                let (offset, raise, focus) = state.update(cx, |state, cx| {
+                    let offset = state.motion.offset(&entry, window);
+                    let raise = state.motion.lift(&entry, window);
+                    (offset, raise, state.row_focus(entry, cx))
                 });
-                GroupedBtn::new(format!("tab-bar-order-{}", button.wire()), Self::title(button)).content_slot(
-                    self.row(button, order.clone(), offset, focus, &state, &theme),
+                GroupedBtn::new(format!("tab-bar-order-{}", Self::key(entry)), Self::title(entry)).content_slot(
+                    self.row(entry, order.clone(), (offset, raise), corners, focus, &state, &theme),
                 )
             })
             .collect();
 
         GroupedBtns::new("tab-bar-order-group", items)
             .title(tr("tab_bar_order_title").to_uppercase())
-            .end_group_title(tr("tab_bar_order_hint"))
+            .end_group_title(self.hint.clone().unwrap_or_else(|| tr("tab_bar_order_hint")))
             .surface_color(self.surface)
     }
 }
 
 impl TabBarOrderGroup {
+    #[allow(clippy::too_many_arguments)]
     fn row(
         &self,
-        button: RiseTabBarButton,
-        order: Arc<Vec<RiseTabBarButton>>,
-        offset: f32,
+        button: RailEntry,
+        order: Arc<Vec<RailEntry>>,
+        (offset, raise): (f32, f32),
+        (rounds_top, rounds_bottom): (bool, bool),
         focus: FocusHandle,
         state: &Entity<TabBarOrderGroupState>,
         theme: &rise_theme::AppTheme,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let on_commit = &self.on_commit;
         let surface = self.surface;
-        let item = button.item();
-        let symbol = item.map(|item| item.symbol).unwrap_or("circle");
+        let symbol = Self::symbol(button);
         let change_state = state.clone();
         let end_state = state.clone();
         let end_commit = on_commit.clone();
         let key_commit = on_commit.clone();
         let key_order = order.clone();
-        let grip = ReorderGripHandle::new(
-            ElementId::Name(SharedString::from(format!("tab-bar-order-grip-{}", button.wire()))),
-            Rc::new(move |translation: f32, _: &mut Window, cx: &mut App| {
-                let order = order.clone();
+        let grip = DragGesture::new(GRIP_DRAG_DISTANCE)
+            .on_changed(move |value: &DragGestureValue, _: &mut Window, cx: &mut App| {
+                let translation = f32::from(value.translation.height);
+                let reduce_motion = cx.reduce_motion();
                 change_state.update(cx, |state, cx| {
-                    state.update_drag(button, translation, &order);
+                    state.update_drag(button, translation, &order, reduce_motion);
                     cx.notify();
                 });
-            }),
-            Rc::new(move |_: &mut Window, cx: &mut App| {
+            })
+            .on_ended(move |_: &DragGestureValue, _: &mut Window, cx: &mut App| {
                 Self::end_drag(&end_state, &end_commit, cx);
-            }),
-        );
+            });
 
-        div()
-            .id(ElementId::Name(SharedString::from(format!("tab-bar-order-row-{}", button.wire()))))
+        let row = div()
+            .id(ElementId::Name(SharedString::from(format!("tab-bar-order-row-{}", Self::key(button)))))
             .relative()
             .top(px(offset))
+            .when(raise > 0.0, |row| {
+                row.rounded(px(GroupedCardMetrics::CORNER_RADIUS)).shadow(vec![BoxShadow {
+                    color: hsla(0.0, 0.0, 0.0, 0.22 * raise),
+                    offset: point(px(0.0), px(6.0 * raise)),
+                    blur_radius: px(18.0 * raise),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
+            })
             .w_full()
             .h(px(ROW_HEIGHT))
             .flex()
@@ -256,6 +256,8 @@ impl TabBarOrderGroup {
             .pl(px(GroupedCardMetrics::ROW_HORIZONTAL_PADDING))
             .pr(px(4.0))
             .bg(surface)
+            .when(rounds_top, |row| row.rounded_t(px(GroupedCardMetrics::CORNER_RADIUS)))
+            .when(rounds_bottom, |row| row.rounded_b(px(GroupedCardMetrics::CORNER_RADIUS)))
             .track_focus(&focus)
             .on_key_down(move |event: &KeyDownEvent, _, cx| {
                 if event.keystroke.modifiers.modified() {
@@ -288,7 +290,7 @@ impl TabBarOrderGroup {
             )
             .child(
                 div()
-                    .id(ElementId::Name(SharedString::from(format!("tab-bar-order-grip-area-{}", button.wire()))))
+                    .id(ElementId::Name(SharedString::from(format!("tab-bar-order-grip-area-{}", Self::key(button)))))
                     .tooltip_label(tr("ctx_reorder"))
                     .relative()
                     .flex_none()
@@ -298,20 +300,24 @@ impl TabBarOrderGroup {
                     .items_center()
                     .justify_center()
                     .children(IconUi::sized("line.3.horizontal", px(GLYPH_SIDE), theme.text.secondary, false))
-                    .child(div().absolute().inset_0().child(grip)),
-            )
+                    .gesture(
+                        ElementId::Name(SharedString::from(format!("tab-bar-order-grip-{}", Self::key(button)))),
+                        grip,
+                    ),
+            );
+        if raise > 0.0 { deferred(row).with_priority(1).into_any_element() } else { row.into_any_element() }
     }
 
     fn end_drag(state: &Entity<TabBarOrderGroupState>, on_commit: &TabBarOrderOnCommit, cx: &mut App) {
+        let reduce_motion = cx.reduce_motion();
         let committed = state.update(cx, |state, cx| {
-            let committed = state.end_drag(cx);
+            let committed = state.end_drag(reduce_motion);
             cx.notify();
             committed
         });
         let Some(order) = committed else {
             return;
         };
-        let _ = selection_changed();
         on_commit(order.clone(), cx);
         let weak = state.downgrade();
         let task = cx.spawn(async move |cx| {
@@ -326,8 +332,8 @@ impl TabBarOrderGroup {
     }
 
     fn move_by_accessibility(
-        button: RiseTabBarButton,
-        order: &[RiseTabBarButton],
+        button: RailEntry,
+        order: &[RailEntry],
         up: bool,
         on_commit: &TabBarOrderOnCommit,
         cx: &mut App,

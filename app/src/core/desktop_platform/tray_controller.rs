@@ -22,6 +22,7 @@ use rise_platform::user_defaults::UserDefaults;
 use rise_platform::user_defaults_keys::DESKTOP_KEEP_IN_TRAY;
 
 use crate::core::config::app_environment::AppEnvironment;
+use crate::core::desktop_platform::tray_call_hooks::{TrayCallHooks, TrayCallState, tray_call_hooks};
 use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, UIApplication};
 use crate::core::desktop_platform::rise_app_quit_drain::request_quit;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierSendOptions, NotifierType};
@@ -38,6 +39,10 @@ pub enum TrayMenuCommand {
     LaunchAtLogin = 2,
     KeepInTray = 3,
     Quit = 4,
+    Microphone = 5,
+    Deafen = 6,
+    OpenCall = 7,
+    LeaveCall = 8,
 }
 
 impl TrayMenuCommand {
@@ -51,6 +56,10 @@ impl TrayMenuCommand {
             2 => Some(Self::LaunchAtLogin),
             3 => Some(Self::KeepInTray),
             4 => Some(Self::Quit),
+            5 => Some(Self::Microphone),
+            6 => Some(Self::Deafen),
+            7 => Some(Self::OpenCall),
+            8 => Some(Self::LeaveCall),
             _ => None,
         }
     }
@@ -61,17 +70,24 @@ impl TrayMenuCommand {
             Self::LaunchAtLogin => "desktop_tray_launch_at_login",
             Self::KeepInTray => "desktop_tray_keep_in_tray",
             Self::Quit => "desktop_menu_quit",
+            Self::Microphone => "rtc_microphone",
+            Self::Deafen => "rtc_deafen",
+            Self::OpenCall => "desktop_tray_open_call",
+            Self::LeaveCall => "rtc_leave",
         }
     }
 }
 
 /// menu for this state, nothing without a status area
 /// autostart is none where the os cant offer it, macos has no keep in tray because the dock does that
+/// a live call adds its mic, sound, open and leave right under open
+/// without one mic and sound stay greyed so the person sees where they are
 pub fn tray_menu_items(
     host: HostOs,
     availability: TrayAvailability,
     autostart: Option<AutostartState>,
     keep_in_tray: bool,
+    call: Option<TrayCallState>,
 ) -> Vec<TrayMenuItem> {
     if availability != TrayAvailability::Available {
         return Vec::new();
@@ -81,6 +97,30 @@ pub fn tray_menu_items(
         TrayMenuCommand::Open.id(),
         tr(TrayMenuCommand::Open.label_key()),
     )];
+
+    match call {
+        Some(call) => {
+            let microphone = TrayMenuItem::check(
+                TrayMenuCommand::Microphone.id(),
+                tr(TrayMenuCommand::Microphone.label_key()),
+                call.microphone_enabled,
+            );
+            items.push(if call.can_use_microphone { microphone } else { microphone.disabled() });
+            items.push(TrayMenuItem::check(
+                TrayMenuCommand::Deafen.id(),
+                tr(TrayMenuCommand::Deafen.label_key()),
+                call.deafened,
+            ));
+            items.push(TrayMenuItem::plain(TrayMenuCommand::OpenCall.id(), tr(TrayMenuCommand::OpenCall.label_key())));
+            items.push(TrayMenuItem::plain(TrayMenuCommand::LeaveCall.id(), tr(TrayMenuCommand::LeaveCall.label_key())));
+        }
+        None => {
+            items.push(
+                TrayMenuItem::plain(TrayMenuCommand::Microphone.id(), tr(TrayMenuCommand::Microphone.label_key())).disabled(),
+            );
+            items.push(TrayMenuItem::plain(TrayMenuCommand::Deafen.id(), tr(TrayMenuCommand::Deafen.label_key())).disabled());
+        }
+    }
 
     if let Some(state) = autostart {
         items.push(TrayMenuItem::check(
@@ -211,8 +251,10 @@ pub struct TrayController {
     autostart_generation: u64,
     defaults: UserDefaults,
     on_activate: fn(&mut App),
+    call: Option<TrayCallState>,
     _events: Task<()>,
     _language: Subscription,
+    _call: Vec<Subscription>,
 }
 
 impl Global for TrayController {}
@@ -283,6 +325,10 @@ impl TrayController {
         });
 
         let language = cx.observe_global::<LanguageStore>(|cx| Self::sync_menu(cx));
+        let call_hooks = tray_call_hooks();
+        let call = call_hooks.and_then(|hooks| (hooks.state)(cx));
+        let call_observation =
+            call_hooks.map(|hooks| (hooks.observe)(Box::new(Self::call_did_change), cx)).unwrap_or_default();
         let tray = Rc::new(RefCell::new(tray));
         let badge_tray = Rc::clone(&tray);
         let name = AppEnvironment::current().display_name();
@@ -295,8 +341,10 @@ impl TrayController {
             autostart_generation: 0,
             defaults,
             on_activate,
+            call,
             _events: event_task,
             _language: language,
+            _call: call_observation,
         });
 
         set_tray_listener(move |count| {
@@ -383,6 +431,21 @@ impl TrayController {
         .detach();
     }
 
+    fn call_did_change(cx: &mut App) {
+        let Some(hooks) = tray_call_hooks() else {
+            return;
+        };
+        let call = (hooks.state)(cx);
+        let Some(controller) = cx.try_global::<Self>() else {
+            return;
+        };
+        if controller.call == call {
+            return;
+        }
+        cx.global_mut::<Self>().call = call;
+        Self::sync_menu(cx);
+    }
+
     fn sync_menu(cx: &App) {
         let Some(controller) = cx.try_global::<Self>() else {
             return;
@@ -393,6 +456,7 @@ impl TrayController {
             availability,
             controller.autostart_state,
             keeps_in_tray(&controller.defaults),
+            controller.call,
         );
 
         if !controller.tray.borrow_mut().set_menu(items).is_supported() {
@@ -408,8 +472,18 @@ impl TrayController {
                 Some(TrayMenuCommand::LaunchAtLogin) => Self::toggle_autostart(cx),
                 Some(TrayMenuCommand::KeepInTray) => Self::toggle_keep_in_tray(cx),
                 Some(TrayMenuCommand::Quit) => request_quit(cx),
+                Some(TrayMenuCommand::Microphone) => Self::call_command(|hooks| hooks.toggle_microphone, cx),
+                Some(TrayMenuCommand::Deafen) => Self::call_command(|hooks| hooks.toggle_deafened, cx),
+                Some(TrayMenuCommand::OpenCall) => Self::call_command(|hooks| hooks.open_call, cx),
+                Some(TrayMenuCommand::LeaveCall) => Self::call_command(|hooks| hooks.leave_call, cx),
                 None => tracing::warn!(target: "riseonly", "unknown status menu id {id}"),
             },
+        }
+    }
+
+    fn call_command(pick: fn(&TrayCallHooks) -> fn(&mut App), cx: &mut App) {
+        if let Some(hooks) = tray_call_hooks() {
+            pick(hooks)(cx);
         }
     }
 

@@ -60,3 +60,11 @@ fn only_a_click_on_a_known_item_is_an_event() {
     assert_eq!(menu_event(&items(), 8, "clicked"), None);
     assert_eq!(menu_event(&items(), DBUS_MENU_ROOT_ID, "clicked"), None);
 }
+
+#[test]
+fn a_disabled_item_says_so_and_an_enabled_one_stays_silent() {
+    let greyed = menu_node_properties(&[TrayMenuItem::plain(5, "Mic").disabled()], 5).expect("the item");
+    assert!(greyed.contains(&("enabled", MenuProperty::Flag(false))));
+    let plain = menu_node_properties(&items(), 7).expect("the plain item");
+    assert!(!plain.iter().any(|(name, _)| *name == "enabled"));
+}

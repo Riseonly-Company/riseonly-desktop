@@ -42,6 +42,9 @@ rise-endpoints = { path = "../riseonly-tools/crates/rise-endpoints" }
 rise-regions = { path = "../riseonly-tools/crates/rise-regions" }
 rise-bot-api = { path = "../riseonly-tools/crates/rise-bot-api" }
 #
+# Linked for the system bot tags (#78): a tag without the bot suffix is a bot exactly when the server says so.
+rise-system-accounts = { path = "../riseonly-tools/crates/rise-system-accounts" }
+#
 # Linked in place of a desktop duplicate: the canon schemas are the rules.
 rise-validate = { path = "../riseonly-tools/crates/rise-validate" }
 #
@@ -203,7 +206,7 @@ windows-core = "0.62"
 # seam (P109, X28): the windows crate carries no WebView2 bindings. 0.39 is the line built on
 # windows 0.62, so the family stays single in Cargo.lock.
 webview2-com = "=0.39.1"
-zbus = { version = "5", default-features = false, features = ["blocking-api", "tokio"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 # Linux display_cadence (P100): the same x11rb, wayland-client and wayland-backend gpui_linux
 # already resolves, so no new crate enters Cargo.lock; randr reads the CRTC mode, client_system
 # lets a guest queue share gpui's own wl_display.

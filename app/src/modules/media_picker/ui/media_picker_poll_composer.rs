@@ -17,6 +17,7 @@ use rise_ui::{IconUi, MainText, TextAlignT, page_header_toolbar_button::PageHead
 use crate::core::lib::canon_field_rule::RiseFieldRule;
 use crate::core::ui::input_field_accessory::InputFieldAccessory;
 use crate::core::ui::shaped_text_field::ShapedTextField;
+use crate::modules::chat::shared::poll_publicity::PollPublicity;
 use crate::modules::chat::stores::message::message_actions::message_poll_codec::{MessagePollCodec, MessagePollDraft};
 use crate::modules::media_picker::ui::media_picker_header_icon_button::MediaPickerHeaderIconButton;
 
@@ -140,6 +141,7 @@ impl MediaPickerPollComposerState {
 #[derive(IntoElement)]
 pub struct MediaPickerPollComposer {
     id: ElementId,
+    allows_public: bool,
     pub on_cancel: Rc<dyn Fn(&mut Window, &mut App)>,
     pub on_create: Rc<dyn Fn(MessagePollDraft, &mut Window, &mut App)>,
 }
@@ -152,9 +154,15 @@ impl MediaPickerPollComposer {
     ) -> Self {
         Self {
             id: id.into(),
+            allows_public: true,
             on_cancel: Rc::new(on_cancel),
             on_create: Rc::new(on_create),
         }
+    }
+
+    pub fn allows_public(mut self, allows_public: bool) -> Self {
+        self.allows_public = allows_public;
+        self
     }
 
     fn header(&self, state: &Entity<MediaPickerPollComposerState>, theme: &AppTheme, cx: &App) -> Div {
@@ -162,6 +170,7 @@ impl MediaPickerPollComposer {
         let on_cancel = self.on_cancel.clone();
         let on_create = self.on_create.clone();
         let creating = state.clone();
+        let allows_public = self.allows_public;
         let create_label = div()
             .flex()
             .items_center()
@@ -197,7 +206,7 @@ impl MediaPickerPollComposer {
                         .child(
                             plain("poll-composer-create")
                                 .disabled(!can_create)
-                                .on_press(move |window, cx| Self::create(&creating, &on_create, window, cx))
+                                .on_press(move |window, cx| Self::create(&creating, allows_public, &on_create, window, cx))
                                 .child(create_label),
                         ),
                 ),
@@ -357,19 +366,22 @@ impl MediaPickerPollComposer {
         }
     }
 
-    fn mode_items(state: &Entity<MediaPickerPollComposerState>, cx: &App) -> Vec<GroupedBtn> {
-        let anonymous = Binding::entity(
-            state.clone(),
-            |state: &MediaPickerPollComposerState| state.is_anonymous,
-            |state, value, _| state.is_anonymous = value,
-        );
-        let mut items = vec![
-            GroupedBtn::new("anonymous", tr("chat_poll_anonymous_voting"))
-                .icon("eye.slash.fill")
-                .icon_background(color("#5856D6"))
-                .show_chevron(false)
-                .trailing_slot(SwitchUi::new("poll-anonymous", anonymous)),
-        ];
+    fn mode_items(state: &Entity<MediaPickerPollComposerState>, allows_public: bool, cx: &App) -> Vec<GroupedBtn> {
+        let mut items = Vec::new();
+        if allows_public {
+            let anonymous = Binding::entity(
+                state.clone(),
+                |state: &MediaPickerPollComposerState| state.is_anonymous,
+                |state, value, _| state.is_anonymous = value,
+            );
+            items.push(
+                GroupedBtn::new("anonymous", tr("chat_poll_anonymous_voting"))
+                    .icon("eye.slash.fill")
+                    .icon_background(color("#5856D6"))
+                    .show_chevron(false)
+                    .trailing_slot(SwitchUi::new("poll-anonymous", anonymous)),
+            );
+        }
         if !state.read(cx).is_quiz {
             let multiple = Binding::entity(
                 state.clone(),
@@ -408,11 +420,13 @@ impl MediaPickerPollComposer {
 
     fn create(
         state: &Entity<MediaPickerPollComposerState>,
+        allows_public: bool,
         on_create: &Rc<dyn Fn(MessagePollDraft, &mut Window, &mut App)>,
         window: &mut Window,
         cx: &mut App,
     ) {
-        if let Some(draft) = state.read(cx).draft() {
+        if let Some(mut draft) = state.read(cx).draft() {
+            draft.is_anonymous = draft.is_anonymous || !allows_public;
             on_create(draft, window, cx);
         }
     }
@@ -429,6 +443,8 @@ impl RenderOnce for MediaPickerPollComposer {
             .title(tr("chat_poll_answers"))
             .uses_lazy_rows(false);
         let answers = if is_quiz { answers.end_group_title(tr("chat_poll_quiz_hint")) } else { answers };
+        let modes = GroupedBtns::new("poll-modes", Self::mode_items(&state, self.allows_public, cx)).uses_lazy_rows(false);
+        let modes = if self.allows_public { modes } else { modes.end_group_title(PollPublicity::anonymous_only_hint()) };
 
         vstack(0.0)
             .size_full()
@@ -447,9 +463,7 @@ impl RenderOnce for MediaPickerPollComposer {
                                     .uses_lazy_rows(false),
                             )
                             .child(answers)
-                            .child(
-                                GroupedBtns::new("poll-modes", Self::mode_items(&state, cx)).uses_lazy_rows(false),
-                            ),
+                            .child(modes),
                     ),
                 ),
             )

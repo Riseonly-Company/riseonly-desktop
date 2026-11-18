@@ -12,6 +12,24 @@ fn main() {
     if std::env::var("CARGO_FEATURE_RLOTTIE").is_ok() {
         compile_rlottie(&root);
     }
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        compile_glibc_compat();
+    }
+}
+
+fn compile_glibc_compat() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("native/glibc_compat.c");
+    cc::Build::new()
+        .file(&source)
+        .std("c11")
+        .flag("-U_GNU_SOURCE")
+        .cargo_metadata(false)
+        .compile("rise_glibc_compat");
+    let out = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static:-bundle,+whole-archive=rise_glibc_compat");
+    println!("cargo:rerun-if-changed={}", source.display());
 }
 
 fn workspace_root() -> PathBuf {

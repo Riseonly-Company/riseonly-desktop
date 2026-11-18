@@ -5,6 +5,7 @@ use rise_canon::{RiseRequestBody, RiseWireRequestMetadata, rise_request, rise_re
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_endpoints::EndpointKind;
 use rise_engine::{RiseEngine, RiseWireMethodDescriptor, RiseWireReplayPolicy};
+use rise_platform::device_info::ReportedOs;
 
 use crate::core::lib::canon_field_rule::RiseFieldRule;
 use crate::core::rise_engine_bridge::rise_canon_endpoints::{
@@ -29,6 +30,7 @@ pub struct RiseBugReportFields {
     pub video_file_id: Option<String>,
     pub video_duration_ms: Option<i64>,
     pub feedback_kind: Option<String>,
+    pub fix_platforms: Vec<String>,
 }
 
 /// convenience init for submitting a diagnostic report
@@ -62,6 +64,7 @@ impl SubmitDiagnosticReportDiagnostics for rise_request::report::SubmitDiagnosti
         bug: Option<&RiseBugReportFields>,
     ) -> Self {
         let screenshots = bug.is_some_and(|bug| !bug.screenshot_file_urls.is_empty());
+        let reported = ReportedOs::current();
         Self {
             app_version,
             build_number,
@@ -72,7 +75,12 @@ impl SubmitDiagnosticReportDiagnostics for rise_request::report::SubmitDiagnosti
             client_report_id: bug.map(|bug| bug.client_report_id.clone()),
             component: bug.and_then(|bug| bug.component.clone()),
             feedback_kind: bug.and_then(|bug| bug.feedback_kind.clone()),
+            fix_platforms: bug.and_then(|bug| (!bug.fix_platforms.is_empty()).then(|| bug.fix_platforms.clone())),
             locale,
+            os_arch: RiseReportedOs::field(&OS_ARCH_RULE, Some(&reported.arch)),
+            os_build: RiseReportedOs::field(&OS_BUILD_RULE, reported.build.as_deref()),
+            os_environment: RiseReportedOs::field(&OS_ENVIRONMENT_RULE, reported.environment.as_deref()),
+            os_name: RiseReportedOs::field(&OS_NAME_RULE, Some(&reported.name)),
             message: bug.map(|bug| bug.message.clone()),
             occurred_at_ms,
             pages: bug.and_then(|bug| (!bug.pages.is_empty()).then(|| bug.pages.clone())),
@@ -87,6 +95,26 @@ impl SubmitDiagnosticReportDiagnostics for rise_request::report::SubmitDiagnosti
             video_file_id: bug.and_then(|bug| bug.video_file_id.clone()),
             video_file_url: bug.and_then(|bug| bug.video_file_url.clone()),
         }
+    }
+}
+
+fn submit_rule(path: &str) -> RiseFieldRule {
+    RiseFieldRule::new(<rise_request::report::SubmitDiagnosticReport as RiseRequestBody>::CONTRACT, path)
+}
+
+static OS_NAME_RULE: LazyLock<RiseFieldRule> = LazyLock::new(|| submit_rule("/os_name"));
+static OS_BUILD_RULE: LazyLock<RiseFieldRule> = LazyLock::new(|| submit_rule("/os_build"));
+static OS_ARCH_RULE: LazyLock<RiseFieldRule> = LazyLock::new(|| submit_rule("/os_arch"));
+static OS_ENVIRONMENT_RULE: LazyLock<RiseFieldRule> = LazyLock::new(|| submit_rule("/os_environment"));
+
+pub enum RiseReportedOs {}
+
+impl RiseReportedOs {
+    /// one os field of a report, trimmed to the canon ceiling and none when empty
+    fn field(rule: &RiseFieldRule, value: Option<&str>) -> Option<String> {
+        let clamped = rule.clamped(value?);
+        let value = trimming_whitespaces_and_newlines(&clamped);
+        (!value.is_empty()).then(|| value.to_owned())
     }
 }
 

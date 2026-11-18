@@ -1,14 +1,17 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{App, ClipboardItem, Context, Entity, FontFeatures, FontWeight, Hsla, SharedString, Subscription, Window};
 use rise_canon::RiseGuideAnchor;
 use rise_i18n::tr;
 use rise_theme::{AppTheme, color};
-use rise_ui::grouped_btns::{GroupedBtn, GroupedBtns};
+use rise_ui::grouped_btns::{GroupedBtn, GroupedBtns, GroupedCardMetrics};
 use rise_ui::IconUi;
 use rise_ui::main_text::{MainText, TextAlignT};
 use rise_ui::native_confirm_alert::NativeConfirmAlert;
 use rise_ui::official_badge::OfficialBadge;
+use rise_ui::scroll_chrome_shadow_ui::ScrollChromeShadowStyle;
+use rise_ui::search_field_ui::SearchFieldUi;
 use rise_ui::secondary_text::SecondaryText;
 use rise_ui::settings_icon_palette::SettingsIconPalette;
 use rise_ui::swiftui::prelude::*;
@@ -24,7 +27,7 @@ use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::core::ui::reaction_emoji_glyph::ReactionEmojiGlyph;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::notifier::notifier_store::Notifier;
-use crate::core::widgets::wrappers::list_shell_ui::{ListShellScrollUnderChromeModifiers, SettingsWrapperUi};
+use crate::core::widgets::wrappers::list_shell_ui::{ListShellScrollUnderChromeModifiers, ListShellUi};
 use crate::modules::auth::stores::auth_interactions::auth_interactions::AuthInteractionsStore;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::diagnostics::pages::bug_report::bug_report_sheet_host::BugReportSurfaceProbe;
@@ -35,6 +38,10 @@ use crate::modules::notify::engine::core::rise_release_notes_seen_store::RiseRel
 use crate::modules::sparks::components::sparks_icon_view::{SparksAmountLabel, SparksSettingsTile};
 use crate::modules::sparks::stores::sparks::sparks_services::sparks_services::SparksServicesStore;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::PackKind;
+use crate::modules::user::pages::profile::settings::settings_search::settings_search_index::{
+    SettingsSearchEntry, SettingsSearchIndex, SettingsSearchResult, SettingsSearchTarget,
+};
+use crate::modules::user::pages::profile::settings::settings_search::settings_search_results::SettingsSearchResults;
 use crate::modules::user::stores::user::user_actions::user_types::ProfileModel;
 use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
 
@@ -44,6 +51,9 @@ type NavStore = Option<Entity<NavigationStore>>;
 struct SettingsState {
     phone_revealed: bool,
     open_section: Option<RootRoute>,
+    search_query: String,
+    search_entries: Vec<SettingsSearchEntry>,
+    search_results: Rc<Vec<SettingsSearchResult>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,7 +75,44 @@ impl SettingsState {
                 }
             }));
         }
-        Self { phone_revealed: false, open_section, _subscriptions: subscriptions }
+        Self {
+            phone_revealed: false,
+            open_section,
+            search_query: String::new(),
+            search_entries: Vec::new(),
+            search_results: Rc::new(Vec::new()),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn is_searching(&self) -> bool {
+        !self.search_query.trim().is_empty()
+    }
+
+    fn set_search_query(&mut self, query: String) {
+        self.search_query = query;
+        if self.is_searching() && self.search_entries.is_empty() {
+            self.search_entries = SettingsSearchIndex::entries();
+        }
+        self.search_results = Rc::new(SettingsSearchIndex::results(&self.search_query, &self.search_entries));
+    }
+}
+
+fn open_search_target(nav_store: &NavStore, target: SettingsSearchTarget, window: &mut Window, cx: &mut App) {
+    window.blur();
+    match target {
+        SettingsSearchTarget::Route(route) => push_route(nav_store, route, cx),
+        SettingsSearchTarget::BugReport => {
+            let surface = BugReportSurfaceProbe::current();
+            BugReportInteractionsStore::shared(cx).update(cx, |store, cx| store.present(surface, cx));
+        }
+        SettingsSearchTarget::MyBugReports => {
+            BugReportInteractionsStore::shared(cx).update(cx, |store, cx| store.select_my_reports_tab(0, cx));
+            push_route(nav_store, RootRoute::MyBugReports, cx);
+        }
+        SettingsSearchTarget::GiftShop => {
+            GiftsInteractionsStore::shared(cx).update(cx, |store, cx| store.open_shop_for_self(RiseGiftItemKind::Item, cx));
+        }
     }
 }
 
@@ -656,37 +703,72 @@ impl RenderOnce for Settings {
         let auth = AuthServicesStore::shared(cx);
         let profile = auth.read(cx).profile().cloned().unwrap_or_default();
 
-        let top_profile = Self::top_profile(&state, &profile, &theme, cx);
-        let account_group = Self::account_group(&nav_store, open, cx);
-        let content = vstack(Self::GROUP_SPACING)
-            .w_full()
-            .pt(px(12.0))
-            .child(top_profile)
-            .child(Self::profile_group(&nav_store, open))
-            .child(Self::security_group(&nav_store, open))
-            .child(Self::chats_group(&nav_store, open, &profile))
-            .child(Self::app_group(&nav_store, open))
-            .child(Self::report_group(&nav_store, open))
-            .child(Self::services_group(&nav_store, open))
-            .child(account_group)
-            .child(Self::more_group(&nav_store, open))
-            .child(Self::delete_account_group())
-            .child(Self::version_footer())
-            .child(div().flex_none().h(px(80.0)));
+        let (is_searching, search_results) = {
+            let state = state.read(cx);
+            (state.is_searching(), state.search_results.clone())
+        };
+        let content = if is_searching {
+            let open_nav_store = nav_store.clone();
+            let on_open = Rc::new(move |target: SettingsSearchTarget, window: &mut Window, cx: &mut App| {
+                open_search_target(&open_nav_store, target, window, cx);
+            });
+            vstack(0.0)
+                .w_full()
+                .pt(px(12.0))
+                .child(SettingsSearchResults::new(search_results, on_open))
+                .child(div().flex_none().h(px(80.0)))
+        } else {
+            let top_profile = Self::top_profile(&state, &profile, &theme, cx);
+            let account_group = Self::account_group(&nav_store, open, cx);
+            vstack(Self::GROUP_SPACING)
+                .w_full()
+                .pt(px(12.0))
+                .child(top_profile)
+                .child(Self::profile_group(&nav_store, open))
+                .child(Self::security_group(&nav_store, open))
+                .child(Self::chats_group(&nav_store, open, &profile))
+                .child(Self::app_group(&nav_store, open))
+                .child(Self::report_group(&nav_store, open))
+                .child(Self::services_group(&nav_store, open))
+                .child(account_group)
+                .child(Self::more_group(&nav_store, open))
+                .child(Self::delete_account_group())
+                .child(Self::version_footer())
+                .child(div().flex_none().h(px(80.0)))
+        };
 
         let shows_back = nav_store.as_ref().is_none_or(|nav_store| nav_store.read(cx).shows_settings_back());
-        SettingsWrapperUi::new(tr("settings_page_title"), move |_, cx| {
-            if let Some(nav_store) = &nav_store {
-                nav_store.update(cx, |nav_store, cx| nav_store.pop_settings(cx));
-            }
-        })
-        .shows_back_button(shows_back)
-        .content(
-            scroll_view("settings-scroll")
-                .size_full()
-                .bg(theme.bg._100)
-                .list_shell_scroll_under_chrome(cx)
-                .child(content),
-        )
+        ListShellUi::new()
+            .title(SharedString::from(tr("settings_page_title")))
+            .use_safe_zone(true)
+            .shows_back_button(shows_back)
+            .on_back(move |_, cx| {
+                if let Some(nav_store) = &nav_store {
+                    nav_store.update(cx, |nav_store, cx| nav_store.pop_settings(cx));
+                }
+            })
+            .fills_viewport_background(true)
+            .respects_keyboard_safe_area(true)
+            .header_chrome_shadow(Some(ScrollChromeShadowStyle::list_shell_blurred_header()))
+            .below_header(
+                div().w_full().px(px(GroupedCardMetrics::HORIZONTAL_PADDING)).pb(px(10.0)).child(
+                    SearchFieldUi::new(
+                        "settings-search",
+                        Binding::entity(
+                            state,
+                            |state: &SettingsState| state.search_query.clone(),
+                            |state: &mut SettingsState, query, _| state.set_search_query(query),
+                        ),
+                    )
+                    .uses_inline_text_field(true),
+                ),
+            )
+            .content(
+                scroll_view(if is_searching { "settings-search-scroll" } else { "settings-scroll" })
+                    .size_full()
+                    .bg(theme.bg._100)
+                    .list_shell_scroll_under_chrome(cx)
+                    .child(content),
+            )
     }
 }

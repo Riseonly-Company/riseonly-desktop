@@ -21,7 +21,7 @@ use rise_ui::swiftui::transition::{TransitionEffect, TransitionModifiers, UnitPo
 use rise_widgets::modal_ui::modal_ui::{DismissModal, KEY_CONTEXT, install_key_bindings};
 
 use crate::core::widgets::wrappers::list_shell_header_collapse::ListShellHeaderCollapse;
-use crate::core::widgets::wrappers::list_shell_ui::ListShellFloatingTopInsetKey;
+use crate::core::widgets::wrappers::list_shell_ui::list_shell_floating_top_inset;
 use crate::modules::chat::components::chat::async_render::chat_performance_trace::ChatPerformanceTrace;
 use crate::modules::chat::pages::chats::embedded_forum_horizontal_scroll_gate::{
     EmbeddedForumHorizontalPanCallbacks, EmbeddedForumHorizontalPanCallbacksKey,
@@ -1154,7 +1154,7 @@ impl RenderOnce for EmbeddedForumTransitionLayer {
             window.defer(cx, move |window, cx| on_mounted(window, cx));
         }
 
-        let top_inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let top_inset = list_shell_floating_top_inset(cx);
         let chrome_fold = self.chrome_collapse.read(cx).presented_offset(window).clamp(0.0, top_inset.max(0.0));
 
         div()

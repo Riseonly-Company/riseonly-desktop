@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    AnyView, App, Bounds, ElementId, Empty, Entity, FontWeight, ListAlignment, Pixels, Point, SharedString,
+    AnyView, App, Bounds, ElementId, Empty, Entity, ListAlignment, Pixels, Point, SharedString,
     StyleRefinement, Subscription, Task, WeakEntity, Window, canvas,
 };
 use rise_core::foundation::foundation_date::RiseClock;
@@ -18,7 +18,6 @@ use rise_ui::liquid_glass_button::{LiquidGlassButton, LiquidGlassButtonShape};
 use rise_ui::list_ui::list_ui::ListUi;
 use rise_ui::main_text::{MainText, TextAlignT};
 use rise_ui::native_confirm_alert::NativeConfirmAlert;
-use rise_ui::official_badge::OfficialBadge;
 use rise_ui::search_field_ui::SearchFieldUi;
 use rise_ui::scroll_chrome_shadow_ui::ScrollChromeShadowStyle;
 use rise_ui::swiftui::animated::Animated;
@@ -34,9 +33,10 @@ use crate::core::lib::sai::modules::sai_data_render::sai_data_render::SaiDataRen
 use crate::core::lib::sai::modules::sai_ws::sai_cache_revision_tracker::SaiCacheRevisionTracker;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_pending_registry::SaiWsPendingRegistry;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_container::HoldContextMenuContainer;
-use crate::core::ui::premium_badge::PremiumBadge;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::sheets::report_sheet::{ReportSheetStore, ReportSubject};
 use crate::core::widgets::wrappers::list_shell_ui::{ListShellUi, list_shell_floating_top_inset};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
@@ -1134,20 +1134,9 @@ impl UserRelationshipResultParts {
         let press_author = author.clone();
         let logo_key = author.id.clone().unwrap_or_else(|| author.tag.clone());
 
-        let mut name_row = hstack(4.0).w_full().child(
-            MainText::new(author.name.clone()).px(16.0).font_weight(FontWeight::SEMIBOLD).number_of_lines(1),
-        );
-        if author.more.is_official {
-            name_row = name_row.child(OfficialBadge::new().size(px(14.0)));
-        }
-        if author.more.is_premium {
-            name_row = name_row.child(
-                PremiumBadge::new()
-                    .user_id(author.id.clone().map(SharedString::from))
-                    .emoji(author.more.premium_badge_emoji.clone().map(SharedString::from))
-                    .size(14.0),
-            );
-        }
+        let name_row = UserNameWithBadges::new(author.id.clone().map(SharedString::from), author.name.clone())
+            .official(author.more.is_official)
+            .premium(author.more.is_premium, author.more.premium_badge_emoji.clone(), author.more.name_color.clone());
 
         let mut names = vstack(4.0).align(HorizontalAlignment::Leading).flex_1().min_w_0().child(name_row);
         if !author.tag.is_empty() {
@@ -1170,7 +1159,12 @@ impl UserRelationshipResultParts {
                     .user_id(author.id.clone().map(SharedString::from))
                     .size(UserRelationshipRowMetrics::AVATAR_SIZE)
                     .is_button(true)
-                    .on_press(move |window, cx| press_handler(&press_author, window, cx)),
+                    .on_press(move |window, cx| press_handler(&press_author, window, cx))
+                    .gift_worn_frame(
+                        SharedString::from(format!("user-relationship-frame-{}-{logo_key}", self.scope)),
+                        author.id.clone(),
+                        UserRelationshipRowMetrics::AVATAR_SIZE,
+                    ),
             )
             .child(names)
     }

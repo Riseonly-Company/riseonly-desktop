@@ -1,0 +1,609 @@
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1313,9 +1313,22 @@
+     #[cfg(any(test, feature = "test-support"))]
+     fn contains(&self, _key: &AtlasKey) -> bool {
+         false
++    }
++
++    /// Uploads tiles of this atlas from any thread, none where tiles are only written in paint (Riseonly 0122).
++    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
++        None
+     }
+ }
+ 
++/// Writes image tiles into an atlas off the main thread so the paint that draws them copies nothing (Riseonly 0122).
++pub trait PlatformImageUploader: Send + Sync {
++    /// Writes the tile of key unless the atlas already holds it.
++    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]);
++    /// Whether the atlas holds the tile of key.
++    fn is_resident(&self, key: &AtlasKey) -> bool;
++}
++
+ #[doc(hidden)]
+ pub struct AtlasTextureList<T> {
+     pub textures: Vec<Option<T>>,
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -10,7 +10,7 @@
+     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
+     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
++    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformImageUploader,
+     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
+     Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+@@ -7314,6 +7314,11 @@
+         found
+     }
+ 
++    /// The off thread tile writer of this window's sprite atlas, none where tiles are written in paint (Riseonly 0122).
++    pub fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
++        self.sprite_atlas.image_uploader()
++    }
++
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         self.image_drops += 1;
+--- a/crates/gpui_macos/src/metal_atlas.rs
++++ b/crates/gpui_macos/src/metal_atlas.rs
+@@ -4,23 +4,24 @@
+ use etagere::BucketedAtlasAllocator;
+ use gpui::{
+     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
+-    PlatformAtlas, Point, Size,
++    PlatformAtlas, PlatformImageUploader, Point, Size,
+ };
+ use metal::Device;
+ use parking_lot::Mutex;
+ use std::borrow::Cow;
++use std::sync::Arc;
+ 
+-pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
++pub(crate) struct MetalAtlas(Arc<Mutex<MetalAtlasState>>);
+ 
+ impl MetalAtlas {
+     pub(crate) fn new(device: Device, is_apple_gpu: bool) -> Self {
+-        MetalAtlas(Mutex::new(MetalAtlasState {
++        MetalAtlas(Arc::new(Mutex::new(MetalAtlasState {
+             device: AssertSend(device),
+             is_apple_gpu,
+             monochrome_textures: Default::default(),
+             polychrome_textures: Default::default(),
+             tiles_by_key: Default::default(),
+-        }))
++        })))
+     }
+ 
+     pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
+@@ -64,11 +65,57 @@
+         let Some(tile) = lock.tiles_by_key.remove(key) else {
+             return;
+         };
++        lock.release(tile);
++    }
++
++    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
++        Some(Arc::new(MetalImageUploader(self.0.clone())))
++    }
++}
++
++struct MetalImageUploader(Arc<Mutex<MetalAtlasState>>);
++
++impl PlatformImageUploader for MetalImageUploader {
++    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) {
++        let (tile, texture, bytes_per_pixel) = {
++            let mut lock = self.0.lock();
++            if lock.tiles_by_key.contains_key(key) {
++                return;
++            }
++            let Some(tile) = lock.allocate(size, key.texture_kind()) else {
++                return;
++            };
++            let texture = lock.texture(tile.texture_id);
++            let bytes_per_pixel = texture.bytes_per_pixel();
++            (tile, texture.metal_texture.0.clone(), bytes_per_pixel)
++        };
++        let expected = tile.bounds.size.width.to_bytes(bytes_per_pixel) as usize
++            * tile.bounds.size.height.0.max(0) as usize;
++        let written = bytes.len() >= expected;
++        if written {
++            write_region(&texture, tile.bounds, bytes, bytes_per_pixel);
++        }
++        drop(texture);
++        let mut lock = self.0.lock();
++        if !written || lock.tiles_by_key.contains_key(key) {
++            lock.release(tile);
++        } else {
++            lock.tiles_by_key.insert(key.clone(), tile);
++        }
++    }
++
++    fn is_resident(&self, key: &AtlasKey) -> bool {
++        self.0.lock().tiles_by_key.contains_key(key)
++    }
++}
++
++impl MetalAtlasState {
++    fn release(&mut self, tile: AtlasTile) {
+         let id = tile.texture_id;
+ 
+         let textures = match id.kind {
+-            AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
+-            AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
++            AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
++            AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
+             AtlasTextureKind::Subpixel => unreachable!(),
+         };
+ 
+@@ -224,18 +271,7 @@
+     }
+ 
+     fn upload(&self, bounds: Bounds<DevicePixels>, bytes: &[u8]) {
+-        let region = metal::MTLRegion::new_2d(
+-            bounds.origin.x.into(),
+-            bounds.origin.y.into(),
+-            bounds.size.width.into(),
+-            bounds.size.height.into(),
+-        );
+-        self.metal_texture.replace_region(
+-            region,
+-            0,
+-            bytes.as_ptr() as *const _,
+-            bounds.size.width.to_bytes(self.bytes_per_pixel()) as u64,
+-        );
++        write_region(&self.metal_texture, bounds, bytes, self.bytes_per_pixel());
+     }
+ 
+     fn bytes_per_pixel(&self) -> u8 {
+@@ -256,6 +292,26 @@
+     }
+ }
+ 
++fn write_region(
++    texture: &metal::Texture,
++    bounds: Bounds<DevicePixels>,
++    bytes: &[u8],
++    bytes_per_pixel: u8,
++) {
++    let region = metal::MTLRegion::new_2d(
++        bounds.origin.x.into(),
++        bounds.origin.y.into(),
++        bounds.size.width.into(),
++        bounds.size.height.into(),
++    );
++    texture.replace_region(
++        region,
++        0,
++        bytes.as_ptr() as *const _,
++        bounds.size.width.to_bytes(bytes_per_pixel) as u64,
++    );
++}
++
+ fn size_to_etagere(size: Size<DevicePixels>) -> etagere::Size {
+     etagere::Size::new(size.width.into(), size.height.into())
+ }
+--- a/crates/gpui_wgpu/src/wgpu_atlas.rs
++++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
+@@ -3,7 +3,7 @@
+ use etagere::{BucketedAtlasAllocator, size2};
+ use gpui::{
+     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
+-    PlatformAtlas, Point, Size,
++    PlatformAtlas, PlatformImageUploader, Point, Size,
+ };
+ use parking_lot::Mutex;
+ use std::{borrow::Cow, ops, sync::Arc};
+@@ -21,7 +21,7 @@
+     }
+ }
+ 
+-pub struct WgpuAtlas(Mutex<WgpuAtlasState>);
++pub struct WgpuAtlas(Arc<Mutex<WgpuAtlasState>>);
+ 
+ struct PendingUpload {
+     id: AtlasTextureId,
+@@ -37,6 +37,7 @@
+     storage: WgpuAtlasStorage,
+     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+     pending_uploads: Vec<PendingUpload>,
++    generation: u64,
+ }
+ 
+ pub struct WgpuTextureInfo {
+@@ -50,7 +51,7 @@
+         color_texture_format: wgpu::TextureFormat,
+     ) -> Self {
+         let max_texture_size = device.limits().max_texture_dimension_2d;
+-        WgpuAtlas(Mutex::new(WgpuAtlasState {
++        WgpuAtlas(Arc::new(Mutex::new(WgpuAtlasState {
+             device,
+             queue,
+             max_texture_size,
+@@ -58,7 +59,8 @@
+             storage: WgpuAtlasStorage::default(),
+             tiles_by_key: Default::default(),
+             pending_uploads: Vec::new(),
+-        }))
++            generation: 0,
++        })))
+     }
+ 
+     pub fn from_context(context: &WgpuContext) -> Self {
+@@ -89,6 +91,7 @@
+         lock.storage = WgpuAtlasStorage::default();
+         lock.tiles_by_key.clear();
+         lock.pending_uploads.clear();
++        lock.generation += 1;
+     }
+ 
+     /// Handles device lost by clearing all textures and cached tiles.
+@@ -101,6 +104,7 @@
+         lock.storage = WgpuAtlasStorage::default();
+         lock.tiles_by_key.clear();
+         lock.pending_uploads.clear();
++        lock.generation += 1;
+     }
+ }
+ 
+@@ -133,9 +137,90 @@
+         let Some(tile) = lock.tiles_by_key.remove(key) else {
+             return;
+         };
++        lock.release(tile);
++    }
++
++    #[cfg(not(target_family = "wasm"))]
++    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
++        Some(Arc::new(WgpuImageUploader(self.0.clone())))
++    }
++}
++
++#[cfg(not(target_family = "wasm"))]
++struct WgpuImageUploader(Arc<Mutex<WgpuAtlasState>>);
++
++#[cfg(not(target_family = "wasm"))]
++impl PlatformImageUploader for WgpuImageUploader {
++    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) {
++        let (tile, texture, format, queue, generation) = {
++            let mut lock = self.0.lock();
++            if lock.tiles_by_key.contains_key(key) {
++                return;
++            }
++            let Some(tile) = lock.allocate(size, key.texture_kind()) else {
++                return;
++            };
++            let Some(texture) = lock.storage.get(tile.texture_id) else {
++                return;
++            };
++            let (texture, format) = (texture.texture.clone(), texture.format);
++            (tile, texture, format, lock.queue.clone(), lock.generation)
++        };
++        let bytes_per_pixel: u32 = if format == wgpu::TextureFormat::R8Unorm { 1 } else { 4 };
++        let width = tile.bounds.size.width.0.max(0) as u32;
++        let height = tile.bounds.size.height.0.max(0) as u32;
++        let written = bytes.len() >= (width * bytes_per_pixel) as usize * height as usize;
++        if written {
++            let data = if format == wgpu::TextureFormat::Rgba8Unorm {
++                Cow::Owned(swizzle_upload_data(bytes, format))
++            } else {
++                Cow::Borrowed(bytes)
++            };
++            queue.write_texture(
++                wgpu::TexelCopyTextureInfo {
++                    texture: &texture,
++                    mip_level: 0,
++                    origin: wgpu::Origin3d {
++                        x: tile.bounds.origin.x.0 as u32,
++                        y: tile.bounds.origin.y.0 as u32,
++                        z: 0,
++                    },
++                    aspect: wgpu::TextureAspect::All,
++                },
++                &data,
++                wgpu::TexelCopyBufferLayout {
++                    offset: 0,
++                    bytes_per_row: Some(width * bytes_per_pixel),
++                    rows_per_image: None,
++                },
++                wgpu::Extent3d {
++                    width,
++                    height,
++                    depth_or_array_layers: 1,
++                },
++            );
++        }
++        let mut lock = self.0.lock();
++        if lock.generation != generation {
++            return;
++        }
++        if !written || lock.tiles_by_key.contains_key(key) {
++            lock.release(tile);
++        } else {
++            lock.tiles_by_key.insert(key.clone(), tile);
++        }
++    }
++
++    fn is_resident(&self, key: &AtlasKey) -> bool {
++        self.0.lock().tiles_by_key.contains_key(key)
++    }
++}
++
++impl WgpuAtlasState {
++    fn release(&mut self, tile: AtlasTile) {
+         let id = tile.texture_id;
+ 
+-        let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
++        let Some(texture_slot) = self.storage[id.kind].textures.get_mut(id.index as usize) else {
+             return;
+         };
+ 
+@@ -143,9 +228,9 @@
+             texture.allocator.deallocate(tile.tile_id.into());
+             texture.decrement_ref_count();
+             if texture.is_unreferenced() {
+-                lock.pending_uploads
++                self.pending_uploads
+                     .retain(|upload| upload.id != texture.id);
+-                lock.storage[id.kind]
++                self.storage[id.kind]
+                     .free_list
+                     .push(texture.id.index as usize);
+             } else {
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -1,28 +1,33 @@
+ use collections::FxHashMap;
+ use etagere::BucketedAtlasAllocator;
+ use parking_lot::Mutex;
++use std::sync::Arc;
+ use windows::Win32::Graphics::{
+     Direct3D11::{
+-        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+-        ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
++        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
++        D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
++        ID3D11ShaderResourceView, ID3D11Texture2D,
+     },
+     Dxgi::Common::*,
+ };
++use windows::core::Interface;
+ 
+ use gpui::{
+     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
+-    PlatformAtlas, Point, Size,
++    PlatformAtlas, PlatformImageUploader, Point, Size,
+ };
+ 
+-pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
++pub(crate) struct DirectXAtlas(Arc<Mutex<DirectXAtlasState>>);
+ 
+ struct DirectXAtlasState {
+     device: ID3D11Device,
+     device_context: ID3D11DeviceContext,
++    multithread: Option<ID3D11Multithread>,
+     monochrome_textures: AtlasTextureList<DirectXAtlasTexture>,
+     polychrome_textures: AtlasTextureList<DirectXAtlasTexture>,
+     subpixel_textures: AtlasTextureList<DirectXAtlasTexture>,
+     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
++    generation: u64,
+ }
+ 
+ struct DirectXAtlasTexture {
+@@ -36,14 +41,16 @@
+ 
+ impl DirectXAtlas {
+     pub(crate) fn new(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Self {
+-        DirectXAtlas(Mutex::new(DirectXAtlasState {
++        DirectXAtlas(Arc::new(Mutex::new(DirectXAtlasState {
+             device: device.clone(),
+             device_context: device_context.clone(),
++            multithread: device_context.cast::<ID3D11Multithread>().ok(),
+             monochrome_textures: Default::default(),
+             polychrome_textures: Default::default(),
+             subpixel_textures: Default::default(),
+             tiles_by_key: Default::default(),
+-        }))
++            generation: 0,
++        })))
+     }
+ 
+     pub(crate) fn get_texture_view(
+@@ -63,10 +70,12 @@
+         let mut lock = self.0.lock();
+         lock.device = device.clone();
+         lock.device_context = device_context.clone();
++        lock.multithread = device_context.cast::<ID3D11Multithread>().ok();
+         lock.monochrome_textures = AtlasTextureList::default();
+         lock.polychrome_textures = AtlasTextureList::default();
+         lock.subpixel_textures = AtlasTextureList::default();
+         lock.tiles_by_key.clear();
++        lock.generation += 1;
+     }
+ }
+ 
+@@ -101,12 +110,158 @@
+         let Some(tile) = lock.tiles_by_key.remove(key) else {
+             return;
+         };
++        lock.release(tile);
++    }
++
++    fn image_uploader(&self) -> Option<Arc<dyn PlatformImageUploader>> {
++        self.0.lock().multithread.as_ref()?;
++        Some(Arc::new(DirectXImageUploader(self.0.clone())))
++    }
++}
++
++struct DirectXImageUploader(Arc<Mutex<DirectXAtlasState>>);
++
++// SAFETY: a worker creates textures on the ID3D11Device only inside the device critical section
++// of ID3D11Multithread and never calls the immediate context, which stays with the render thread.
++unsafe impl Send for DirectXImageUploader {}
++unsafe impl Sync for DirectXImageUploader {}
++
++struct DirectXMultithreadSection<'a>(&'a ID3D11Multithread);
++
++impl<'a> DirectXMultithreadSection<'a> {
++    fn enter(multithread: &'a ID3D11Multithread) -> Self {
++        unsafe { multithread.Enter() };
++        Self(multithread)
++    }
++}
++
++impl Drop for DirectXMultithreadSection<'_> {
++    fn drop(&mut self) {
++        unsafe { self.0.Leave() };
++    }
++}
++
++impl PlatformImageUploader for DirectXImageUploader {
++    fn upload(&self, key: &AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) {
++        if key.texture_kind() != AtlasTextureKind::Polychrome {
++            return;
++        }
++        let (device, multithread, generation) = {
++            let lock = self.0.lock();
++            if lock.tiles_by_key.contains_key(key) {
++                return;
++            }
++            let Some(multithread) = lock.multithread.clone() else {
++                return;
++            };
++            (lock.device.clone(), multithread, lock.generation)
++        };
++        let width = size.width.0.max(0) as u32;
++        let height = size.height.0.max(0) as u32;
++        let row_bytes = width * 4;
++        if width == 0 || height == 0 || bytes.len() < row_bytes as usize * height as usize {
++            return;
++        }
++        let texture_desc = D3D11_TEXTURE2D_DESC {
++            Width: width,
++            Height: height,
++            MipLevels: 1,
++            ArraySize: 1,
++            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
++            SampleDesc: DXGI_SAMPLE_DESC {
++                Count: 1,
++                Quality: 0,
++            },
++            Usage: D3D11_USAGE_DEFAULT,
++            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
++            CPUAccessFlags: 0,
++            MiscFlags: 0,
++        };
++        let initial_data = D3D11_SUBRESOURCE_DATA {
++            pSysMem: bytes.as_ptr() as _,
++            SysMemPitch: row_bytes,
++            SysMemSlicePitch: 0,
++        };
++        let mut texture: Option<ID3D11Texture2D> = None;
++        let mut view = None;
++        {
++            let _section = DirectXMultithreadSection::enter(&multithread);
++            unsafe {
++                if device
++                    .CreateTexture2D(&texture_desc, Some(&initial_data), Some(&mut texture))
++                    .is_err()
++                {
++                    return;
++                }
++                let Some(texture) = texture.as_ref() else {
++                    return;
++                };
++                if device
++                    .CreateShaderResourceView(texture, None, Some(&mut view))
++                    .is_err()
++                {
++                    return;
++                }
++            }
++        }
++        let Some(texture) = texture else {
++            return;
++        };
++        let mut lock = self.0.lock();
++        if lock.generation != generation || lock.tiles_by_key.contains_key(key) {
++            return;
++        }
++        if let Some(tile) = lock.adopt_texture(texture, [view], size) {
++            lock.tiles_by_key.insert(key.clone(), tile);
++        }
++    }
++
++    fn is_resident(&self, key: &AtlasKey) -> bool {
++        self.0.lock().tiles_by_key.contains_key(key)
++    }
++}
++
++impl DirectXAtlasState {
++    fn adopt_texture(
++        &mut self,
++        texture: ID3D11Texture2D,
++        view: [Option<ID3D11ShaderResourceView>; 1],
++        size: Size<DevicePixels>,
++    ) -> Option<AtlasTile> {
++        let texture_list = &mut self.polychrome_textures;
++        let index = texture_list.free_list.pop();
++        let mut atlas_texture = DirectXAtlasTexture {
++            id: AtlasTextureId {
++                index: index.unwrap_or(texture_list.textures.len()) as u32,
++                kind: AtlasTextureKind::Polychrome,
++            },
++            bytes_per_pixel: 4,
++            allocator: etagere::BucketedAtlasAllocator::new(device_size_to_etagere(size)),
++            texture,
++            view,
++            live_atlas_keys: 0,
++        };
++        let Some(tile) = atlas_texture.allocate(size) else {
++            if let Some(ix) = index {
++                texture_list.free_list.push(ix);
++            }
++            return None;
++        };
++        if let Some(ix) = index {
++            texture_list.textures[ix] = Some(atlas_texture);
++        } else {
++            texture_list.textures.push(Some(atlas_texture));
++        }
++        Some(tile)
++    }
++
++    fn release(&mut self, tile: AtlasTile) {
+         let id = tile.texture_id;
+ 
+         let textures = match id.kind {
+-            AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
+-            AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
+-            AtlasTextureKind::Subpixel => &mut lock.subpixel_textures,
++            AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
++            AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
++            AtlasTextureKind::Subpixel => &mut self.subpixel_textures,
+         };
+ 
+         let Some(texture_slot) = textures.textures.get_mut(id.index as usize) else {
+--- a/crates/gpui_windows/src/directx_devices.rs
++++ b/crates/gpui_windows/src/directx_devices.rs
+@@ -12,6 +12,7 @@
+             D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG,
+             D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS, D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS,
+             D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
++            ID3D11Multithread,
+         },
+         Dxgi::{
+             CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, DXGI_CREATE_FACTORY_FLAGS,
+@@ -62,6 +63,11 @@
+             }
+             _ => unreachable!(),
+         }
++        if let Ok(multithread) = device_context.cast::<ID3D11Multithread>() {
++            unsafe {
++                let _ = multithread.SetMultithreadProtected(true);
++            }
++        }
+ 
+         Ok(Self {
+             adapter,

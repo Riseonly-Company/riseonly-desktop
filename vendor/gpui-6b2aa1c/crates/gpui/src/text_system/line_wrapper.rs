@@ -532,6 +532,25 @@ impl LineWrapper {
         // Bengali (https://en.wikipedia.org/wiki/Bengali_(Unicode_block))
         matches!(c, '\u{0980}'..='\u{09FF}') ||
 
+        // Riseonly 0127: the other scripts that separate words with spaces, so a line breaks
+        // between their words and never inside one (UAX #14 AL). Greek, Cyrillic supplements,
+        // Armenian, Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic and the Arabic
+        // extensions; the Indic scripts from Devanagari to Sinhala; Georgian, Ethiopic, Cherokee,
+        // Tifinagh; the combining mark blocks and the joiners these scripts shape with. Scripts
+        // written without spaces (Thai, Lao, Khmer, Myanmar, Tibetan) and CJK keep breaking
+        // between characters.
+        matches!(c, '\u{0370}'..='\u{03FF}' | '\u{1F00}'..='\u{1FFF}') ||
+        matches!(c, '\u{0500}'..='\u{052F}' | '\u{2DE0}'..='\u{2DFF}' | '\u{A640}'..='\u{A69F}' | '\u{1C80}'..='\u{1C8F}') ||
+        matches!(c, '\u{0530}'..='\u{058F}' | '\u{FB13}'..='\u{FB17}') ||
+        matches!(c, '\u{0591}'..='\u{05F4}' | '\u{FB1D}'..='\u{FB4F}') ||
+        matches!(c, '\u{0600}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFC}') ||
+        matches!(c, '\u{0900}'..='\u{097F}' | '\u{0A00}'..='\u{0DFF}' | '\u{A8E0}'..='\u{A8FF}') ||
+        matches!(c, '\u{10A0}'..='\u{10FF}' | '\u{1C90}'..='\u{1CBF}' | '\u{2D00}'..='\u{2D2F}') ||
+        matches!(c, '\u{1200}'..='\u{139F}' | '\u{2D80}'..='\u{2DDF}' | '\u{13A0}'..='\u{13FF}' | '\u{AB70}'..='\u{ABBF}') ||
+        matches!(c, '\u{2D30}'..='\u{2D7F}') ||
+        matches!(c, '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' | '\u{20D0}'..='\u{20FF}' | '\u{FE20}'..='\u{FE2F}') ||
+        matches!(c, '\u{200C}' | '\u{200D}') ||
+
         // Some other known special characters that should be treated as word characters,
         // e.g. `a-b`, `var_name`, `I'm`/`won’t`, '@mention`, `#hashtag`, `100%`, `3.1415`,
         // `2^3`, `a~b`, `a=1`, `Self::new`, etc. Trailing punctuation like `,`, `.`, `:`, `;`
@@ -1244,6 +1263,24 @@ mod tests {
         assert_word("গিয়েছিলেন");
         assert_word("ছেলে");
         assert_word("হচ্ছিল");
+
+        // Riseonly 0127: scripts written with spaces wrap between words, not inside them
+        assert_word("Ελληνικά");
+        assert_word("Հայերեն");
+        assert_word("עברית");
+        assert_word("שָׁלוֹם");
+        assert_word("العربية");
+        assert_word("فارسی");
+        assert_word("اُردُو");
+        assert_word("हिन्दी");
+        assert_word("தமிழ்");
+        assert_word("తెలుగు");
+        assert_word("മലയാളം");
+        assert_word("ქართული");
+        assert_word("አማርኛ");
+        assert_word("क्\u{200D}ष");
+        assert_not_word("עברית ไทย");
+        assert_not_word("ภาษาไทย");
 
         // non-word characters
         assert_not_word("你好");

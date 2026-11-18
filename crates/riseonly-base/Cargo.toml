@@ -47,6 +47,7 @@ rise-rtc.workspace = true
 rise-music.workspace = true
 rise-limits.workspace = true
 rise-bot-api.workspace = true
+rise-system-accounts.workspace = true
 rise-events.workspace = true
 rise-catalog.workspace = true
 rise-chat.workspace = true
@@ -83,6 +84,9 @@ directories.workspace = true
 rise-media = { workspace = true, features = ["rlottie", "ffmpeg"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+rise-media = { workspace = true, features = ["rlottie", "ffmpeg"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 rise-media = { workspace = true, features = ["rlottie", "ffmpeg"] }
 
 [dev-dependencies]

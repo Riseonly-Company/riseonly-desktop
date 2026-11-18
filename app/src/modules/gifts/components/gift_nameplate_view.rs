@@ -62,8 +62,8 @@ impl GiftNameplateView {
 impl RenderOnce for GiftNameplateView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let motion_style = env::<GiftMotionStyleKey>(cx);
-        let plate = window.use_keyed_state((self.id.clone(), "plate"), cx, |_, cx| GiftCosmeticPlayback::new(cx));
-        let glow = window.use_keyed_state((self.id.clone(), "glow"), cx, |_, cx| GiftCosmeticPlayback::new(cx));
+        let plate = GiftCosmeticPlayback::keyed((self.id.clone(), "plate"), window, cx);
+        let glow = GiftCosmeticPlayback::keyed((self.id.clone(), "glow"), window, cx);
         let mut stack = div().relative().size_full();
         if let Some(effect) = &self.effect {
             stack = stack.child(self.surface((self.id.clone(), "glow-surface").into(), glow, effect, motion_style));

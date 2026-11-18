@@ -195,7 +195,9 @@ pub enum PushDeepLink {
     MyArtistRequest,
     BugReport { report_id: String },
     Feedback { report_id: String },
+    MyReport { report_id: String },
     SparksWallet,
+    Achievement { achievement_id: i64 },
     AdminConsole { url: Url },
 }
 

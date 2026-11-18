@@ -10,6 +10,7 @@ use rise_ui::input_ui::input_actions;
 
 use crate::core::desktop_platform::bug_report_trigger::{ReportBug, install_bug_report_trigger};
 use crate::core::desktop_platform::rise_app_quit_drain::request_quit;
+use crate::core::desktop_platform::window_scale::install_window_scale;
 use crate::app::shell::shell_actions::{
     self, CloseWindow, GoBack, GoForward, NewWindow, ToggleCommandPalette,
 };
@@ -361,6 +362,7 @@ pub fn install_app_menu(cx: &mut App) {
     shell_actions::install_key_bindings(cx);
     crate::modules::chat::components::chat::composer::chat_composer_text_view::install_key_bindings(cx);
     cx.bind_keys(app_menu_key_bindings(host));
+    install_window_scale(cx);
     install_bug_report_trigger(cx);
 
     cx.on_action(|_: &Quit, cx| request_quit(cx));
@@ -386,6 +388,8 @@ pub fn refresh_app_menu(cx: &App) {
 
 fn with_active_window(cx: &mut App, apply: fn(&Window)) {
     if let Some(handle) = cx.active_window() {
-        handle.update(cx, |_, window, _| apply(window)).ok();
+        cx.defer(move |cx| {
+            handle.update(cx, |_, window, _| apply(window)).ok();
+        });
     }
 }

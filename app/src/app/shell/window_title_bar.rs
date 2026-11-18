@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, CursorStyle, Entity, Global, HitboxBehavior, Hsla, IntoElement,
-    KeyBinding, MouseButton, Render, WeakEntity, Window, WindowControlArea, WindowId, actions,
+    KeyBinding, MouseButton, Pixels, Render, Subscription, WeakEntity, Window, WindowControlArea, WindowId, actions,
     canvas, div, prelude::*, px, svg, transparent_black,
 };
 use rise_platform::HostOs;
@@ -18,7 +18,7 @@ use rise_theme::{AppTheme, ShellMetrics};
 use rise_ui::IconUi;
 
 use crate::app::router::navigation_types::{MainTab, RootRoute};
-use crate::core::desktop_platform::app_menu_bar::AppMenuBar;
+use crate::core::desktop_platform::app_menu_bar::{AppMenuBar, draws_in_window_menu_bar};
 
 const TITLE_BAR_ID: &str = "shell.title_bar";
 const MENU_SLOT_ID: &str = "shell.title_bar.menu";
@@ -28,18 +28,10 @@ const FRAME_ID: &str = "shell.window_frame";
 actions!(rise_title_bar, [ToggleAppMenuBar]);
 
 pub const WINDOWS_MENU_BAR_KEYSTROKES: [&str; 2] = ["f10", "alt"];
-pub const LINUX_MENU_BAR_KEYSTROKES: [&str; 1] = ["f10"];
 
-/// none where the os shows the menu itself, the keys belong to the focused field there
+/// none where the window draws no menu bar, the keys belong to the focused field there
 pub fn menu_bar_keystrokes(host: HostOs, native_menu_bar: bool) -> &'static [&'static str] {
-    if native_menu_bar {
-        return &[];
-    }
-    match host {
-        HostOs::Windows => &WINDOWS_MENU_BAR_KEYSTROKES,
-        HostOs::Linux => &LINUX_MENU_BAR_KEYSTROKES,
-        HostOs::MacOs => &[],
-    }
+    if draws_in_window_menu_bar(host, native_menu_bar) { &WINDOWS_MENU_BAR_KEYSTROKES } else { &[] }
 }
 
 /// chrome every shell window opens with, app drawn on all three desktops
@@ -95,14 +87,22 @@ pub fn draws_under_window_controls(route: &RootRoute) -> bool {
 /// true if a left drag on empty strip space asks the window system to move the window
 pub const fn drag_moves_window(host: HostOs, granted: DecorationMode) -> bool {
     match host {
-        HostOs::MacOs | HostOs::Windows => false,
+        HostOs::MacOs => window_chrome::app_owns_titlebar_drag(host),
+        HostOs::Windows => false,
         HostOs::Linux => window_chrome::app_starts_window_move(host, granted),
     }
 }
 
-/// true if the strip itself handles double click, on macos appkit already did
+pub const fn controls_dock_in_rail(host: HostOs) -> bool {
+    matches!(host, HostOs::MacOs)
+}
+
+/// true if the strip itself handles double click, the os keeps it only on a titlebar it owns
 pub const fn strip_handles_double_click(host: HostOs) -> bool {
-    !matches!(host, HostOs::MacOs)
+    match host {
+        HostOs::MacOs => window_chrome::app_owns_titlebar_drag(host),
+        HostOs::Windows | HostOs::Linux => true,
+    }
 }
 
 /// icon font windows draws its own caption glyphs with
@@ -203,8 +203,10 @@ fn toggle_menu_bar_in_active_window(cx: &mut App) {
     else {
         return;
     };
-    let _ = handle.update(cx, |_, window, cx| {
-        bar.update(cx, |bar, cx| bar.toggle_menu_bar(window, cx));
+    cx.defer(move |cx| {
+        let _ = handle.update(cx, |_, window, cx| {
+            bar.update(cx, |bar, cx| bar.toggle_menu_bar(window, cx));
+        });
     });
 }
 
@@ -212,10 +214,12 @@ pub type CloseAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
 pub struct WindowTitleBar {
     menu_bar: Option<Entity<AppMenuBar>>,
+    _menu_observation: Option<Subscription>,
     controls_theme: Option<AppTheme>,
     on_close: Option<CloseAction>,
     should_move: bool,
     controls_in_rail: bool,
+    drag_holes: Vec<(Pixels, Pixels)>,
 }
 
 impl WindowTitleBar {
@@ -236,13 +240,16 @@ impl WindowTitleBar {
         let bars = cx.default_global::<TitleBars>();
         bars.0.retain(|_, bar| bar.upgrade().is_some());
         bars.0.insert(window_id, this);
+        let menu_observation = menu_bar.as_ref().map(|menu| cx.observe(menu, |_, _, cx| cx.notify()));
 
         Self {
             menu_bar,
+            _menu_observation: menu_observation,
             controls_theme: None,
             on_close: None,
             should_move: false,
             controls_in_rail: false,
+            drag_holes: Vec::new(),
         }
     }
 
@@ -272,11 +279,40 @@ impl WindowTitleBar {
     }
 
     pub fn dock_controls_in_rail(&mut self, docked: bool, cx: &mut Context<Self>) {
+        let docked = docked && controls_dock_in_rail(HostOs::current());
         if self.controls_in_rail == docked {
             return;
         }
         self.controls_in_rail = docked;
         cx.notify();
+    }
+
+    pub fn set_drag_holes(&mut self, holes: Vec<(Pixels, Pixels)>, cx: &mut Context<Self>) {
+        if self.drag_holes == holes {
+            return;
+        }
+        self.drag_holes = holes;
+        cx.notify();
+    }
+
+    fn drag_segment(&self, index: usize, start: Pixels, end: Pixels, chrome: WindowChrome, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id(("window-drag-segment", index))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(start)
+            .w(end - start)
+            .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(MouseButton::Left, cx.listener(|bar, _, _, _| bar.should_move = true))
+            .on_click(move |event, window, _| {
+                if event.click_count() == 2 && strip_handles_double_click(HostOs::current()) {
+                    let _ = window_chrome::titlebar_double_click(window, &chrome);
+                }
+            })
+            .on_mouse_down(MouseButton::Right, |event, window, _| {
+                let _ = window_chrome::open_window_menu(window, event.position);
+            })
     }
 
     fn chrome(window: &Window, cx: &App) -> WindowChrome {
@@ -468,9 +504,10 @@ impl Render for WindowTitleBar {
 
         let drawn_menu = self.menu_bar.as_ref().filter(|menu| menu.read(cx).is_drawn());
         let menu = drawn_menu.map(|menu| {
+            let is_open = menu.read(cx).open_section().is_some();
             div()
                 .id(MENU_SLOT_ID)
-                .occlude()
+                .when(is_open, |slot| slot.occlude())
                 .h_full()
                 .flex()
                 .items_center()
@@ -478,6 +515,11 @@ impl Render for WindowTitleBar {
                 .child(menu.clone())
         });
 
+        let segments: Vec<AnyElement> = drag_segments(window.viewport_size().width, &self.drag_holes)
+            .into_iter()
+            .enumerate()
+            .map(|(index, (start, end))| self.drag_segment(index, start, end, chrome, cx).into_any_element())
+            .collect();
         div()
             .id(TITLE_BAR_ID)
             .absolute()
@@ -489,11 +531,7 @@ impl Render for WindowTitleBar {
             .flex_row()
             .items_center()
             .when(self.controls_in_rail, |strip| strip.pl(rail_reserve))
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|bar, _, _, _| bar.should_move = true),
-            )
+            .children(segments)
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|bar, _, _, _| bar.should_move = false),
@@ -509,20 +547,34 @@ impl Render for WindowTitleBar {
                     window.start_window_move();
                 }
             }))
-            .on_click(move |event, window, _| {
-                if event.click_count() == 2 && strip_handles_double_click(HostOs::current()) {
-                    let _ = window_chrome::titlebar_double_click(window, &chrome);
-                }
-            })
-            .on_mouse_down(MouseButton::Right, |event, window, _| {
-                let _ = window_chrome::open_window_menu(window, event.position);
-            })
             .children(leading_controls)
             .children(menu)
             .child(div().flex_1().h_full())
             .children(trailing_controls)
             .children(rail_controls)
     }
+}
+
+/// the strip minus the holes, as window x ranges that move the window
+pub(crate) fn drag_segments(width: Pixels, holes: &[(Pixels, Pixels)]) -> Vec<(Pixels, Pixels)> {
+    let mut holes: Vec<(Pixels, Pixels)> = holes
+        .iter()
+        .map(|(start, end)| ((*start).max(px(0.0)), (*end).min(width)))
+        .filter(|(start, end)| start < end)
+        .collect();
+    holes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut segments = Vec::with_capacity(holes.len() + 1);
+    let mut cursor = px(0.0);
+    for (start, end) in holes {
+        if start > cursor {
+            segments.push((cursor, start));
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < width {
+        segments.push((cursor, width));
+    }
+    segments
 }
 
 /// wraps the window content in the frame owed to the compositor under client side decorations

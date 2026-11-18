@@ -616,6 +616,7 @@ pub mod modules {
             pub mod message_permissions;
             #[cfg(test)]
             mod message_permissions_tests;
+            pub mod poll_publicity;
             pub mod config {
                 pub mod message_sizes;
             }

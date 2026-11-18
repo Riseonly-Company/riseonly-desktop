@@ -65,12 +65,12 @@ impl AppEnvironment {
     }
 
     pub fn api_base_url(&self) -> Url {
-        Self::info_url(&Endpoints::compiled_for(*self).api_base_url)
+        Self::info_url(&Endpoints::effective(*self).api_base_url)
             .unwrap_or_else(|| PRODUCTION_API_BASE_URL.clone())
     }
 
     pub fn web_socket_url(&self) -> Url {
-        Self::info_url(&Endpoints::compiled_for(*self).ws_url)
+        Self::info_url(&Endpoints::effective(*self).ws_url)
             .unwrap_or_else(SaiWebSocketEnvironment::production_web_socket_url)
     }
 

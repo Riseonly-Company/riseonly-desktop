@@ -229,15 +229,15 @@ fn every_command_parses_from_its_json() {
     );
     assert_eq!(
         command(r#"{"cmd":"drag","x1":10,"y1":20,"x2":10,"y2":120}"#),
-        DriveCommand::Drag { x1: 10.0, y1: 20.0, x2: 10.0, y2: 120.0, steps: 12, hold_ms: 0, then: Vec::new(), minimise_at_ms: None, restore_at_ms: None }
+        DriveCommand::Drag { x1: 10.0, y1: 20.0, x2: 10.0, y2: 120.0, steps: 12, hold_ms: 0, then: Vec::new(), minimise_at_ms: None, restore_at_ms: None, step_ms: 0, end_hold_ms: 0, snap_every: 0, snap_stem: None }
     );
     assert_eq!(
         command(r#"{"cmd":"drag","x1":1,"y1":2,"x2":3,"y2":4,"steps":3,"hold_ms":600}"#),
-        DriveCommand::Drag { x1: 1.0, y1: 2.0, x2: 3.0, y2: 4.0, steps: 3, hold_ms: 600, then: Vec::new(), minimise_at_ms: None, restore_at_ms: None }
+        DriveCommand::Drag { x1: 1.0, y1: 2.0, x2: 3.0, y2: 4.0, steps: 3, hold_ms: 600, then: Vec::new(), minimise_at_ms: None, restore_at_ms: None, step_ms: 0, end_hold_ms: 0, snap_every: 0, snap_stem: None }
     );
     assert_eq!(
         command(r#"{"cmd":"drag","x1":1,"y1":2,"x2":3,"y2":4,"then":[[5,6],[1,2]]}"#),
-        DriveCommand::Drag { x1: 1.0, y1: 2.0, x2: 3.0, y2: 4.0, steps: 12, hold_ms: 0, then: vec![(5.0, 6.0), (1.0, 2.0)], minimise_at_ms: None, restore_at_ms: None }
+        DriveCommand::Drag { x1: 1.0, y1: 2.0, x2: 3.0, y2: 4.0, steps: 12, hold_ms: 0, then: vec![(5.0, 6.0), (1.0, 2.0)], minimise_at_ms: None, restore_at_ms: None, step_ms: 0, end_hold_ms: 0, snap_every: 0, snap_stem: None }
     );
     assert_eq!(
         command(r#"{"cmd":"location","latitude":41.5,"longitude":69.25}"#),
@@ -436,7 +436,8 @@ fn swipe_and_held_window_switches_parse() {
         command(r#"{"cmd":"drag","x1":1,"y1":2,"x2":3,"y2":4,"minimise_at_ms":300,"restore_at_ms":900}"#),
         DriveCommand::Drag {
             x1: 1.0, y1: 2.0, x2: 3.0, y2: 4.0, steps: 12, hold_ms: 0, then: Vec::new(),
-            minimise_at_ms: Some(300), restore_at_ms: Some(900),
+            minimise_at_ms: Some(300), restore_at_ms: Some(900), step_ms: 0, end_hold_ms: 0, snap_every: 0,
+            snap_stem: None,
         }
     );
 }

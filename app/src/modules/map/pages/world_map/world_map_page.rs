@@ -12,14 +12,14 @@ use rise_core::foundation::foundation_uuid::Uuid;
 use rise_i18n::language_store::LanguageStore;
 use rise_i18n::tr;
 use rise_media::map_view::LatLng;
-use rise_theme::ThemeStore;
+use rise_theme::{AppTheme, ThemeStore};
 use rise_ui::swiftui::page_refresh::PageFocus;
 use rise_ui::bottom_sheet_ui::bottom_sheet_metrics::BottomSheetMetrics;
 use rise_ui::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use rise_ui::icon_ui::IconUi;
 use rise_ui::liquid_chrome::LiquidChromeModifiers;
 use rise_ui::main_text::MainText;
-use rise_ui::page_header_toolbar_button::{PageHeaderBackButton, PageHeaderIconButton};
+use rise_ui::page_header_toolbar_button::{PageHeaderBackButton, PageHeaderIconButton, PageHeaderMetrics};
 use rise_ui::page_header_ui::PanelToggleHeaderReserveKey;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::motion::{MotionSpec, ease_in_out, spring};
@@ -38,6 +38,7 @@ use crate::core::ui::emoji_picker_ui::emoji_picker_catalog::EmojiPickerCatalog;
 use crate::core::ui::qr_code::rise_phone_handoff_code::RisePhoneHandoffCode;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
+use crate::modules::map::components::globe::map_globe_camera_link::MapGlobeCameraLink;
 use crate::modules::map::components::globe::map_globe_layer::MapGlobeLayer;
 use crate::modules::map::components::globe::map_globe_view::MapGlobePerson;
 use crate::modules::map::components::map_compass_button::MapCompassButton;
@@ -104,14 +105,23 @@ fn push(nav_store: &Option<Entity<NavigationStore>>, route: RootRoute, cx: &mut 
 }
 
 fn open_settings(nav_store: &Option<Entity<NavigationStore>>, cx: &mut App) {
+    open_beside(nav_store, RootRoute::MapSettings, cx);
+}
+
+fn open_friends(nav_store: &Option<Entity<NavigationStore>>, cx: &mut App) {
+    open_beside(nav_store, RootRoute::MapFriends, cx);
+}
+
+/// settings and friends of the map share the right panel, one takes the place of the other
+fn open_beside(nav_store: &Option<Entity<NavigationStore>>, route: RootRoute, cx: &mut App) {
     let beside = nav_store.as_ref().is_some_and(|store| store.read(cx).aside_takes_details());
     if beside {
         if let Some(aside) = navigation_aside_hooks() {
-            (aside.open)(RootRoute::MapSettings, cx);
+            (aside.open_over_default)(route, cx);
         }
         return;
     }
-    push(nav_store, RootRoute::MapSettings, cx);
+    push(nav_store, route, cx);
 }
 
 /// a view in its slot
@@ -135,6 +145,7 @@ pub struct WorldMapPage {
     editing: Option<Entity<MapEditingSession>>,
     reaction_picker_open: bool,
     zoom_inset_outside_editing: f32,
+    controls_frame: Option<(f32, f32)>,
     profile_friend: Option<MapLiveFriend>,
     profile_is_minimized: bool,
     selected_is_shown: bool,
@@ -267,6 +278,7 @@ impl WorldMapPage {
             editing: None,
             reaction_picker_open: false,
             zoom_inset_outside_editing: 0.0,
+            controls_frame: None,
             profile_friend: None,
             profile_is_minimized: false,
             selected_is_shown: false,
@@ -348,6 +360,35 @@ impl WorldMapPage {
             )
     }
 
+    fn nav_store(&self) -> Option<Entity<NavigationStore>> {
+        self.zoom_keys_host.as_ref().and_then(|(store, _)| store.upgrade())
+    }
+
+    fn profile_beside(&self, cx: &App) -> bool {
+        self.nav_store().is_some_and(|store| store.read(cx).aside_takes_details())
+    }
+
+    fn switch_panel_mode(&mut self, mode: MapPanelMode, cx: &mut Context<Self>) {
+        if !self.profile_beside(cx) {
+            if mode == MapPanelMode::Media {
+                self.open_media_library(cx);
+            } else {
+                self.close_profile(cx);
+                interact(cx, |interactions, cx| interactions.set_panel_mode(mode, cx));
+            }
+            return;
+        }
+        self.close_profile(cx);
+        interact(cx, |interactions, cx| {
+            interactions.set_panel_mode(mode, cx);
+            if mode == MapPanelMode::Tracks {
+                interactions.ensure_own_tracks(cx);
+            }
+        });
+        let route = if mode == MapPanelMode::Friends { RootRoute::MapFriends } else { RootRoute::MapProfile };
+        open_beside(&self.nav_store(), route, cx);
+    }
+
     fn open_media_library(&mut self, cx: &mut Context<Self>) {
         interact(cx, |interactions, cx| interactions.open_own_profile(cx));
         self.profile_friend = MapInteractionsStore::own_map_profile(cx);
@@ -370,6 +411,15 @@ impl WorldMapPage {
                 interactions.selected_friend_id.is_none() && interactions.selected_grid_id.is_none(),
             )
         };
+        if self.profile_beside(cx) {
+            if panel_mode != MapPanelMode::Friends && nothing_selected && MapServicesStore::is_member(cx) {
+                if panel_mode == MapPanelMode::Tracks {
+                    interact(cx, |interactions, cx| interactions.ensure_own_tracks(cx));
+                }
+                open_beside(&self.nav_store(), RootRoute::MapProfile, cx);
+            }
+            return;
+        }
         if panel_mode != MapPanelMode::Media || !nothing_selected {
             return;
         }
@@ -413,12 +463,7 @@ impl WorldMapPage {
             )
             .child(div().flex_1().child(MapModeSwitch::new(panel_mode, move |mode, _, cx| {
                 mode_page.update(cx, |page, cx| {
-                    if mode == MapPanelMode::Media {
-                        page.open_media_library(cx);
-                    } else {
-                        page.close_profile(cx);
-                        interact(cx, |interactions, cx| interactions.set_panel_mode(mode, cx));
-                    }
+                    page.switch_panel_mode(mode, cx);
                     cx.notify();
                 });
             })))
@@ -864,9 +909,21 @@ impl WorldMapPage {
         if is_member {
             let settings_nav = nav_store.clone();
             let eraser_page = page.clone();
+            let friends_beside = nav_store.as_ref().is_some_and(|store| store.read(cx).aside_takes_details());
+            let controls_page = page.clone();
             header = header.child(
                 vstack(10.0)
                     .flex_none()
+                    .relative()
+                    .child(measure("world-map-controls-frame", move |bounds, _, cx| {
+                        let frame = (f32::from(bounds.top()), f32::from(bounds.bottom()));
+                        let _ = controls_page.update(cx, |page, cx| {
+                            if page.controls_frame != Some(frame) {
+                                page.controls_frame = Some(frame);
+                                cx.notify();
+                            }
+                        });
+                    }))
                     .child(
                         map_control_hint(
                             "world-map-settings-hint",
@@ -878,6 +935,18 @@ impl WorldMapPage {
                         )
                         .guide_anchor(RiseGuideAnchor::MapSettingsButton),
                     )
+                    .children(friends_beside.then(|| {
+                        let friends_nav = nav_store.clone();
+                        map_control_hint(
+                            "world-map-friends-hint",
+                            tr("map_friends_title"),
+                            PageHeaderIconButton::new("world-map-friends", "person.2.fill", move |_, cx| {
+                                open_friends(&friends_nav, cx);
+                            })
+                            .font_size(15.0),
+                        )
+                        .guide_anchor(RiseGuideAnchor::MapFriendsOpen)
+                    }))
                     .child(MapCompassButton::new())
                     .child(
                         map_control_hint(
@@ -1056,7 +1125,9 @@ impl Render for WorldMapPage {
         } else {
             None
         };
+        let friends_beside = nav_store.as_ref().is_some_and(|store| store.read(cx).aside_takes_details());
         let shows_tracks_panel = in_tracks_mode
+            && !friends_beside
             && selected.is_none()
             && selected_grid.is_none()
             && self.profile_friend.is_none()
@@ -1076,12 +1147,13 @@ impl Render for WorldMapPage {
             && self.profile_friend.is_none()
             && state_snapshot.is_member()
             && state_snapshot.state.is_some();
-        let shows_nearby = friend_in_aside && strip_wanted;
+        let shows_nearby = !friends_beside && friend_in_aside && strip_wanted;
         let grid_in_aside = friend_in_aside && selected_grid.is_some();
         let inline_grid = selected_grid.is_some() && !grid_in_aside;
         let grid_closed = std::mem::replace(&mut self.grid_was_shown, selected_grid.is_some()) && selected_grid.is_none();
         if grid_closed
             && friend_in_aside
+            && !friends_beside
             && is_member
             && panel_mode == MapPanelMode::Media
             && selected.is_none()
@@ -1138,6 +1210,7 @@ impl Render for WorldMapPage {
             self.zoom_inset_outside_editing = map_bottom_inset;
         }
         let zoom_bottom_inset = self.zoom_inset_outside_editing;
+        let controls_frame = if is_member { self.controls_frame } else { None };
 
         let selected_friend_shown_id = selected.as_ref().map(|friend| friend.id().to_owned());
         let profile_friend_id = self.profile_friend.as_ref().map(|friend| friend.id().to_owned());
@@ -1157,7 +1230,8 @@ impl Render for WorldMapPage {
                 || canvas.shows_photos != is_member
                 || canvas.bottom_inset != map_bottom_inset
                 || canvas.chrome_bottom_inset != chrome_bottom_inset
-                || canvas.zoom_bottom_inset != zoom_bottom_inset;
+                || canvas.zoom_bottom_inset != zoom_bottom_inset
+                || canvas.controls_frame != controls_frame;
             if !changed {
                 return;
             }
@@ -1170,6 +1244,7 @@ impl Render for WorldMapPage {
             canvas.bottom_inset = map_bottom_inset;
             canvas.chrome_bottom_inset = chrome_bottom_inset;
             canvas.zoom_bottom_inset = zoom_bottom_inset;
+            canvas.controls_frame = controls_frame;
             cx.notify();
         });
 
@@ -1206,7 +1281,7 @@ impl Render for WorldMapPage {
             .unwrap_or_default();
         let shows_grid = selected_grid.is_some();
         let shows_friend = !shows_grid && !shows_tracks_panel && selected.is_some();
-        let shows_strip = strip_wanted && !shows_nearby;
+        let shows_strip = strip_wanted && !shows_nearby && !friends_beside;
         let shows_state = !shows_grid
             && !shows_tracks_panel
             && selected.is_none()
@@ -1256,7 +1331,14 @@ impl Render for WorldMapPage {
             if !inline_friend {
                 column = column.child(spacer_min_h(0.0));
                 if is_member {
-                    column = column.child(div().w_full().pb(px(10.0)).child(self.map_action_buttons(cx)));
+                    column = column.child(
+                        div()
+                            .w_full()
+                            .pb(px(10.0))
+                            .flex()
+                            .justify_center()
+                            .child(div().w_full().max_w(theme.shell.feed_max_width).child(self.map_action_buttons(cx))),
+                    );
                 }
             }
             if let (Some(friend), true, None) = (&self.profile_friend, self.profile_is_minimized, &selected) {
@@ -1297,9 +1379,19 @@ impl Render for WorldMapPage {
                     div().relative().w_full().child(panel).child(panel_probe)
                 }
             };
-            column = column.child(panel_row.child(panel_body));
+            let panel_column = div().w_full().max_w(theme.shell.feed_max_width);
+            let panel_column = if inline_friend { panel_column.h_full() } else { panel_column };
+            column = column.child(panel_row.flex().justify_center().child(panel_column.child(panel_body)));
             if is_member {
-                column = column.child(div().w_full().px(px(16.0)).pb(px(8.0)).child(self.bottom_navigation(&page, cx)));
+                column = column.child(
+                    div()
+                        .w_full()
+                        .px(px(16.0))
+                        .pb(px(8.0))
+                        .flex()
+                        .justify_center()
+                        .child(div().w_full().max_w(theme.shell.feed_max_width).child(self.bottom_navigation(&page, cx))),
+                );
             }
             let content = div().absolute().top_0().bottom_0().left_0().right(px((panel_trailing - map_trailing).max(0.0))).child(header).child(column);
             self.chrome_presence.render_transitioned(now, window, |_| content)
@@ -1328,7 +1420,7 @@ impl Render for WorldMapPage {
                     tracks.places.clone(),
                     MapServicesStore::reaction_inbox(cx),
                     origin,
-                    move |_, cx| push(&open_nav, RootRoute::MapFriends, cx),
+                    move |_, cx| open_friends(&open_nav, cx),
                     |id, _, cx| interact(cx, |interactions, cx| interactions.focus_friend(&id, cx)),
                     |id, _, cx| interact(cx, |interactions, cx| interactions.select_place(&id, cx)),
                 )
@@ -1589,7 +1681,7 @@ impl WorldMapPage {
                     state,
                     live.friends.clone(),
                     reaction_inbox,
-                    move |_, cx| push(&strip_nav, RootRoute::MapFriends, cx),
+                    move |_, cx| open_friends(&strip_nav, cx),
                     |id, _, cx| interact(cx, |interactions, cx| interactions.focus_friend(&id, cx)),
                 )
             });
@@ -1627,6 +1719,8 @@ struct MapCanvas {
     bottom_inset: f32,
     chrome_bottom_inset: f32,
     zoom_bottom_inset: f32,
+    controls_frame: Option<(f32, f32)>,
+    frame: (f32, f32),
     on_background_tap: MapAction,
     globe_opacity: Animated<f32>,
     _observations: Vec<Subscription>,
@@ -1652,6 +1746,8 @@ impl MapCanvas {
             bottom_inset: 0.0,
             chrome_bottom_inset: 0.0,
             zoom_bottom_inset: 0.0,
+            controls_frame: None,
+            frame: (0.0, 0.0),
             on_background_tap: Rc::new(move |_: &mut Window, cx: &mut App| {
                 let _ = page.update(cx, |page, cx| {
                     if page.selected_is_shown {
@@ -1857,6 +1953,43 @@ impl MapCanvas {
     }
 }
 
+impl MapCanvas {
+    /// plus and minus centred in the room under the map controls, beside them when that room is too low
+    fn zoom_column(&self, theme: &AppTheme, cx: &App) -> Div {
+        let gap = f32::from(theme.spacing._600);
+        let edge = f32::from(theme.spacing._600);
+        let height = MapZoomButtons::height(cx);
+        let (frame_top, frame_height) = self.frame;
+        let Some((controls_top, controls_bottom)) = self.controls_frame else {
+            return div()
+                .absolute()
+                .right(px(edge))
+                .top_0()
+                .bottom(px(self.zoom_bottom_inset))
+                .flex()
+                .items_center()
+                .child(MapZoomButtons::new());
+        };
+        let top = (controls_bottom - frame_top + gap).max(0.0);
+        let room = frame_height - self.zoom_bottom_inset - top;
+        if frame_height <= 0.0 || room >= height {
+            return div()
+                .absolute()
+                .right(px(edge))
+                .top(px(top))
+                .bottom(px(self.zoom_bottom_inset))
+                .flex()
+                .items_center()
+                .child(MapZoomButtons::new());
+        }
+        div()
+            .absolute()
+            .right(px(edge + PageHeaderMetrics::TOOLBAR_BUTTON_SIZE + gap))
+            .top(px((controls_top - frame_top).max(0.0)))
+            .child(MapZoomButtons::new())
+    }
+}
+
 impl Render for MapCanvas {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = rise_ui::theme(cx).clone();
@@ -1871,7 +2004,9 @@ impl Render for MapCanvas {
             interact(cx, |interactions, cx| interactions.self_pin_changed(shown, cx));
         });
 
-        let is_globe_hidden = globe_entry.is_none();
+        let is_map_unavailable =
+            MapGlobeCameraLink::shared(cx).read(cx).map_view().is_some_and(|host| host.unavailable().is_some());
+        let is_globe_hidden = globe_entry.is_none() || is_map_unavailable;
         let people = if is_globe_hidden { Vec::new() } else { self.globe_people(shows_self, cx) };
         let now = RiseClock::monotonic();
         self.globe_opacity.set(if is_globe_hidden { 0.0 } else { 1.0 }, ease_in_out(0.36), now, reduce_motion(cx));
@@ -1897,19 +2032,20 @@ impl Render for MapCanvas {
         let globe_host = div().absolute().opacity(globe_opacity).overflow_hidden();
         let globe_host = if is_globe_hidden && globe_opacity <= 0.0 { globe_host.size_0() } else { globe_host.inset_0() };
         let is_erasing = self.editing.as_ref().is_some_and(|editing| editing.read(cx).mode == MapEditingMode::Eraser);
-        let zoom_buttons = (!is_erasing).then(|| {
-            div()
-                .absolute()
-                .right(px(12.0))
-                .top_0()
-                .bottom(px(self.zoom_bottom_inset))
-                .flex()
-                .items_center()
-                .child(MapZoomButtons::new())
-        });
+        let zoom_buttons = (!is_erasing).then(|| self.zoom_column(&theme, cx));
+        let measured = cx.weak_entity();
         div()
             .relative()
             .size_full()
+            .child(measure("world-map-canvas-frame", move |bounds, _, cx| {
+                let frame = (f32::from(bounds.top()), f32::from(bounds.size.height));
+                let _ = measured.update(cx, |canvas, cx| {
+                    if canvas.frame != frame {
+                        canvas.frame = frame;
+                        cx.notify();
+                    }
+                });
+            }))
             .child(map)
             .child(globe_host.child(globe))
             .child(

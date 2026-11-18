@@ -17,6 +17,14 @@ pub struct PageHeaderMetrics;
 
 impl PageHeaderMetrics {
     pub const TOOLBAR_BUTTON_SIZE: f32 = 45.0;
+    /// space from a bar edge to its outer buttons, chat profile and every overlay bar keep it
+    pub const BAR_EDGE_INSET: f32 = 8.0;
+    /// floating strip of the right panel, page header sized buttons under the same top inset
+    pub const PANEL_STRIP_HEIGHT: f32 = Self::TOP_INSET + Self::TOOLBAR_BUTTON_SIZE;
+    /// space from a header edge to its first button
+    pub const EDGE_INSET: f32 = 12.0;
+    /// space between header buttons
+    pub const BUTTON_GAP: f32 = 10.0;
     pub const BAR_HEIGHT: f32 = 56.0;
     pub const TOP_INSET: f32 = 6.0;
     pub const HEIGHT: f32 = Self::TOP_INSET + Self::BAR_HEIGHT;
@@ -31,6 +39,7 @@ pub struct PageHeaderIconButton {
     id: ElementId,
     system_image: SharedString,
     font_size: f32,
+    size: f32,
     badge_count: i64,
     icon_color: Option<Hsla>,
     disabled: bool,
@@ -47,6 +56,7 @@ impl PageHeaderIconButton {
             id: id.into(),
             system_image: system_image.into(),
             font_size: 17.0,
+            size: PageHeaderMetrics::TOOLBAR_BUTTON_SIZE,
             badge_count: 0,
             icon_color: None,
             disabled: false,
@@ -56,6 +66,11 @@ impl PageHeaderIconButton {
 
     pub fn font_size(mut self, font_size: f32) -> Self {
         self.font_size = font_size;
+        self
+    }
+
+    pub fn size(mut self, size: f32) -> Self {
+        self.size = size;
         self
     }
 
@@ -105,7 +120,7 @@ impl RenderOnce for PageHeaderIconButton {
         let glyph = self.glyph(self.icon_color.unwrap_or(text_primary));
         let action = self.action.clone();
         let button = LiquidGlassButton::new(self.id.clone(), LiquidGlassButtonShape::Circle)
-            .size(PageHeaderMetrics::TOOLBAR_BUTTON_SIZE)
+            .size(self.size)
             .disabled(self.disabled)
             .accessibility_label(self.accessibility_label())
             .on_press(move |window, cx| action(window, cx))

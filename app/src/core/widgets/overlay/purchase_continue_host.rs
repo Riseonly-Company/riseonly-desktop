@@ -1,17 +1,18 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
-    App, Context, Entity, IntoElement, ParentElement, Render, RenderImage, SharedString, Styled, Subscription, Task,
-    Window, div,
+    AnyWindowHandle, App, Context, Entity, IntoElement, ParentElement, Render, RenderImage, SharedString, Styled,
+    Subscription, Task, Window, div,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_theme::ThemeStore;
 use rise_ui::bottom_sheet_ui::native_bottom_sheet_presentation_host::NativeBottomSheetPresentationHost;
 use rise_ui::swiftui::prelude::*;
+use rise_ui::top_presenter::TopPresenter;
 
 use crate::core::ui::qr_code::rise_phone_handoff_code::RisePhoneHandoffCode;
 use crate::core::ui::qr_code::rise_purchase_continue_sheet::{RisePurchaseContinue, RisePurchaseContinueMetrics};
-use crate::modules::gifts::stores::gifts::gifts_interactions::gifts_interactions::GiftsInteractionsStore;
 use crate::modules::sparks::components::sparks_sheets::SparksPurchaseSheetContent;
 use crate::modules::sparks::stores::sparks::sparks_actions::sparks_types::SparksPurchasePhase;
 use crate::modules::sparks::stores::sparks::sparks_interactions::sparks_interactions::SparksInteractionsStore;
@@ -27,6 +28,12 @@ enum PurchaseContinueSource {
     PremiumGift,
     Sparks,
     Subscription,
+}
+
+impl PurchaseContinueSource {
+    fn closes_sheets_first(self) -> bool {
+        matches!(self, Self::PremiumGift | Self::Subscription)
+    }
 }
 
 /// what the code raster was made for
@@ -45,32 +52,34 @@ pub struct PurchaseContinueHost {
     sparks_services: Entity<SparksServicesStore>,
     sparks_interactions: Entity<SparksInteractionsStore>,
     subscription: Entity<SubscriptionServicesStore>,
-    gifts: Entity<GiftsInteractionsStore>,
     source: Option<PurchaseContinueSource>,
+    awaiting: Option<PurchaseContinueSource>,
+    window: Option<AnyWindowHandle>,
+    sheets_close_task: Option<Task<()>>,
     content: Option<RisePurchaseContinue>,
     code_key: Option<PurchaseContinueCodeKey>,
     code: Option<Option<Arc<RenderImage>>>,
     code_task: Option<Task<()>>,
-    _observations: [Subscription; 5],
+    _observations: [Subscription; 4],
 }
 
 impl PurchaseContinueHost {
     /// above every sheet (their layers start at 1 and grow with the stack) and below the full window covers
     pub const LAYER_PRIORITY: usize = 900;
     const SHEET_ID: &'static str = "root-purchase-continue";
+    const SHEETS_CLOSE_POLL: Duration = Duration::from_millis(16);
+    const SHEETS_CLOSE_LIMIT: Duration = Duration::from_millis(1_200);
 
     pub fn new(cx: &mut Context<Self>) -> Self {
         let premium_gift = PremiumGiftStore::shared(cx);
         let sparks_services = SparksServicesStore::shared(cx);
         let sparks_interactions = SparksInteractionsStore::shared(cx);
         let subscription = SubscriptionServicesStore::shared(cx);
-        let gifts = GiftsInteractionsStore::shared(cx);
         let theme_store = ThemeStore::shared(cx);
         let observations = [
             cx.observe(&premium_gift, |host, _, cx| host.sync(cx)),
             cx.observe(&sparks_services, |host, _, cx| host.sync(cx)),
             cx.observe(&subscription, |host, _, cx| host.sync(cx)),
-            cx.observe(&gifts, |host, _, cx| host.sync(cx)),
             cx.observe(&theme_store, |_, _, cx| cx.notify()),
         ];
         let mut host = Self {
@@ -78,8 +87,10 @@ impl PurchaseContinueHost {
             sparks_services,
             sparks_interactions,
             subscription,
-            gifts,
             source: None,
+            awaiting: None,
+            window: None,
+            sheets_close_task: None,
             content: None,
             code_key: None,
             code: None,
@@ -111,35 +122,66 @@ impl PurchaseContinueHost {
         }
     }
 
-    /// a premium gift handoff belongs to the premium gift sheet or the gift shop, it ends when neither is up
-    fn premium_gift_owner_gone(&self, cx: &App) -> bool {
-        let premium_gift = self.premium_gift.read(cx);
-        premium_gift.continue_on_phone().is_some()
-            && !premium_gift.is_presented()
-            && !self.gifts.read(cx).is_shop_presented()
-    }
-
     /// a store changed: a handoff that opened or switched takes its text and code now, a closed one leaves
     /// the last content stays for the closing frame
+    /// a premium handoff first closes every sheet and shows once they are gone
     fn sync(&mut self, cx: &mut Context<Self>) {
-        if self.source == Some(PurchaseContinueSource::PremiumGift) && self.premium_gift_owner_gone(cx) {
-            tracing::warn!(target: "riseonly::X2374", "purchase continue closed: premium gift sheet and gift shop are gone");
-            self.premium_gift.update(cx, |store, cx| store.dismiss_continue_on_phone(cx));
-        }
         let requested = self.requested(cx);
-        if requested == self.source {
+        if requested == self.source.or(self.awaiting) {
             return;
         }
+        self.awaiting = None;
+        self.sheets_close_task = None;
         match requested {
+            Some(source) if source.closes_sheets_first() => {
+                tracing::warn!(target: "riseonly::X2374", ?source, previous = ?self.source, "purchase continue closes the sheets first");
+                self.content = Some(self.content_for(source, cx));
+                self.source = None;
+                self.awaiting = Some(source);
+                self.close_sheets_then_present(cx);
+            }
             Some(source) => {
                 tracing::warn!(target: "riseonly::X2374", ?source, previous = ?self.source, "purchase continue opened");
                 self.content = Some(self.content_for(source, cx));
+                self.source = Some(source);
             }
             None => {
                 tracing::warn!(target: "riseonly::X2374", source = ?self.source, "purchase continue closed by its store");
+                self.source = None;
             }
         }
-        self.source = requested;
+        cx.notify();
+    }
+
+    fn close_sheets_then_present(&mut self, cx: &mut Context<Self>) {
+        let Some(window) = self.window else {
+            self.present_awaited(cx);
+            return;
+        };
+        let started = RiseClock::monotonic();
+        self.sheets_close_task = Some(cx.spawn(async move |host, cx| {
+            let _ = window.update(cx, |_, window, cx| TopPresenter::dismiss_sheets(window, cx));
+            loop {
+                cx.background_executor().timer(Self::SHEETS_CLOSE_POLL).await;
+                let is_clear = cx.update(|cx| !TopPresenter::has_sheet_in(window.window_id(), cx));
+                if is_clear || RiseClock::monotonic().saturating_sub(started) >= Self::SHEETS_CLOSE_LIMIT {
+                    break;
+                }
+            }
+            let _ = host.update(cx, |host, cx| host.present_awaited(cx));
+        }));
+    }
+
+    fn present_awaited(&mut self, cx: &mut Context<Self>) {
+        self.sheets_close_task = None;
+        let Some(source) = self.awaiting.take() else {
+            return;
+        };
+        if self.requested(cx) != Some(source) {
+            return;
+        }
+        tracing::warn!(target: "riseonly::X2374", ?source, "purchase continue opened after the sheets closed");
+        self.source = Some(source);
         cx.notify();
     }
 
@@ -162,7 +204,7 @@ impl PurchaseContinueHost {
 
     /// rasters the code of the open handoff once per link and scale, the modal waits for it
     fn ensure_code(&mut self, scale: f32, cx: &mut Context<Self>) {
-        if self.source.is_none() {
+        if self.source.is_none() && self.awaiting.is_none() {
             return;
         }
         let Some(content) = self.content.as_ref() else {
@@ -199,6 +241,7 @@ impl PurchaseContinueHost {
 
 impl Render for PurchaseContinueHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window = Some(window.window_handle());
         self.ensure_code(window.scale_factor(), cx);
         let is_code_ready = self.code.is_some();
         if self.source.is_some() {

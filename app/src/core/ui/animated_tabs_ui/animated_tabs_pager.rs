@@ -511,6 +511,13 @@ impl AnimatedTabsPagerGesture {
     }
 }
 
+impl AnimatedTabsPager {
+    fn is_off_screen(slot: i64, strip_offset: f32, page_width: f32) -> bool {
+        let left = slot as f32 * page_width + strip_offset;
+        left >= page_width - 0.5 || left + page_width <= 0.5
+    }
+}
+
 impl RenderOnce for AnimatedTabsPager {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let right_to_left = layout_direction(cx) == LayoutDirection::RightToLeft;
@@ -561,7 +568,7 @@ impl RenderOnce for AnimatedTabsPager {
         let page_width = state.read(cx).page_width;
         let motion = state.read(cx).motion.clone();
         let count = tabs_count.max(1);
-        let strip_left: Length = if page_width > 1.0 {
+        let (strip_left, strip_offset): (Length, Option<f32>) = if page_width > 1.0 {
             let page_count = strip_index(count);
             let resting_index = strip_index(active_tab);
             motion.update(cx, |motion, cx| {
@@ -571,17 +578,22 @@ impl RenderOnce for AnimatedTabsPager {
                     motion.bind(px(page_width), page_count, resting_index, right_to_left, cx);
                 }
             });
-            motion.read(cx).strip_offset_x(window).into()
+            let offset = motion.read(cx).strip_offset_x(window);
+            (offset.into(), Some(f32::from(offset)))
         } else {
             let resting = if right_to_left { count - 1 - active_tab } else { active_tab };
-            relative(-(resting as f32)).into()
+            (relative(-(resting as f32)).into(), None)
         };
 
-        let pages = self.content.into_iter().map(|page| {
+        let pages = self.content.into_iter().enumerate().map(|(index, page)| {
+            let index = index as i64;
+            let slot = if right_to_left { count - 1 - index } else { index };
+            let is_off_screen = strip_offset.is_some_and(|offset| Self::is_off_screen(slot, offset, page_width));
             div()
                 .flex_none()
                 .w(relative(1.0 / count as f32))
                 .when(!sizes, |page_box| page_box.h_full())
+                .when(is_off_screen, |page_box| page_box.invisible())
                 .child(page)
         });
 

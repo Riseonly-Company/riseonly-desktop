@@ -193,7 +193,7 @@ impl MessagePollView {
         let dot_side = 12.0 * dot.max(0.01);
         let radio = zstack(Alignment::Center)
             .frame_size(18.0, 18.0)
-            .child(centred_stroke(ring_color, 1.5, Shape::Circle).frame_size(18.0, 18.0))
+            .child(centred_stroke(ring_color, 1.5, Shape::Circle))
             .child(div().circle().bg(dot_color.opacity(dot.clamp(0.0, 1.0))).frame_size(dot_side, dot_side));
 
         let mut header = hstack(8.0)

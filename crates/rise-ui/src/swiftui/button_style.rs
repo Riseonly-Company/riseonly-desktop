@@ -18,6 +18,13 @@ pub type ButtonAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
 pub const HOVER_OPACITY: f32 = 0.85;
 
+pub const ROW_HOVER_OPACITY: f32 = 0.08;
+
+/// fill a clickable list row or tile takes under the pointer, on any background
+pub fn row_hover_fill(theme: &AppTheme) -> Hsla {
+    theme.text.primary.opacity(ROW_HOVER_OPACITY)
+}
+
 pub const DISABLED_OPACITY: f32 = 0.5;
 
 pub const BORDERED_FILL_OPACITY: f32 = 0.15;
@@ -128,7 +135,7 @@ pub fn button_chrome_hover(
 /// plain button, label as is
 /// pressed only where the label is, no fill and no press effect
 pub fn plain(id: impl Into<ElementId>) -> PlainButton {
-    PlainButton { id: id.into(), disabled: false, action: None, base: div() }
+    PlainButton { id: id.into(), disabled: false, action: None, hover_fill: None, base: div() }
 }
 
 /// element from plain, styles on it style the box around the label
@@ -137,6 +144,7 @@ pub struct PlainButton {
     id: ElementId,
     disabled: bool,
     action: Option<ButtonAction>,
+    hover_fill: Option<Hsla>,
     base: Div,
 }
 
@@ -148,6 +156,12 @@ impl PlainButton {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// a row or tile shows this fill under the pointer instead of fading its label
+    pub fn hover_fill(mut self, fill: Hsla) -> Self {
+        self.hover_fill = Some(fill);
         self
     }
 }
@@ -166,7 +180,10 @@ impl ParentElement for PlainButton {
 
 impl RenderOnce for PlainButton {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        button_chrome(self.base.id(self.id), self.disabled, self.action)
+        match self.hover_fill {
+            Some(fill) => button_chrome_hover(self.base.id(self.id), self.disabled, self.action, move |style| style.bg(fill)),
+            None => button_chrome(self.base.id(self.id), self.disabled, self.action),
+        }
     }
 }
 

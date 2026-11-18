@@ -917,6 +917,13 @@ pub enum MapUnavailable {
     RenderThread(String),
 }
 
+impl MapUnavailable {
+    /// true when the graphics card or its driver is what is missing
+    pub fn is_missing_gpu(&self) -> bool {
+        matches!(self, Self::NoNativeCore { backend: GpuBackend::Vulkan, .. })
+    }
+}
+
 /// how a style failed to load
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum StyleFailure {

@@ -234,6 +234,7 @@ fn deafen_outranks_every_gain() {
     let mut playout = RemotePlayout {
         deafened: false,
         gains: HashMap::from([("u1".to_owned(), 2.0), ("bad".to_owned(), f64::NAN)]),
+        stream_gains: HashMap::new(),
     };
     assert_eq!(playout.volume_for(Some("u1")), 2.0);
     assert_eq!(playout.volume_for(Some("u2")), 1.0);
@@ -549,6 +550,7 @@ fn deafen_silences_the_mix_and_the_queue_is_bounded() {
     let playout = RemotePlayout {
         deafened: true,
         gains: HashMap::new(),
+        stream_gains: HashMap::new(),
     };
     let mut out = [0.5f32; 4];
     mixer.mix_into(&mut out, &playout);
@@ -635,4 +637,21 @@ fn microphone_test_state_round_trips() {
     }
     assert!(MicrophoneTestState::Starting.is_active());
     assert!(!MicrophoneTestState::Failed.is_active());
+}
+
+#[test]
+fn a_screen_share_sound_follows_its_own_volume() {
+    let mut mixer = PlayoutMixer::new(8);
+    mixer.add_track("voice", Some("u1".to_owned()));
+    mixer.add_stream_track("stream", Some("u1".to_owned()));
+    mixer.push_i16("voice", &[16_384]);
+    mixer.push_i16("stream", &[16_384]);
+    let playout = RemotePlayout {
+        deafened: false,
+        gains: HashMap::from([("u1".to_owned(), 0.0)]),
+        stream_gains: HashMap::from([("u1".to_owned(), 2.0)]),
+    };
+    let mut out = [0.0f32; 1];
+    mixer.mix_into(&mut out, &playout);
+    assert_eq!(out, [1.0], "a muted voice keeps the stream at its doubled level");
 }

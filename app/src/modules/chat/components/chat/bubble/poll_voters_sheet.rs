@@ -6,7 +6,6 @@ use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_i18n::tr;
 use rise_theme::AppTheme;
 use rise_ui::list_ui::list_ui::ListUi;
-use rise_ui::official_badge::OfficialBadge;
 use rise_ui::search_field_ui::SearchFieldUi;
 use rise_ui::sheet_header_bar::SheetHeaderBar;
 use rise_ui::swiftui::button_style::plain;
@@ -17,8 +16,9 @@ use rise_ui::MainText;
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_ui::BottomSheetUi;
-use crate::core::ui::premium_badge::PremiumBadge;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::modules::chat::stores::message::message_services::message_poll_voters_services::{
     PollOptionVoters, PollOptionVotersLoadState, PollVoterRow, PollVotersPresentation, PollVotersPresentationOption,
     PollVotersStore,
@@ -93,6 +93,14 @@ pub struct PollVotersSheet;
 impl PollVotersSheet {
     pub fn new() -> Self {
         Self
+    }
+}
+
+pub struct PollVotersSheetHost;
+
+impl Render for PollVotersSheetHost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        PollVotersSheet::new()
     }
 }
 
@@ -352,19 +360,9 @@ impl PollVotersSheetParts {
         let open_parts = self.clone();
         let open_voter = voter.clone();
         let name = if voter.name.is_empty() { format!("@{}", voter.tag) } else { voter.name.clone() };
-        let mut name_row =
-            hstack(4.0).min_w_0().child(MainText::new(name).px(16.0).font_weight(FontWeight::SEMIBOLD).number_of_lines(1));
-        if voter.is_official {
-            name_row = name_row.child(OfficialBadge::new().size(px(14.0)));
-        }
-        if voter.is_premium {
-            name_row = name_row.child(
-                PremiumBadge::new()
-                    .user_id(Some(SharedString::from(voter.id.clone())))
-                    .emoji(voter.premium_badge_emoji.clone().map(SharedString::from))
-                    .size(14.0),
-            );
-        }
+        let name_row = UserNameWithBadges::new(Some(SharedString::from(voter.id.clone())), name)
+            .official(voter.is_official)
+            .premium(voter.is_premium, voter.premium_badge_emoji.clone(), voter.name_color.clone());
         plain(element_id(format!("voter-{option_id}-{}", voter.id)))
             .on_press(move |_, cx| open_parts.open_profile(&open_voter, cx))
             .child(
@@ -377,7 +375,12 @@ impl PollVotersSheetParts {
                             .source(voter.logo.clone().map(SharedString::from))
                             .name(SharedString::from(voter.name.clone()))
                             .user_id(SharedString::from(voter.id.clone()))
-                            .size(40.0),
+                            .size(40.0)
+                            .gift_worn_frame(
+                                SharedString::from(format!("{SHEET_ID}-frame-{option_id}-{}", voter.id)),
+                                Some(voter.id.clone()),
+                                40.0,
+                            ),
                     )
                     .child(name_row)
                     .child(spacer()),

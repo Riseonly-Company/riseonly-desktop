@@ -15,7 +15,8 @@ use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiTypedSlice;
 use crate::core::lib::sai::modules::sai_ws::sai_ws::{SaiWs, SaiWsOnError, SaiWsOnSuccess};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{SaiWsRequestOptions, SaiWsRequestOptionsInit};
 use crate::core::lib::sai::sai::Sai;
-use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatType;
+use crate::modules::chat::shared::poll_publicity::PollPublicity;
+use crate::modules::chat::stores::chats::chat_actions::chat_types::ChatInfo;
 use crate::modules::chat::stores::message::message_actions::message_types::MessagePollInfo;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -27,6 +28,7 @@ pub struct PollVoterRow {
     pub is_official: bool,
     pub is_premium: bool,
     pub premium_badge_emoji: Option<String>,
+    pub name_color: Option<String>,
 }
 
 impl PollVoterRow {
@@ -40,6 +42,7 @@ impl PollVoterRow {
             is_official: user.is_official,
             is_premium: user.is_premium,
             premium_badge_emoji: user.premium_badge_emoji.clone(),
+            name_color: user.name_color.clone(),
         })
     }
 
@@ -113,8 +116,8 @@ impl PollVotersStore {
         self.presentation.as_ref()
     }
 
-    pub fn can_show_voters(poll: &MessagePollInfo, chat_type: ChatType) -> bool {
-        !poll.is_anonymous && chat_type != ChatType::Channel && poll.total_voters > 0
+    pub fn can_show_voters(poll: &MessagePollInfo, chat: &ChatInfo) -> bool {
+        !poll.is_anonymous && PollPublicity::names_voters(chat) && poll.total_voters > 0
     }
 
     pub fn present(&mut self, chat_id: &str, message_id: &str, poll: &MessagePollInfo, cx: &mut Context<Self>) {

@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 
 use gpui::{AnyWindowHandle, App, Bounds, Entity, Pixels, WeakEntity, Window};
-use rise_media::video::av_player::AVLayerVideoGravity;
 
 use crate::core::shared_element_transition::kernel::shared_element_types::{
     SharedElementContentMode, SharedElementKey, SharedElementPart, SharedElementSurface,
@@ -212,10 +211,10 @@ impl SharedElementDestinationContainer for ShortViewerSharedElementDestination {
         &self,
         _item_id: &str,
         content_aspect: f32,
-        _clip: Bounds<Pixels>,
+        clip: Bounds<Pixels>,
         _cx: &App,
     ) -> SharedElementContentMode {
-        if ShortsFeedPlayer::gravity(content_aspect) == AVLayerVideoGravity::ResizeAspectFill {
+        if ShortsFeedPlayer::fills(content_aspect, clip.size) {
             SharedElementContentMode::Fill
         } else {
             SharedElementContentMode::Fit { backdrop: false }

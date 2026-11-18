@@ -319,6 +319,7 @@ fn show_menu(host: HWND, items: &[TrayMenuItem], x: i32, y: i32) -> Option<TrayE
             Some(true) => win::MF_STRING | win::MF_CHECKED,
             Some(false) | None => win::MF_STRING,
         };
+        let flags = if item.enabled { flags } else { flags | win::MF_GRAYED };
         let text = wide(&win32_menu_text(&item.label));
         unsafe { win::AppendMenuW(menu, flags, item.id as usize, PCWSTR(text.as_ptr())) }.is_ok()
     });

@@ -15,6 +15,7 @@ use rise_ui::main_text::MainText;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::button_style::plain;
+use rise_ui::swiftui::environment::env_scope;
 use rise_ui::swiftui::lifecycle::use_task;
 use rise_ui::swiftui::measure::measure;
 use rise_ui::swiftui::minimum_scale_factor::MinimumScaleText;
@@ -29,6 +30,7 @@ use crate::core::ui::hold_context_menu_ui::hold_context_menu_tap_presentation::{
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui::ChatProfileEmptyState;
 use crate::modules::gifts::components::gift_card_view::{GiftGridCell, GiftsGridMetrics};
+use crate::modules::gifts::components::gift_cosmetic_playback::{GiftCosmeticPlaybackPool, GiftCosmeticPlaybackPoolKey};
 use crate::modules::gifts::components::gift_shop_shelf_grid::{
     GiftScrollWindowProbe, GiftShopShelfFixedCells, GiftShopShelfGrid,
 };
@@ -54,12 +56,12 @@ pub struct UserGiftsTab {
     pub owner_user_id: String,
 }
 
-#[derive(Default)]
 pub struct UserGiftsTabState {
     owner: Option<GiftRecipient>,
     kind: Option<RiseGiftItemKind>,
     menu_instance_id: Option<String>,
     width: Option<f32>,
+    playbacks: Entity<GiftCosmeticPlaybackPool>,
 }
 
 impl UserGiftsTab {
@@ -385,9 +387,16 @@ impl UserGiftsTab {
 
 impl RenderOnce for UserGiftsTab {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state(self.child_id("state"), cx, |_, _: &mut Context<UserGiftsTabState>| {
-            UserGiftsTabState::default()
+        let state = window.use_keyed_state(self.child_id("state"), cx, |_, cx: &mut Context<UserGiftsTabState>| {
+            UserGiftsTabState {
+                owner: None,
+                kind: None,
+                menu_instance_id: None,
+                width: None,
+                playbacks: cx.new(|_| GiftCosmeticPlaybackPool::default()),
+            }
         });
+        let playbacks = state.read(cx).playbacks.clone();
         let kind = state.read(cx).kind;
         let owner = state.read(cx).owner.clone();
         let width = state.read(cx).width;
@@ -482,15 +491,18 @@ impl RenderOnce for UserGiftsTab {
             }
         }
         let width_state = state.clone();
-        column.child(measure(self.child_id("width"), move |bounds, _, cx| {
-            let width = f32::from(bounds.size.width);
-            width_state.update(cx, |state, cx| {
-                if state.width != Some(width) {
-                    state.width = Some(width);
-                    cx.notify();
-                }
-            });
-        }))
+        env_scope::<GiftCosmeticPlaybackPoolKey>(Some(playbacks)).child(column.child(measure(
+            self.child_id("width"),
+            move |bounds, _, cx| {
+                let width = f32::from(bounds.size.width);
+                width_state.update(cx, |state, cx| {
+                    if state.width != Some(width) {
+                        state.width = Some(width);
+                        cx.notify();
+                    }
+                });
+            },
+        )))
     }
 }
 

@@ -12,6 +12,8 @@ use rise_core::foundation::foundation_url::Url;
 use rise_platform::single_instance::PrimaryInstance;
 use rise_platform::system_share::{self, IncomingShare};
 
+use crate::app::dev_drive::DevDrive;
+use crate::core::desktop_platform::rise_app_quit_drain::QuitDrain;
 use crate::app::shell::desktop_share_arguments_hooks::{
     DesktopShareArguments, split_launch_arguments, split_opened_urls,
 };
@@ -152,6 +154,10 @@ pub fn serve(primary: Option<PrimaryInstance>, urls: UrlInbox, cx: &mut App) {
             if handovers.is_empty() && opened.is_empty() {
                 continue;
             }
+            if cx.update(|cx| QuitDrain::is_quitting(cx)) {
+                tracing::info!(target: "riseonly", "a launch handed over while the app exits, nothing reopens");
+                continue;
+            }
 
             let mut arguments = DesktopShareArguments::default();
             for handover in &handovers {
@@ -176,6 +182,9 @@ pub fn deliver(urls: &[Url], cx: &mut App) {
 
     if let Some(hooks) = handover_hooks() {
         (hooks.open_urls)(handle, urls, cx);
+    }
+    if !DevDrive::is_stealth(cx) {
+        raise_app(cx);
     }
 }
 

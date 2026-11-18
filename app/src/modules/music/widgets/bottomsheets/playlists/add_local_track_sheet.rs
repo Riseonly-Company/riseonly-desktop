@@ -7,7 +7,8 @@ use rise_canon::{RiseUploadContextFormats, RiseUploadFormat};
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_core::foundation::foundation_url::Url;
 use rise_core::foundation::foundation_uuid::Uuid;
-use rise_i18n::{FormatArg, format_printf, tr};
+use rise_i18n::{FormatArg, format_printf, tr, tr_args};
+use rise_platform::file_dialog::{self, OpenRequest, Selection};
 use rise_platform::file_manager::FileManager;
 use rise_platform::uniform_type::UTType;
 use rise_theme::AppTheme;
@@ -31,6 +32,7 @@ use crate::core::ui::shaped_text_field::ShapedTextField;
 use crate::modules::media_picker::api::media_picker_presenter_resolver::MediaPickerPresenterResolver;
 use crate::modules::media_picker::send::document_export_bridge::DocumentExportBridge;
 use crate::modules::music::shared::music_field_rules::MusicFieldRules;
+use crate::modules::music::shared::utils::music::music_local_folder_import::MusicLocalFolderImport;
 use crate::modules::music::shared::utils::music::music_track_file_upload::{
     MusicTrackFileUpload, MusicTrackImportedMetadata,
 };
@@ -59,6 +61,7 @@ struct AddLocalTrackSheetState {
     form_height: f32,
     prepare_task: Option<Task<()>>,
     import_task: Option<Task<()>>,
+    folder_task: Option<Task<()>>,
 }
 
 impl AddLocalTrackSheetState {
@@ -80,6 +83,7 @@ impl AddLocalTrackSheetState {
             form_height: 0.,
             prepare_task: None,
             import_task: None,
+            folder_task: None,
         }
     }
 
@@ -250,6 +254,24 @@ impl AddLocalTrackSheetState {
         });
     }
 
+    fn present_folder_picker(&mut self, cx: &mut Context<Self>) {
+        let selection = file_dialog::open(cx, &OpenRequest::directories());
+        let playlist_id = self.playlist_id.clone();
+        self.folder_task = Some(cx.spawn(async move |_, cx| {
+            let folder = match selection.await {
+                Selection::Picked(picked) => picked.accepted.into_iter().next(),
+                Selection::Cancelled | Selection::Failed(_) => None,
+            };
+            let Some(folder) = folder else {
+                return;
+            };
+            let _ = cx.update(|cx| {
+                MusicInteractionsStore::shared(cx)
+                    .update(cx, |interactions, cx| interactions.import_local_folder(folder, &playlist_id, cx));
+            });
+        }));
+    }
+
     fn present_audio_picker(this: &Entity<Self>, cx: &mut App) {
         let (Some(presenter), Some(mp3)) =
             (MediaPickerPresenterResolver::top_presenter(cx), UTType::from_filename_extension("mp3"))
@@ -329,6 +351,18 @@ impl AddLocalTrackSheet {
             .disabled(is_uploading)
             .callback(move |_, cx| AddLocalTrackSheetState::present_audio_picker(&picker_state, cx)),
         ];
+
+        if !has_audio {
+            let folder_state = state.clone();
+            items.push(
+                GroupedBtn::new("folder", tr("music_local_folder_choose"))
+                    .icon("folder")
+                    .subtitle(tr("music_local_folder_choose_hint"))
+                    .subtitle_line_limit(2)
+                    .disabled(is_uploading)
+                    .callback(move |_, cx| folder_state.update(cx, |form, cx| form.present_folder_picker(cx))),
+            );
+        }
 
         if has_audio {
             let title = Binding::entity(state.clone(), |form: &AddLocalTrackSheetState| form.title.clone(), |form, value, _| {
@@ -468,6 +502,29 @@ impl RenderOnce for AddLocalTrackSheet {
                 }),
             ),
         );
+
+        let folder_progress = MusicLocalFolderImport::shared(cx)
+            .read(cx)
+            .progress()
+            .filter(|progress| progress.playlist_id == self.playlist_id)
+            .cloned();
+        if let Some(progress) = folder_progress {
+            form = form.child(
+                vstack(8.)
+                    .w_full()
+                    .px(px(16.))
+                    .child(progress_view_value(progress.fraction()).tint(theme.primary._100).w_full())
+                    .child(
+                        SecondaryText::new(tr_args(
+                            "music_local_folder_progress",
+                            &[FormatArg::Int(progress.settled), FormatArg::Int(progress.total)],
+                        ))
+                        .px(12.)
+                        .tac(TextAlignT::Center),
+                    )
+                    .child(SecondaryText::new(tr("music_local_folder_keep_hint")).px(12.).tac(TextAlignT::Center)),
+            );
+        }
 
         if is_uploading {
             form = form.child(

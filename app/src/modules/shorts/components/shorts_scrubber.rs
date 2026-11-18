@@ -2,8 +2,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AnyView, BoxShadow, Context, ElementId, Entity, IntoElement, ParentElement, Path, Pixels, Point, Render,
-    StyleRefinement, Styled, Subscription, Window, black, canvas, div, point, px, white,
+    AnyElement, AnyView, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, IntoElement, ParentElement, Path, Pixels,
+    Point, Render, StyleRefinement, Styled, Subscription, Window, black, canvas, div, point, px, white,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_platform::haptics::selection_changed;
@@ -12,9 +12,11 @@ use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::drag_gesture::{DragGesture, DragGestureModifiers, DragGestureValue};
 use rise_ui::swiftui::measure::measure;
 use rise_ui::swiftui::motion::ease_out;
-use rise_ui::swiftui::shapes::SwiftUiShapes;
+use rise_ui::swiftui::shapes::{SwiftUiShapes, pass_through};
 use rise_ui::swiftui::transition::{Presence, Transition};
+use rise_ui::MainText;
 
+use crate::core::lib::canon_format::RiseFormat;
 use crate::core::media_viewer::media_viewer_video_scrubber::rounded_rect_path;
 use crate::modules::shorts::components::shorts_feed_player::{ShortsPlaybackController, ShortsPlaybackTimeChanged};
 
@@ -23,6 +25,10 @@ const ACTIVE_BAR_HEIGHT: f32 = 6.0;
 const THUMB_SIDE: f32 = 14.0;
 const SCRUBBER_HEIGHT: f32 = 22.0;
 const FILL_STEP_POINTS: f32 = 0.5;
+const PILL_HEIGHT: f32 = 30.0;
+const PILL_RISE: f32 = 8.0;
+const PILL_ABOVE_SCRUBBER: f32 = 26.0;
+const PILL_LEVELS: usize = 4;
 
 /// the scrubber as its own view, owned by the cell state
 pub struct ShortsScrubber {
@@ -225,5 +231,153 @@ impl Render for ShortsScrubber {
                     .children(thumb),
             )
             .gesture(ElementId::from((self.id.clone(), "drag")), gesture)
+    }
+}
+
+/// line the seek time stands level with, the title first, then the body, the sound line and the bar
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShortsScrubPillLevel {
+    Title,
+    Body,
+    Music,
+    Scrubber,
+}
+
+/// seek time over the riff while the bar is dragged, its own view so a drag redraws only the pill
+pub struct ShortsScrubTimePill {
+    playback: Entity<ShortsPlaybackController>,
+    shown: Animated<f32>,
+    was_active: bool,
+    levels: [Option<Bounds<Pixels>>; PILL_LEVELS],
+    host: Option<Bounds<Pixels>>,
+    _playback: Subscription,
+    _playhead: Subscription,
+}
+
+impl ShortsScrubTimePill {
+    pub fn new(playback: Entity<ShortsPlaybackController>, cx: &mut Context<Self>) -> Self {
+        Self {
+            _playback: cx.observe(&playback, |this, playback, cx| {
+                if this.was_active || playback.read(cx).is_scrubbing() {
+                    cx.notify();
+                }
+            }),
+            _playhead: cx.subscribe(&playback, |this, _, _: &ShortsPlaybackTimeChanged, cx| {
+                if this.was_active {
+                    cx.notify();
+                }
+            }),
+            playback,
+            shown: Animated::new(0.0),
+            was_active: false,
+            levels: [None; PILL_LEVELS],
+            host: None,
+        }
+    }
+
+    /// invisible marker a line of the riff carries so the pill can stand level with it
+    pub fn level_marker(pill: &Entity<Self>, level: ShortsScrubPillLevel, id: impl Into<ElementId>) -> impl IntoElement {
+        let pill = pill.clone();
+        measure(id, move |bounds, _, cx| {
+            pill.update(cx, |pill, cx| {
+                let slot = &mut pill.levels[level as usize];
+                if *slot != Some(bounds) {
+                    *slot = Some(bounds);
+                    if pill.was_active {
+                        cx.notify();
+                    }
+                }
+            });
+        })
+    }
+
+    /// layer over the whole riff, the pill sits across its middle
+    pub fn element(pill: Entity<Self>, id: impl Into<ElementId>) -> AnyElement {
+        let measured = pill.clone();
+        pass_through()
+            .absolute()
+            .inset_0()
+            .child(measure(id, move |bounds, _, cx| {
+                measured.update(cx, |pill, cx| {
+                    if pill.host != Some(bounds) {
+                        pill.host = Some(bounds);
+                        if pill.was_active {
+                            cx.notify();
+                        }
+                    }
+                });
+            }))
+            .child(AnyView::from(pill).cached(StyleRefinement::default().absolute().top_0().left_0().size_full()))
+            .into_any_element()
+    }
+
+    fn center_y(&self) -> Option<f32> {
+        let host = self.host?;
+        let (slot, line) = self.levels.iter().enumerate().find_map(|(slot, line)| line.map(|line| (slot, line)))?;
+        let y = if slot == ShortsScrubPillLevel::Scrubber as usize {
+            f32::from(line.top()) - PILL_ABOVE_SCRUBBER
+        } else {
+            f32::from(line.center().y)
+        };
+        Some(y - f32::from(host.top()))
+    }
+}
+
+impl Render for ShortsScrubTimePill {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (active, current, total) = {
+            let playback = self.playback.read(cx);
+            (playback.is_scrubbing(), playback.current_time(), playback.duration().max(0.0))
+        };
+        let now = RiseClock::monotonic();
+        if self.was_active != active {
+            self.was_active = active;
+            self.shown.set_in(if active { 1.0 } else { 0.0 }, ease_out(0.2), now, cx);
+        }
+        let shown = self.shown.frame_value(now, window);
+        let layer = pass_through().size_full();
+        let Some(center) = self.center_y().filter(|_| shown > 0.0) else {
+            return layer;
+        };
+        let text = format!(
+            "{} / {}",
+            RiseFormat::duration_time_interval(current.clamp(0.0, total)),
+            RiseFormat::duration_time_interval(total)
+        );
+        layer.child(
+            pass_through()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(center - PILL_HEIGHT / 2.0 + (1.0 - shown) * PILL_RISE))
+                .h(px(PILL_HEIGHT))
+                .flex()
+                .justify_center()
+                .opacity(shown)
+                .child(
+                    pass_through()
+                        .h_full()
+                        .px(px(12.0))
+                        .flex()
+                        .items_center()
+                        .capsule()
+                        .bg(alpha(black(), 0.55))
+                        .shadow(vec![BoxShadow {
+                            color: alpha(black(), 0.25),
+                            offset: point(px(0.0), px(1.0)),
+                            blur_radius: px(4.0),
+                            spread_radius: px(0.0),
+                            inset: false,
+                        }])
+                        .child(
+                            MainText::new(text)
+                                .px(15.0)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .color(white())
+                                .monospaced_digits(true)
+                                .number_of_lines(1),
+                        ),
+                ),
+        )
     }
 }

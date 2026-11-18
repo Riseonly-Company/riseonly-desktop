@@ -1,8 +1,11 @@
 pub const ENERGY_SAVING: &str = "riseonly.energy_saving.v1";
 
 pub const MEDIA_VIEWER_LOOP_ENABLED: &str = "riseonly.media_viewer.loop.enabled.v1";
+pub const SHORTS_AUTOSCROLL_ENABLED: &str = "riseonly.shorts.autoscroll.enabled.v1";
 pub const LAUNCH_ANIMATION_ENABLED: &str = "riseonly.launch.animation.enabled.v1";
 pub const TAB_BAR_SWIPE_BROWSE_ENABLED: &str = "riseonly.tab_bar.swipe_browse.enabled.v1";
+pub const TAB_BAR_SETTINGS_SLOT: &str = "riseonly.tab_bar.settings_slot.v1";
+pub const TAB_BAR_RAIL_ORDER: &str = "riseonly.tab_bar.rail_order.v1";
 
 pub const APP_ICON_BADGE_TOTAL: &str = "rise.app_icon_badge.total";
 
@@ -144,4 +147,8 @@ pub const DESKTOP_ASIDE_PINNED: &str = "riseonly.desktop.aside.pinned.v1";
 pub const DESKTOP_MUSIC_VOLUME: &str = "riseonly.desktop.music.volume.v1";
 pub const DESKTOP_RTC_AUDIO_INPUT_DEVICE: &str = "riseonly.desktop.rtc.audio.input_device.v1";
 pub const DESKTOP_RTC_AUDIO_OUTPUT_DEVICE: &str = "riseonly.desktop.rtc.audio.output_device.v1";
+pub const DESKTOP_CALL_IN_SEPARATE_WINDOW: &str = "riseonly.desktop.call.separate_window.v1";
+pub const DESKTOP_NOTIFICATION_BANNER_POSITION: &str = "riseonly.desktop.notification_banner.position.v1";
+pub const DESKTOP_PANE_ORDER: &str = "riseonly.desktop.pane_order.v1";
 pub const FORUM_COLLAPSED_SECTIONS: &str = "riseonly.forum.collapsed_sections.v1";
+pub const DESKTOP_WINDOW_ZOOM_PERCENT: &str = "riseonly.desktop.window_zoom.percent.v1";

@@ -72,19 +72,32 @@ type BotRowHeights = Rc<Cell<[Option<Pixels>; 2]>>;
 struct MyBotsRowView {
     bot: BotModel,
     nav_store: Option<Entity<NavigationStore>>,
+    corners: MyBotsRowCorners,
     _theme: Subscription,
 }
 
+/// which card corners a row rounds, the first row the top and the last row the bottom
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct MyBotsRowCorners {
+    top: bool,
+    bottom: bool,
+}
+
 impl MyBotsRowView {
-    fn new(bot: BotModel, nav_store: Option<Entity<NavigationStore>>, cx: &mut Context<Self>) -> Self {
-        Self { bot, nav_store, _theme: cx.observe_global::<AppTheme>(|_, cx| cx.notify()) }
+    fn new(
+        bot: BotModel,
+        nav_store: Option<Entity<NavigationStore>>,
+        corners: MyBotsRowCorners,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self { bot, nav_store, corners, _theme: cx.observe_global::<AppTheme>(|_, cx| cx.notify()) }
     }
 }
 
 impl Render for MyBotsRowView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = rise_ui::theme(cx).clone();
-        MyBots::row_container(self.bot.clone(), theme, self.nav_store.clone())
+        MyBots::row_container(self.bot.clone(), theme, self.nav_store.clone(), self.corners)
     }
 }
 
@@ -148,18 +161,23 @@ impl MyBotsState {
     fn row_views(
         &mut self,
         bots: &[BotModel],
+        has_more: bool,
         nav_store: Option<Entity<NavigationStore>>,
         cx: &mut Context<Self>,
     ) -> Vec<Entity<MyBotsRowView>> {
         let mut rows = HashMap::with_capacity(bots.len());
+        let count = bots.len();
         let views = bots
             .iter()
-            .map(|bot| {
+            .enumerate()
+            .map(|(index, bot)| {
+                let corners = MyBotsRowCorners { top: index == 0, bottom: index + 1 == count && !has_more };
                 let view = match self.rows.remove(&bot.id) {
                     Some(view) => {
                         view.update(cx, |row, cx| {
-                            if row.bot != *bot {
+                            if row.bot != *bot || row.corners != corners {
                                 row.bot = bot.clone();
+                                row.corners = corners;
                                 cx.notify();
                             }
                             row.nav_store = nav_store.clone();
@@ -168,7 +186,7 @@ impl MyBotsState {
                     }
                     None => {
                         let (bot, nav_store) = (bot.clone(), nav_store.clone());
-                        cx.new(|cx| MyBotsRowView::new(bot, nav_store, cx))
+                        cx.new(|cx| MyBotsRowView::new(bot, nav_store, corners, cx))
                     }
                 };
                 rows.insert(bot.id.clone(), view.clone());
@@ -281,7 +299,7 @@ impl MyBots {
         actions
     }
 
-    fn row_content(bot: &BotModel, theme: &AppTheme) -> AnyElement {
+    fn row_content(bot: &BotModel, theme: &AppTheme, corners: MyBotsRowCorners) -> AnyElement {
         let hover_background = theme.bg._300;
         let dot = if bot.is_moderation_disabled() {
             theme.semantic.error_100
@@ -296,6 +314,8 @@ impl MyBots {
             .px(px(16.0))
             .py(px(12.0))
             .bg(theme.bg._200)
+            .when(corners.top, |row| row.rounded_t(px(CARD_RADIUS)))
+            .when(corners.bottom, |row| row.rounded_b(px(CARD_RADIUS)))
             .hover(move |row| row.bg(hover_background))
             .child(BotAvatarView::new(SharedString::from(format!("my-bots-avatar-{}", bot.id)), bot.clone()).size(54.0))
             .child(
@@ -337,7 +357,12 @@ impl MyBots {
             .into_any_element()
     }
 
-    fn row_container(bot: BotModel, theme: AppTheme, nav_store: Option<Entity<NavigationStore>>) -> AnyElement {
+    fn row_container(
+        bot: BotModel,
+        theme: AppTheme,
+        nav_store: Option<Entity<NavigationStore>>,
+        corners: MyBotsRowCorners,
+    ) -> AnyElement {
         let actions = Self::menu_actions(&bot);
         let lifted_background = theme.bg._200;
         let content_bot = bot.clone();
@@ -349,7 +374,7 @@ impl MyBots {
             SharedString::from(format!("my-bots-row-{bot_id}")),
             HoldContextMenuAlignment::Leading,
             Rc::new(move |_: &App| actions.clone()),
-            Rc::new(move |_: &mut Window, _: &mut App| Self::row_content(&content_bot, &theme)),
+            Rc::new(move |_: &mut Window, _: &mut App| Self::row_content(&content_bot, &theme, corners)),
         )
         .show_emoji_list(false)
         .lifted_background(Some(lifted_background))
@@ -405,7 +430,7 @@ impl MyBots {
         };
         let (rows, row_heights) = state.update(cx, |state, cx| {
             state.sync_list(bots.iter().map(row_key).collect(), has_more);
-            (state.row_views(&bots, nav_store, cx), state.row_heights.clone())
+            (state.row_views(&bots, has_more, nav_store, cx), state.row_heights.clone())
         });
         let count = bots.len();
         let background = theme.bg._100;

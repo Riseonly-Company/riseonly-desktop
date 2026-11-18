@@ -16,7 +16,9 @@ use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_ui::unread_count_badge_ui::UnreadCountBadgeUi;
 
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::modules::map::components::map_place_sheet::MapPlaceGlyph;
 use crate::modules::map::components::tracks::map_tracks_panel::MapTracksPanel;
 use crate::modules::map::engine::rise_map_friends_repository::RiseMapFriendsRepositoryList;
@@ -296,7 +298,12 @@ impl RenderOnce for MapNearbyPanel {
                             .source(SharedString::from(friend.user.logo.clone()))
                             .name(SharedString::from(name.clone()))
                             .user_id(SharedString::from(friend.user.id.clone()))
-                            .size(Self::AVATAR_SIDE),
+                            .size(Self::AVATAR_SIDE)
+                            .gift_worn_frame(
+                                SharedString::from(format!("map-nearby-frame-{}", friend.id())),
+                                (!friend.user.is_deleted).then(|| friend.user.id.clone()),
+                                Self::AVATAR_SIDE,
+                            ),
                     ),
                 )
                 .child(div().absolute().bottom_0().right_0().child(UnreadCountBadgeUi::new(unread_count)));
@@ -304,7 +311,16 @@ impl RenderOnce for MapNearbyPanel {
                 .flex_1()
                 .min_w_0()
                 .items_start()
-                .child(MainText::new(name.clone()).px(15.0).font_weight(FontWeight::MEDIUM).number_of_lines(1));
+                .child(
+                    UserNameWithBadges::new(Some(SharedString::from(friend.user.id.clone())), name.clone())
+                        .font(15.0, FontWeight::MEDIUM)
+                        .official(friend.user.is_official)
+                        .premium(
+                            friend.user.is_premium,
+                            friend.user.premium_badge_emoji.clone(),
+                            friend.user.name_color.clone(),
+                        ),
+                );
             if let Some(distance) = Self::distance_text(meters) {
                 text = text.child(MainText::new(distance).px(13.0).color(theme.text.secondary).number_of_lines(1));
             }

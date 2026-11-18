@@ -1329,7 +1329,7 @@ impl RenderOnce for ChatInputEmojiTab {
             state.keep_scroll_run_on_anchor(cx);
             state.grid_scroll.frame(&state.grid, window);
             state.warm_rows_near_scroll_top(&rows.rows, window, cx);
-            state.grid.paint_under_top_padding(true);
+            state.grid.paint_under_top_padding(ChatInputPickerMetrics::grid_paints_under_strip());
             state.grid.clone()
         });
         let edge_blur = ChatInputPickerMetrics::strip_edge_blur(grid.logical_scroll_top(), &theme);
@@ -1439,7 +1439,7 @@ impl RenderOnce for ChatInputEmojiTab {
             .flex_1()
             .min_h_0()
             .w_full()
-            .children(grid_element)
+            .children(grid_element.map(ChatInputPickerMetrics::grid_below_strip))
             .children(edge_blur)
             .child(div().absolute().top_0().left_0().right_0().occlude().child(strip_row))
             .children(hold_active.then(|| div().absolute().inset_0().on_scroll_wheel(|_, _, cx| cx.stop_propagation())))

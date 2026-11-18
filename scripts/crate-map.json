@@ -43,9 +43,7 @@
         "lottie/rlottie_backend": "feature = \"rlottie\"",
         "video/ffmpeg_backend": "feature = \"ffmpeg\"",
         "video/av_asset/ffmpeg_io": "feature = \"ffmpeg\"",
-        "video_export/ffmpeg_export": "all(feature = \"ffmpeg\", not(target_os = \"macos\"))",
-        "map_view/maplibre_map": "not(target_os = \"windows\")",
-        "map_view/map_app_file_source": "not(target_os = \"windows\")"
+        "video_export/ffmpeg_export": "all(feature = \"ffmpeg\", not(target_os = \"macos\"))"
       }
     },
     "rise-theme": {
@@ -130,6 +128,7 @@
         "capture_protection": "feature = \"gpui\"",
         "contacts": "feature = \"gpui\"",
         "context_click": "feature = \"gpui\"",
+        "dbus_block_on": "target_os = \"linux\"",
         "device_info": "feature = \"gpui\"",
         "display_cadence": "feature = \"gpui\"",
         "display_sleep": "feature = \"gpui\"",
@@ -161,7 +160,8 @@
         "window_minimise": "feature = \"gpui\""
       },
       "vis": {
-        "credential_persistence/credential_persistence": "pub(crate)"
+        "credential_persistence/credential_persistence": "pub(crate)",
+        "dbus_block_on": "pub(crate)"
       }
     }
   },

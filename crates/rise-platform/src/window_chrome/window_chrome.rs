@@ -624,6 +624,12 @@ pub fn titlebar_double_click(window: &gpui::Window, chrome: &WindowChrome) -> Pl
     PlatformSupport::Performed
 }
 
+/// true where the shell strip takes titlebar drags and double clicks from the os
+/// appkit only saw the top 28 points of a taller strip and let double clicks fall through
+pub const fn app_owns_titlebar_drag(host: HostOs) -> bool {
+    matches!(host, HostOs::MacOs)
+}
+
 /// whether a drag on the strip has to go to the compositor as an interactive move
 pub const fn app_starts_window_move(host: HostOs, granted: DecorationMode) -> bool {
     matches!(host, HostOs::Linux) && granted.app_draws_window_frame()

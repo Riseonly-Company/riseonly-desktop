@@ -1,0 +1,70 @@
+FROM ubuntu:22.04
+
+ARG RUST_TOOLCHAIN=1.95.0
+ARG LLVM_VERSION=19
+ARG PIPEWIRE_VERSION=1.0.7
+ARG APPIMAGETOOL_VERSION=1.9.1
+ARG APPIMAGETOOL_SHA256_X86_64=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+ARG APPIMAGETOOL_SHA256_AARCH64=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+    APPIMAGE_EXTRACT_AND_RUN=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg git rsync python3 build-essential pkg-config cmake ninja-build meson \
+        software-properties-common \
+        libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
+        libfontconfig-dev libfreetype-dev libvulkan-dev libvulkan1 libasound2-dev libdbus-1-dev \
+        libssl-dev libgbm-dev libdrm-dev libva-dev libegl-dev libgl-dev libuv1-dev libcurl4-openssl-dev \
+        libwebkit2gtk-4.1-dev libgtk-3-dev libglib2.0-dev zlib1g-dev \
+        patchelf imagemagick file desktop-file-utils zip unzip xz-utils binutils squashfs-tools nasm \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends gcc-13 g++-13 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://gitlab.freedesktop.org/pipewire/pipewire/-/archive/${PIPEWIRE_VERSION}/pipewire-${PIPEWIRE_VERSION}.tar.gz" -o /tmp/pipewire.tar.gz \
+    && tar -xf /tmp/pipewire.tar.gz -C /tmp \
+    && cd /tmp/pipewire-${PIPEWIRE_VERSION} \
+    && CC=gcc-13 CXX=g++-13 meson setup build --prefix=/usr/local --buildtype=release \
+        -Dauto_features=disabled -Dsession-managers=[] \
+    && ninja -C build install \
+    && ldconfig \
+    && rm -rf /tmp/pipewire*
+
+RUN mkdir -p /opt/static-cxx \
+    && ln -s "$(g++-13 -print-file-name=libstdc++.a)" /opt/static-cxx/libstdc++.a
+
+RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${LLVM_VERSION} main" \
+        > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        clang-${LLVM_VERSION} lld-${LLVM_VERSION} llvm-${LLVM_VERSION} libclang-${LLVM_VERSION}-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && for tool in clang clang++ lld ld.lld llvm-ar llvm-ranlib; do \
+        ln -sf "/usr/lib/llvm-${LLVM_VERSION}/bin/${tool}" "/usr/local/bin/${tool}"; \
+    done
+
+RUN curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && CARGO_HOME=/usr/local/cargo sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_TOOLCHAIN}" -c rustfmt -c clippy \
+    && rm /tmp/rustup-init.sh \
+    && chmod -R a+rwX /usr/local/rustup
+
+RUN arch=$(uname -m) \
+    && case "$arch" in x86_64) sha="${APPIMAGETOOL_SHA256_X86_64}" ;; aarch64) sha="${APPIMAGETOOL_SHA256_AARCH64}" ;; *) exit 1 ;; esac \
+    && curl -fsSL "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${arch}.AppImage" -o /tmp/appimagetool \
+    && echo "${sha}  /tmp/appimagetool" | sha256sum -c - \
+    && chmod +x /tmp/appimagetool \
+    && cd /opt && /tmp/appimagetool --appimage-extract >/dev/null \
+    && mv /opt/squashfs-root /opt/appimagetool && rm /tmp/appimagetool \
+    && ln -s /opt/appimagetool/AppRun /usr/local/bin/appimagetool
+
+ENV CC=gcc-13 CXX=g++-13 \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc-13 \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=gcc-13 \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-L native=/opt/static-cxx -C link-arg=-static-libgcc" \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-L native=/opt/static-cxx -C link-arg=-static-libgcc"
+
+LABEL riseonly.desktop.toolchain="linux-jammy-1"

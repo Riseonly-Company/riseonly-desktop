@@ -127,6 +127,9 @@ impl GiftFrameModifier {
             self.animated,
         );
         source.poster_pixels = if small { 360 } else { 768 };
+        if !small {
+            source.preview_poster = media.cosmetic_poster(true).map(|url| (url, 360));
+        }
         source.replays_on_return = motion_style.replays_on_return();
         let canvas = px(self.avatar_size * GiftCosmeticGeometry::frame_canvas_scale());
         div().absolute().inset_0().child(
@@ -141,8 +144,8 @@ impl GiftFrameModifier {
 impl RenderOnce for GiftFrameModifier {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let motion_style = env::<GiftMotionStyleKey>(cx);
-        let frame = window.use_keyed_state((self.id.clone(), "frame"), cx, |_, cx| GiftCosmeticPlayback::new(cx));
-        let sparkle = window.use_keyed_state((self.id.clone(), "sparkle"), cx, |_, cx| GiftCosmeticPlayback::new(cx));
+        let frame = GiftCosmeticPlayback::keyed((self.id.clone(), "frame"), window, cx);
+        let sparkle = GiftCosmeticPlayback::keyed((self.id.clone(), "sparkle"), window, cx);
         let back = self.layers(false, &frame, &sparkle, motion_style);
         let front = self.layers(true, &frame, &sparkle, motion_style);
         div()

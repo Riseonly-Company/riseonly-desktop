@@ -105,7 +105,8 @@ use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatInfo, Ch
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::chat::stores::message::message_actions::message_types::{
     GetMessageMessage, MessageContentType, MessageCustomEmojiEntity, MessageForwardInfo, MessageMediaItem, MessageMediaKind,
-    MessageMediaViewPhase, MessageReaction, MessageReplyTo, MessageSharedPost, MessageStoryReply, ReactionReactor, RemoteMediaURL,
+    MessageMediaViewPhase, MessageReaction, MessageReplyTo, MessageSharedPost, MessageStoryReply, MessageTextLinkEntity,
+    ReactionReactor, RemoteMediaURL,
 };
 use crate::modules::chat::stores::message::message_interactions::message_interactions::MessageInteractionsStore;
 use crate::modules::chat::stores::message::message_services::message_poll_voters_services::PollVotersStore;
@@ -424,6 +425,24 @@ impl MessageContent {
         })
     }
 
+    /// words a bot links to an address, drawn and opened like a typed link
+    pub fn text_link_spans(entities: &[MessageTextLinkEntity]) -> Vec<RoleMentionSpan> {
+        entities
+            .iter()
+            .filter(|entity| !entity.url.is_empty())
+            .filter_map(|entity| {
+                let (Ok(location), Ok(length)) = (usize::try_from(entity.offset), usize::try_from(entity.length)) else {
+                    return None;
+                };
+                (length > 0).then(|| RoleMentionSpan {
+                    range: NSRange { location, length },
+                    color: FormattedTextStyle::standard_link_color(),
+                    link: Some(entity.url.clone()),
+                })
+            })
+            .collect()
+    }
+
     fn highlight_options(env: &MessageContentEnvironment) -> FormattedTextOptions {
         FormattedTextOptions { highlight_words: env.search_highlight_words.clone(), ..FormattedTextOptions::default() }
     }
@@ -444,6 +463,7 @@ impl MessageContent {
             cx,
         );
         role_spans.extend(TopicMentionComposer::render_spans(&normalized_entities.topic_mentions, &self.message.chat_id));
+        role_spans.extend(Self::text_link_spans(&normalized_entities.text_links));
         if RichTextMarkup::has_code_block(&self.message.text) {
             return self.rich_blocks_with_meta(rich_style, &role_spans, env);
         }
@@ -1508,7 +1528,7 @@ impl MessageContent {
                         MessageInteractionsStore::shared(cx).update(cx, |store, cx| store.vote_poll(&message_id, option_ids, cx))
                     },
                 );
-                if PollVotersStore::can_show_voters(&poll, self.chat.r#type) {
+                if PollVotersStore::can_show_voters(&poll, &self.chat) {
                     let (message, chat) = (self.message.clone(), self.chat.clone());
                     poll_view = poll_view.on_show_voters(move |_window, cx| Self::show_poll_voters(&message, &chat, cx));
                 }

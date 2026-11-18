@@ -13,7 +13,6 @@ use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_core::foundation::foundation_url::Url;
 use rise_i18n::tr;
-use rise_media::video::av_player::AVLayerVideoGravity;
 use rise_platform::haptics::{ImpactStyle, impact, selection_changed};
 use rise_ui::expandable_text_ui::{EdgeInsets, ExpandableTextHashtags, ExpandableTextInlineLinks, ExpandableTextUi};
 use rise_ui::liquid_chrome::{LiquidChromeModifiers, LiquidGlassContrast};
@@ -73,13 +72,14 @@ use crate::modules::post::stores::post_actions::post_types::{
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
 use crate::modules::shorts::components::shorts_audio_cover_button::ShortsAudioCoverButton;
 use crate::modules::shorts::components::shorts_comments_compact_layout::ShortsCommentsCompactLayoutGeometry;
-use crate::modules::shorts::components::shorts_feed_player::{ShortsFeedPlayer, ShortsPlaybackController};
+use crate::modules::shorts::components::shorts_autoscroll::{ShortsAutoscroll, ShortsAutoscrollPreferences};
+use crate::modules::shorts::components::shorts_feed_player::{ShortsFeedPlayer, ShortsPlaybackController, ShortsPlaybackEnded};
 use crate::modules::shorts::components::shorts_follow_button::ShortsFollowButton;
 use crate::modules::shorts::components::shorts_hold_recognizer::ShortsHoldRecognizerHost;
 use crate::modules::shorts::components::shorts_more_sheet::ShortsMoreSheetStore;
 use crate::modules::shorts::components::shorts_pinch_zoom::ShortsPinchZoomLayer;
 use crate::modules::shorts::components::shorts_riff_pager::{RiffPageIndicator, ShortsRiffPager};
-use crate::modules::shorts::components::shorts_scrubber::ShortsScrubber;
+use crate::modules::shorts::components::shorts_scrubber::{ShortsScrubPillLevel, ShortsScrubTimePill, ShortsScrubber};
 use crate::modules::shorts::stores::shorts::shorts_interactions::shorts_interactions::ShortsInteractionsStore;
 use crate::modules::shorts::pages::short_viewer::short_viewer_shared_element_destination::ShortViewerSharedElementDestination;
 use crate::modules::sparks::components::sparks_icon_view::SparksBurstIcon;
@@ -220,14 +220,32 @@ pub struct ShortsFeedCellState {
     was_active: bool,
     tab_host_observer: Option<Subscription>,
     scrubber: Entity<ShortsScrubber>,
+    scrub_pill: Entity<ShortsScrubTimePill>,
     player_layer_view: Option<SharedElementPlayerLayerView>,
     _playback_layer: Subscription,
+    _autoscroll: [Subscription; 3],
 }
 
 impl ShortsFeedCellState {
     fn new(cx: &mut Context<Self>) -> Self {
         let playback = cx.new(|_| ShortsPlaybackController::new());
         let scrubber = cx.new(|cx| ShortsScrubber::new(playback.clone(), cx));
+        let scrub_pill = cx.new(|cx| ShortsScrubTimePill::new(playback.clone(), cx));
+        let preferences = ShortsAutoscrollPreferences::shared(cx);
+        let more_sheet = ShortsMoreSheetStore::shared(cx);
+        let autoscroll = [
+            cx.subscribe(&playback, |_, _, _: &ShortsPlaybackEnded, cx| cx.notify()),
+            cx.observe(&preferences, |this: &mut Self, _, cx| {
+                if this.was_active {
+                    cx.notify();
+                }
+            }),
+            cx.observe(&more_sheet, |this: &mut Self, _, cx| {
+                if this.was_active {
+                    cx.notify();
+                }
+            }),
+        ];
         let playback_layer = cx.observe(&playback, |this, playback, cx| {
             let layer = playback.read(cx).player_layer_view();
             let same = match (&this.player_layer_view, &layer) {
@@ -261,8 +279,10 @@ impl ShortsFeedCellState {
             was_active: false,
             tab_host_observer: None,
             scrubber,
+            scrub_pill,
             player_layer_view: None,
             _playback_layer: playback_layer,
+            _autoscroll: autoscroll,
         }
     }
 
@@ -302,11 +322,6 @@ impl ShortsFeedCellState {
 
     fn toggle_muted(&mut self, cx: &mut Context<Self>) {
         self.is_muted = !self.is_muted;
-        cx.notify();
-    }
-
-    fn set_muted(&mut self, cx: &mut Context<Self>) {
-        self.is_muted = true;
         cx.notify();
     }
 
@@ -372,13 +387,18 @@ pub struct ShortsFeedCell {
     view_surface: RisePostViewSurface,
     shared_element_destination: Option<Rc<ShortViewerSharedElementDestination>>,
     rewind_token: i64,
+    on_auto_advance: Option<ShortsAutoAdvance>,
 }
+
+/// moves the riffs feed to the next riff when auto scroll is done with this one
+pub type ShortsAutoAdvance = Rc<dyn Fn(&mut App)>;
 
 impl ShortsFeedCell {
     const PAGE_INDICATOR_HEADER_CLEARANCE: f32 = 62.0;
     const HOLD_DELAY: f64 = 0.22;
     const PROGRESS_SLOT: f32 = 36.0;
     const PROGRESS_HEIGHT: f32 = 22.0;
+    const CAPTION_FLOOR_GAP: f32 = 12.0;
 
     pub fn new(post: impl Into<Rc<GetPostFeedResponse>>, is_active: bool, bottom_inset: f32) -> Self {
         Self {
@@ -389,6 +409,31 @@ impl ShortsFeedCell {
             view_surface: RisePostViewSurface::Shorts,
             shared_element_destination: None,
             rewind_token: 0,
+            on_auto_advance: None,
+        }
+    }
+
+    pub fn on_auto_advance(mut self, on_auto_advance: Option<ShortsAutoAdvance>) -> Self {
+        self.on_auto_advance = on_auto_advance;
+        self
+    }
+
+    /// next carousel page, or the next riff after the last page
+    fn advance_autoscroll(
+        post: &GetPostFeedResponse,
+        state: &Entity<ShortsFeedCellState>,
+        on_auto_advance: Option<&ShortsAutoAdvance>,
+        cx: &mut App,
+    ) {
+        let media = ShortsCellMedia::new(post, state.read(cx).riff_page);
+        if media.uses_pager && media.page_index + 1 < media.slides.len() as i64 {
+            let next = media.page_index + 1;
+            state.update(cx, |state, cx| {
+                state.riff_page = Some(next);
+                cx.notify();
+            });
+        } else if let Some(on_auto_advance) = on_auto_advance {
+            on_auto_advance(cx);
         }
     }
 
@@ -669,6 +714,7 @@ impl ShortsFeedCell {
         is_active: bool,
         is_own_post: bool,
         engaged: bool,
+        holds_video_at_end: bool,
         corner_radius: f32,
         state: &Entity<ShortsFeedCellState>,
         cx: &App,
@@ -676,12 +722,8 @@ impl ShortsFeedCell {
         let is_uploading = post.shows_upload_overlay();
         let snapshot = state.read(cx);
         let (is_muted, is_paused) = (snapshot.is_muted, snapshot.is_paused || snapshot.is_holding);
-        let drawn = Self::drawn_frame(media, &snapshot.drawn_aspects);
+        let drawn = Self::drawn_frame(media, &snapshot.drawn_aspects, cell_size);
         let playback = snapshot.playback.clone();
-        let decline_state = state.clone();
-        let on_audio_declined = move |_: &mut Window, cx: &mut App| {
-            decline_state.update(cx, |state, cx| state.set_muted(cx));
-        };
 
         let content: AnyElement = if is_uploading {
             ShortsPendingLoaderOverlay { post: post.clone() }.into_any_element()
@@ -713,7 +755,7 @@ impl ShortsFeedCell {
                     }
                 },
             )
-            .on_audio_declined(on_audio_declined)
+            .holds_video_at_end(holds_video_at_end)
             .on_drawn_aspect(move |url: &str, aspect: f32, _: &mut Window, cx: &mut App| {
                 aspect_state.update(cx, |state, cx| state.adopt_drawn_aspect(url, aspect, cx));
             })
@@ -728,6 +770,8 @@ impl ShortsFeedCell {
                 .is_muted(is_muted)
                 .paused(is_paused)
                 .playback(Some(playback))
+                .holds_at_end(holds_video_at_end)
+                .page_size(cell_size)
                 .corner_radius(corner_radius)
                 .on_aspect(move |aspect: f32, _: &mut Window, cx: &mut App| {
                     aspect_state.update(cx, |state, cx| state.adopt_drawn_aspect(&aspect_url, aspect, cx));
@@ -735,7 +779,6 @@ impl ShortsFeedCell {
                 .music_overlay(post.shorts_music_overlay())
                 .persists_post_media_to_disk(is_own_post)
                 .post_image_cache_policy(PostMediaCachePolicy::image_policy(is_own_post))
-                .on_audio_declined(on_audio_declined)
                 .into_any_element()
         } else {
             div().size_full().bg(black()).into_any_element()
@@ -778,8 +821,12 @@ impl ShortsFeedCell {
             .into_any_element()
     }
 
-    fn drawn_frame(media: &ShortsCellMedia, drawn_aspects: &HashMap<String, f32>) -> Option<(f32, bool)> {
-        let fill = |aspect: f32| ShortsFeedPlayer::gravity(aspect) == AVLayerVideoGravity::ResizeAspectFill;
+    fn drawn_frame(
+        media: &ShortsCellMedia,
+        drawn_aspects: &HashMap<String, f32>,
+        page: Size<Pixels>,
+    ) -> Option<(f32, bool)> {
+        let fill = |aspect: f32| ShortsFeedPlayer::fills(aspect, page);
         if let Some(url) = &media.single_video_url {
             return drawn_aspects.get(url).map(|&aspect| (aspect, fill(aspect)));
         }
@@ -814,6 +861,7 @@ impl ShortsFeedCell {
         let is_muted = snapshot.is_muted;
         let tags_state = snapshot.tags_state.clone();
         let scrubber = snapshot.scrubber.clone();
+        let scrub_pill = snapshot.scrub_pill.clone();
 
         let gradients = pass_through()
             .absolute()
@@ -858,19 +906,12 @@ impl ShortsFeedCell {
             });
 
         let viewer = AuthServicesStore::shared(cx).read(cx).effective_user_id_for_wire();
-        let meta = Self::bottom_meta(post, &tags_state, viewer.as_deref(), is_uploading, cx);
-        let rail = Self::action_rail(post, view_surface, state, viewer.as_deref(), window, cx);
-
-        let pager_mute = (media.uses_pager && !media.shows_video() && post.music_audio_url().is_some() && !is_uploading)
-            .then(|| {
-                hstack(0.0)
-                    .w_full()
-                    .justify_end()
-                    .px(px(14.0))
-                    .pb(px(14.0))
-                    .child(Self::mute_button(&post.id, "pager-mute", state, is_muted, true))
-            });
-        let scrubber = (media.shows_video() && !is_uploading).then(|| {
+        let meta = Self::bottom_meta(post, &tags_state, &scrub_pill, viewer.as_deref(), is_uploading, cx);
+        let rail_sound = (media.uses_pager && !media.shows_video() && post.music_audio_url().is_some() && !is_uploading)
+            .then_some(is_muted);
+        let rail = Self::action_rail(post, view_surface, state, viewer.as_deref(), rail_sound, window, cx);
+        let shows_scrubber = media.shows_video() && !is_uploading;
+        let scrubber = shows_scrubber.then(|| {
             pass_through()
                 .absolute()
                 .inset_0()
@@ -879,8 +920,15 @@ impl ShortsFeedCell {
                 .justify_end()
                 .px(px(12.0))
                 .pb(px(progress_bottom_padding))
-                .child(ShortsScrubber::element(scrubber))
+                .child(div().relative().w_full().child(ShortsScrubber::element(scrubber)).child(
+                    ShortsScrubTimePill::level_marker(
+                        &scrub_pill,
+                        ShortsScrubPillLevel::Scrubber,
+                        scoped_id("scrub-level-bar", &post.id),
+                    ),
+                ))
         });
+        let scrub_pill = shows_scrubber.then(|| ShortsScrubTimePill::element(scrub_pill, scoped_id("scrub-pill", &post.id)));
 
         div()
             .relative()
@@ -898,7 +946,6 @@ impl ShortsFeedCell {
                     .flex_col()
                     .pb(px(bottom_padding))
                     .child(spacer_min_h(0.0))
-                    .children(pager_mute)
                     .child(
                         hstack(12.0)
                             .align(VerticalAlignment::Bottom)
@@ -906,14 +953,18 @@ impl ShortsFeedCell {
                             .child(meta)
                             .child(rail),
                     )
-                    .child(div().flex_none().w_full().h(px(Self::PROGRESS_SLOT))),
+                    .when(media.contains_video(), |column| {
+                        column.child(div().flex_none().w_full().h(px(Self::PROGRESS_SLOT)))
+                    }),
             )
             .children(scrubber)
+            .children(scrub_pill)
     }
 
     fn bottom_meta(
         post: &Rc<GetPostFeedResponse>,
         tags_state: &Entity<PostMediaTagsState>,
+        scrub_pill: &Entity<ShortsScrubTimePill>,
         viewer: Option<&str>,
         is_uploading: bool,
         cx: &mut App,
@@ -970,7 +1021,7 @@ impl ShortsFeedCell {
         let music = (!is_uploading)
             .then(|| post.track_model())
             .flatten()
-            .map(|track| Self::music_line(post, &track, &nav_store));
+            .map(|track| Self::music_line(post, &track, &nav_store, scrub_pill));
 
         vstack(10.0)
             .align(HorizontalAlignment::Leading)
@@ -980,7 +1031,7 @@ impl ShortsFeedCell {
             .children(chips)
             .child(author_row)
             .children(invite)
-            .children(Self::caption_block(post, &nav_store))
+            .children(Self::caption_block(post, &nav_store, scrub_pill))
             .children(music)
     }
 
@@ -1115,6 +1166,7 @@ impl ShortsFeedCell {
         post: &Rc<GetPostFeedResponse>,
         track: &TrackModel,
         nav_store: &Option<Entity<NavigationStore>>,
+        scrub_pill: &Entity<ShortsScrubTimePill>,
     ) -> Div {
         let open_post = post.clone();
         let open_nav = nav_store.clone();
@@ -1145,9 +1197,19 @@ impl ShortsFeedCell {
                 ),
         )
         .w_full()
+        .relative()
+        .child(ShortsScrubTimePill::level_marker(
+            scrub_pill,
+            ShortsScrubPillLevel::Music,
+            scoped_id("scrub-level-music", &post.id),
+        ))
     }
 
-    fn caption_block(post: &Rc<GetPostFeedResponse>, nav_store: &Option<Entity<NavigationStore>>) -> Option<Div> {
+    fn caption_block(
+        post: &Rc<GetPostFeedResponse>,
+        nav_store: &Option<Entity<NavigationStore>>,
+        scrub_pill: &Entity<ShortsScrubTimePill>,
+    ) -> Option<Div> {
         let caption = trimming_whitespaces_and_newlines(&post.title);
         let body = trimming_whitespaces_and_newlines(&post.content);
         let has_body = !body.is_empty() || !post.hashtags.is_empty();
@@ -1170,6 +1232,12 @@ impl ShortsFeedCell {
                     ),
             )
             .w_full()
+            .relative()
+            .child(ShortsScrubTimePill::level_marker(
+                scrub_pill,
+                ShortsScrubPillLevel::Title,
+                scoped_id("scrub-level-title", &post.id),
+            ))
         });
         let text = has_body.then(|| {
             let tag_post = post.clone();
@@ -1203,6 +1271,12 @@ impl ShortsFeedCell {
                 .haptics(false),
             )
             .w_full()
+            .relative()
+            .child(ShortsScrubTimePill::level_marker(
+                scrub_pill,
+                ShortsScrubPillLevel::Body,
+                scoped_id("scrub-level-body", &post.id),
+            ))
         });
         Some(vstack(6.0).align(HorizontalAlignment::Leading).w_full().children(title).children(text))
     }
@@ -1212,6 +1286,7 @@ impl ShortsFeedCell {
         view_surface: RisePostViewSurface,
         state: &Entity<ShortsFeedCellState>,
         viewer: Option<&str>,
+        sound: Option<bool>,
         window: &Window,
         cx: &App,
     ) -> Div {
@@ -1231,11 +1306,22 @@ impl ShortsFeedCell {
         let hold_post = post.clone();
         let hold_state = state.clone();
         let media_index = state.read(cx).riff_page.unwrap_or(0);
+        let sound_state = state.clone();
+        let sound_button = sound.map(|is_muted| {
+            ShortsActionButton::new(
+                scoped_id("rail-sound", &post.id),
+                if is_muted { "speaker.slash" } else { "speaker.wave.3" },
+                None,
+                move |_, cx| sound_state.update(cx, |state, cx| state.toggle_muted(cx)),
+            )
+            .accessibility_name(tr(if is_muted { "feed_sound_unmute" } else { "feed_sound_mute" }))
+        });
 
         vstack(6.0)
             .flex_none()
             .w(px(ShortsActionButton::RAIL_WIDTH))
             .pb(px(2.0))
+            .children(sound_button)
             .child(
                 ShortsActionButton::new(
                     scoped_id("rail-like", &post.id),
@@ -1354,11 +1440,12 @@ impl RenderOnce for ShortsFeedCell {
         let is_uploading = post.shows_upload_overlay();
         let engaged = Self::is_comments_engaged(&post, is_active, cx);
         let is_foreground = RiseMediaForegroundGate::shared(cx).read(cx).is_foreground();
-        let (riff_page, is_muted, cell_size, cell_origin, chrome_opacity, playback, hides_chrome, player_layer) = {
+        let (riff_page, is_muted, is_paused, cell_size, cell_origin, chrome_opacity, playback, hides_chrome, player_layer) = {
             let snapshot = state.read(cx);
             (
                 snapshot.riff_page,
                 snapshot.is_muted,
+                snapshot.is_paused,
                 snapshot.cell_size,
                 snapshot.cell_origin,
                 snapshot.chrome_opacity.frame_value(RiseClock::monotonic(), window),
@@ -1368,6 +1455,42 @@ impl RenderOnce for ShortsFeedCell {
             )
         };
         let media = ShortsCellMedia::new(&post, riff_page);
+        let on_auto_advance = self.on_auto_advance.clone();
+        let autoscroll_armed = is_active
+            && !is_uploading
+            && !engaged
+            && !is_paused
+            && !hides_chrome
+            && ShortsAutoscrollPreferences::shared(cx).read(cx).is_enabled()
+            && !ShortsMoreSheetStore::shared(cx).read(cx).is_presented();
+        let has_next_page = media.uses_pager && media.page_index + 1 < media.slides.len() as i64;
+        let holds_video_at_end = autoscroll_armed && (has_next_page || on_auto_advance.is_some());
+        {
+            let (advance_post, advance_state, advance) = (post.clone(), state.clone(), on_auto_advance.clone());
+            let shows_video = media.shows_video();
+            let ended_count = playback.read(cx).ended_count();
+            on_change(scoped_id("change-ended", &post.id), ended_count, false, window, cx, move |_, _, _, cx| {
+                if autoscroll_armed && shows_video {
+                    Self::advance_autoscroll(&advance_post, &advance_state, advance.as_ref(), cx);
+                }
+            });
+        }
+        {
+            let photo_key = (autoscroll_armed
+                && media.uses_pager
+                && !media.shows_video()
+                && (has_next_page || on_auto_advance.is_some()))
+            .then(|| format!("{}#{}", post.id, media.page_index));
+            let armed = photo_key.is_some();
+            let (timer_post, timer_state, advance) = (post.clone(), state.clone(), on_auto_advance.clone());
+            use_task(scoped_id("autoscroll-photo", &post.id), photo_key, window, cx, async move |cx| {
+                if !armed {
+                    return;
+                }
+                cx.background_executor().timer(ShortsAutoscroll::photo_duration()).await;
+                let _ = cx.update(|_, cx| Self::advance_autoscroll(&timer_post, &timer_state, advance.as_ref(), cx));
+            });
+        }
 
         if let Some(destination) = &destination {
             destination.update_player_layer(&post.id, player_layer);
@@ -1432,6 +1555,11 @@ impl RenderOnce for ShortsFeedCell {
         let progress_floor = self.progress_floor.unwrap_or(self.bottom_inset);
         let progress_bottom_padding =
             ((bottom_padding + Self::PROGRESS_SLOT + progress_floor) / 2.0 - Self::PROGRESS_HEIGHT / 2.0).max(0.0);
+        let caption_bottom_padding = if media.contains_video() {
+            bottom_padding
+        } else {
+            bottom_padding.max(progress_floor + Self::CAPTION_FLOOR_GAP)
+        };
 
         let pinch_state = state.clone();
         let (motion_post, motion_state, motion_media) = (post.clone(), state.clone(), media.clone());
@@ -1454,6 +1582,7 @@ impl RenderOnce for ShortsFeedCell {
                             is_active,
                             is_own_post,
                             engaged,
+                            holds_video_at_end,
                             corner_radius,
                             &motion_state,
                             cx,
@@ -1473,7 +1602,18 @@ impl RenderOnce for ShortsFeedCell {
             move |holding: bool, cx: &mut App| Self::apply_holding(&hold_post, is_active, &hold_state, holding, cx),
         );
 
-        let chrome = Self::chrome_layer(&post, &media, cell_size, safe_top, bottom_padding, progress_bottom_padding, view_surface, &state, window, cx);
+        let chrome = Self::chrome_layer(
+            &post,
+            &media,
+            cell_size,
+            safe_top,
+            caption_bottom_padding,
+            progress_bottom_padding,
+            view_surface,
+            &state,
+            window,
+            cx,
+        );
         let chrome = div()
             .opacity(chrome_opacity)
             .child(CommentsSheetProgressFade::new().engaged(engaged).hides_with_sheet(true).child(chrome.into_any_element()))
@@ -2020,5 +2160,9 @@ impl ShortsCellMedia {
         } else {
             self.single_video_url.is_some()
         }
+    }
+
+    pub fn contains_video(&self) -> bool {
+        self.single_video_url.is_some() || self.slides.iter().any(PostMediaSlide::is_video)
     }
 }

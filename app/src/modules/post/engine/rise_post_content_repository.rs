@@ -2856,16 +2856,20 @@ impl RisePostContentRepository {
             .collect()
     }
 
-    /// own favorites tab follows the flag at once
-    /// a saved post goes to the head of an open favorites view, an unsaved one leaves it
-    fn favorites_shelf_mutations(
+    /// own favorites and liked tabs follow the flag at once
+    fn shelf_mutations(
         &self,
         s: &RisePostContentRepositoryState,
+        kind: RisePostContentRepositoryEngagementKind,
         local_id: &str,
-        favorited: bool,
+        member: bool,
     ) -> Vec<RiseStoreMutation> {
-        let views = self.own_profile_views(s, &HashSet::from([RisePostProfileKind::Favorites]));
-        let (added, removed): (&[String], &[String]) = if favorited { (&views, &[]) } else { (&[], &views) };
+        let shelf = match kind {
+            RisePostContentRepositoryEngagementKind::Like => RisePostProfileKind::Liked,
+            RisePostContentRepositoryEngagementKind::Favorite => RisePostProfileKind::Favorites,
+        };
+        let views = self.own_profile_views(s, &HashSet::from([shelf]));
+        let (added, removed): (&[String], &[String]) = if member { (&views, &[]) } else { (&[], &views) };
         Self::membership_mutations(local_id, added, removed, s.store_version)
     }
 
@@ -4013,9 +4017,7 @@ impl RisePostContentRepository {
                     local_id: local_id.clone(),
                 },
             ];
-            if kind == RisePostContentRepositoryEngagementKind::Favorite {
-                mutations.extend(self.favorites_shelf_mutations(s, &local_id, desired));
-            }
+            mutations.extend(self.shelf_mutations(s, kind, &local_id, desired));
             mutations
         });
         self.engine.write(RiseStoreWriteBatch::new(mutations, HashSet::new())).await?;
@@ -4213,9 +4215,7 @@ impl RisePostContentRepository {
                 ),
                 policy: RiseEntityWritePolicy::ServerAuthoritative,
             }];
-            if kind == RisePostContentRepositoryEngagementKind::Favorite {
-                mutations.extend(self.favorites_shelf_mutations(s, &current_entity.local_id, restored));
-            }
+            mutations.extend(self.shelf_mutations(s, kind, &current_entity.local_id, restored));
             mutations
         });
         let _ = self.engine.write(RiseStoreWriteBatch::new(mutations, HashSet::new())).await;
@@ -5313,7 +5313,10 @@ impl RisePostContentRepository {
                 *user_id == subject.author_id && is_thread
             }
             RisePostPageScope::Profile {
-                kind: RisePostProfileKind::Reposts | RisePostProfileKind::Mentions | RisePostProfileKind::Favorites,
+                kind: RisePostProfileKind::Reposts
+                    | RisePostProfileKind::Mentions
+                    | RisePostProfileKind::Favorites
+                    | RisePostProfileKind::Liked,
                 ..
             }
             | RisePostPageScope::Search { .. }
@@ -5329,7 +5332,10 @@ impl RisePostContentRepository {
         match scope {
             RisePostPageScope::Shorts => subject.lists_in_riffs(),
             RisePostPageScope::Profile {
-                kind: RisePostProfileKind::Reposts | RisePostProfileKind::Mentions | RisePostProfileKind::Favorites,
+                kind: RisePostProfileKind::Reposts
+                    | RisePostProfileKind::Mentions
+                    | RisePostProfileKind::Favorites
+                    | RisePostProfileKind::Liked,
                 ..
             } => true,
             RisePostPageScope::Feed(RisePostFeedKind::All) => subject.lists_in_publications(),

@@ -178,6 +178,20 @@ impl RTCServicesStore {
         );
     }
 
+    pub fn enter_room(&mut self, target: RiseRTCRoomTarget, cx: &mut Context<Self>) {
+        let kind = target.safe_log_kind();
+        self.room_presentation_target = Some(target);
+        self.is_room_presentation_visible = false;
+        cx.notify();
+        self.report_room_facts(cx);
+        Sai::log(
+            "RTC",
+            move || format!("room entered without presentation target={kind}"),
+            SaiLogKind::Network,
+            cx,
+        );
+    }
+
     pub fn minimize_room(&mut self, cx: &mut Context<Self>) {
         if self.room_presentation_target.is_none() {
             return;

@@ -11,6 +11,7 @@ use rise_platform::tray::{
 };
 use rise_platform::user_defaults::UserDefaults;
 
+use crate::core::desktop_platform::tray_call_hooks::TrayCallState;
 use crate::core::desktop_platform::tray_controller::{
     LaunchPresentation, TrayController, TrayMenuCommand, autostart_change_failed, keeps_in_tray,
     launch_presentation_for, tray_menu_items,
@@ -98,12 +99,15 @@ fn the_keep_in_tray_item_is_absent_on_macos_where_the_dock_keeps_the_app() {
         TrayAvailability::Available,
         Some(AutostartState::Disabled),
         true,
+        None,
     );
 
     assert_eq!(
         ids(&items),
         vec![
             TrayMenuCommand::Open.id(),
+            TrayMenuCommand::Microphone.id(),
+            TrayMenuCommand::Deafen.id(),
             TrayMenuCommand::LaunchAtLogin.id(),
             TrayMenuCommand::Quit.id(),
         ]
@@ -113,35 +117,37 @@ fn the_keep_in_tray_item_is_absent_on_macos_where_the_dock_keeps_the_app() {
 #[test]
 fn windows_and_linux_offer_every_item_with_its_check_mark() {
     for host in [HostOs::Windows, HostOs::Linux] {
-        let items = tray_menu_items(host, TrayAvailability::Available, Some(AutostartState::Enabled), false);
+        let items = tray_menu_items(host, TrayAvailability::Available, Some(AutostartState::Enabled), false, None);
 
         assert_eq!(
             ids(&items),
             vec![
                 TrayMenuCommand::Open.id(),
+                TrayMenuCommand::Microphone.id(),
+                TrayMenuCommand::Deafen.id(),
                 TrayMenuCommand::LaunchAtLogin.id(),
                 TrayMenuCommand::KeepInTray.id(),
                 TrayMenuCommand::Quit.id(),
             ]
         );
         assert_eq!(items[0].checked, None);
-        assert_eq!(items[1].checked, Some(true));
-        assert_eq!(items[2].checked, Some(false));
-        assert_eq!(items[3].checked, None);
+        assert_eq!(items[3].checked, Some(true));
+        assert_eq!(items[4].checked, Some(false));
+        assert_eq!(items[5].checked, None);
     }
 }
 
 #[test]
 fn no_status_area_means_no_menu() {
     for availability in [TrayAvailability::NoHost, TrayAvailability::Unsupported] {
-        let items = tray_menu_items(HostOs::Linux, availability, Some(AutostartState::Enabled), true);
+        let items = tray_menu_items(HostOs::Linux, availability, Some(AutostartState::Enabled), true, None);
         assert!(items.is_empty());
     }
 }
 
 #[test]
 fn an_os_without_the_setting_gets_no_login_item() {
-    let items = tray_menu_items(HostOs::Linux, TrayAvailability::Available, None, true);
+    let items = tray_menu_items(HostOs::Linux, TrayAvailability::Available, None, true, None);
     assert!(!ids(&items).contains(&TrayMenuCommand::LaunchAtLogin.id()));
 }
 
@@ -152,6 +158,7 @@ fn awaiting_approval_is_not_shown_as_enabled() {
         TrayAvailability::Available,
         Some(AutostartState::RequiresApproval),
         true,
+        None,
     );
     assert_eq!(items[1].checked, Some(false));
 }
@@ -286,4 +293,48 @@ fn the_icon_opens_with_its_tooltip_from_the_badge_listener(cx: &mut TestAppConte
     install(cx, HostOs::Windows, &tray, Arc::new(InMemoryAutostart::new()), &UserDefaults::in_memory());
 
     assert!(!tray.0.borrow().tooltip().is_empty());
+}
+
+#[test]
+fn a_live_call_puts_its_actions_under_open() {
+    let call = TrayCallState { microphone_enabled: false, can_use_microphone: true, deafened: true };
+    let items = tray_menu_items(HostOs::MacOs, TrayAvailability::Available, None, false, Some(call));
+    assert_eq!(
+        ids(&items),
+        vec![
+            TrayMenuCommand::Open.id(),
+            TrayMenuCommand::Microphone.id(),
+            TrayMenuCommand::Deafen.id(),
+            TrayMenuCommand::OpenCall.id(),
+            TrayMenuCommand::LeaveCall.id(),
+            TrayMenuCommand::Quit.id(),
+        ]
+    );
+    assert_eq!(items[1].checked, Some(false));
+    assert_eq!(items[2].checked, Some(true));
+    assert!(items.iter().all(|item| item.enabled));
+}
+
+#[test]
+fn outside_a_call_mic_and_sound_stay_greyed() {
+    let items = tray_menu_items(HostOs::MacOs, TrayAvailability::Available, None, false, None);
+    assert_eq!(
+        ids(&items),
+        vec![
+            TrayMenuCommand::Open.id(),
+            TrayMenuCommand::Microphone.id(),
+            TrayMenuCommand::Deafen.id(),
+            TrayMenuCommand::Quit.id(),
+        ]
+    );
+    assert!(!items[1].enabled && !items[2].enabled);
+    assert!(items[0].enabled && items[3].enabled);
+}
+
+#[test]
+fn a_silenced_speaker_sees_the_mic_greyed() {
+    let call = TrayCallState { microphone_enabled: false, can_use_microphone: false, deafened: false };
+    let items = tray_menu_items(HostOs::Linux, TrayAvailability::Available, None, true, Some(call));
+    assert_eq!(items[1].id, TrayMenuCommand::Microphone.id());
+    assert!(!items[1].enabled);
 }

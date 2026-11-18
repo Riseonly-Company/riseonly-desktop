@@ -299,6 +299,7 @@ pub struct AsyncTextBubbleLine {
     pub leading: Pixels,
     caret_offsets: Arc<[Pixels]>,
     trailing_whitespace_width: Pixels,
+    paragraph_is_rtl: Option<bool>,
 }
 
 impl AsyncTextBubbleLine {
@@ -324,7 +325,13 @@ impl AsyncTextBubbleLine {
             leading: px(0.0),
             trailing_whitespace_width: x - visible,
             caret_offsets: caret_offsets.into(),
+            paragraph_is_rtl: None,
         }
+    }
+
+    pub fn in_paragraph(mut self, paragraph_is_rtl: Option<bool>) -> Self {
+        self.paragraph_is_rtl = paragraph_is_rtl;
+        self
     }
 
     pub fn typographic_width(&self) -> Pixels {
@@ -353,15 +360,44 @@ impl AsyncTextBubbleLine {
 
     /// measured characters shaped for window in color, this is what gets drawn
     pub fn shape(&self, color: Hsla, window: &Window) -> ShapedLine {
+        let text = match bidi_line_mark(self.paragraph_is_rtl, &self.text) {
+            Some(mark) => SharedString::from(format!("{mark}{}", self.text)),
+            None => self.text.clone(),
+        };
         let runs = [TextRun {
-            len: self.text.len(),
+            len: text.len(),
             font: self.font.clone(),
             color,
             background_color: None,
             underline: None,
             strikethrough: None,
         }];
-        window.text_system().shape_line(self.text.clone(), self.font_size, &runs, None)
+        window.text_system().shape_line(text, self.font_size, &runs, None)
+    }
+}
+
+/// direction of the first letter, none when the text has no letter
+pub fn first_strong_is_rtl(text: &str) -> Option<bool> {
+    text.chars().find(|character| character.is_alphabetic()).map(is_right_to_left_letter)
+}
+
+fn is_right_to_left_letter(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0590}'..='\u{08FF}'
+            | '\u{FB1D}'..='\u{FDFF}'
+            | '\u{FE70}'..='\u{FEFF}'
+            | '\u{10800}'..='\u{10FFF}'
+            | '\u{1E800}'..='\u{1EFFF}'
+    )
+}
+
+/// mark that keeps a wrapped line in its paragraph direction when its own first letter points the other way
+pub fn bidi_line_mark(paragraph_is_rtl: Option<bool>, line: &str) -> Option<char> {
+    match (paragraph_is_rtl?, first_strong_is_rtl(line)?) {
+        (false, true) => Some('\u{200E}'),
+        (true, false) => Some('\u{200F}'),
+        _ => None,
     }
 }
 

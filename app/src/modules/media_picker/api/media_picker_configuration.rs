@@ -107,6 +107,7 @@ pub struct MediaPickerConfiguration {
     pub media_links_elsewhere: i64,
     pub destination_title: Option<String>,
     pub allows_poll: bool,
+    pub allows_public_poll: bool,
     pub caption_rule: Option<ValidationSchema>,
 }
 
@@ -156,6 +157,7 @@ impl MediaPickerConfiguration {
             media_links_elsewhere: 0,
             destination_title: None,
             allows_poll: false,
+            allows_public_poll: true,
             caption_rule: None,
         }
     }

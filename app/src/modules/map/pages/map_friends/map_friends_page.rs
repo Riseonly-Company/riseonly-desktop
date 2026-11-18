@@ -21,8 +21,11 @@ use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_theme::AppTheme;
 
 use crate::app::router::navigation_store::NavigationStoreKey;
+use crate::app::router::navigation_types::RootRoute;
 use crate::core::rise_engine_bridge::rise_transport_status::{RiseTransportDropWatch, RiseTransportStatus};
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::core::widgets::wrappers::list_shell_ui::{SettingsWrapperUi, list_shell_floating_top_inset};
 use crate::modules::guides::shared::guide_sandbox::GuideSandbox;
 use crate::modules::map::engine::rise_map_engine_models::RiseMapFriendsSnapshot;
@@ -49,7 +52,7 @@ enum MapFriendsPageRow {
     Incoming(MapFriendRequest),
     Outgoing { request: MapFriendRequest, is_first: bool },
     FriendsEmpty,
-    Friend(MapFriend),
+    Friend { friend: MapFriend, is_first: bool },
     LoadMoreTrigger(RiseMapFriendsRepositoryList),
     BottomSpacer,
 }
@@ -67,7 +70,7 @@ impl MapFriendsPageRow {
             Self::Incoming(request) => format!("incoming-{}", request.id),
             Self::Outgoing { request, .. } => format!("outgoing-{}", request.id),
             Self::FriendsEmpty => "friends-empty".to_owned(),
-            Self::Friend(friend) => format!("friend-{}", friend.id()),
+            Self::Friend { friend, .. } => format!("friend-{}", friend.id()),
             Self::LoadMoreTrigger(list) => format!("more-{list:?}"),
             Self::BottomSpacer => "bottom".to_owned(),
         }
@@ -184,7 +187,14 @@ impl MapFriendsPage {
         if snapshot.friends.is_empty() {
             rows.push(MapFriendsPageRow::FriendsEmpty);
         } else {
-            rows.extend(snapshot.friends.iter().cloned().map(MapFriendsPageRow::Friend));
+            rows.extend(
+                snapshot
+                    .friends
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(index, friend)| MapFriendsPageRow::Friend { friend, is_first: index == 0 }),
+            );
             Self::load_more_trigger(snapshot.has_more_friends, RiseMapFriendsRepositoryList::Friends, rows);
         }
     }
@@ -368,7 +378,7 @@ impl Render for MapPersonRowView {
         match self.props.as_ref().map(|props| &props.row) {
             Some(MapFriendsPageRow::Incoming(request)) => incoming_row(request).into_any_element(),
             Some(MapFriendsPageRow::Outgoing { request, is_first }) => outgoing_row(request, *is_first).into_any_element(),
-            Some(MapFriendsPageRow::Friend(friend)) => friend_row(friend).into_any_element(),
+            Some(MapFriendsPageRow::Friend { friend, is_first }) => friend_row(friend, *is_first).into_any_element(),
             _ => div().into_any_element(),
         }
     }
@@ -401,7 +411,7 @@ fn map_friends_page_row(
         MapFriendsPageRow::Outgoing { request, is_first: true } => {
             (SECTION_SPACING, outgoing_row(request, true).into_any_element())
         }
-        MapFriendsPageRow::Incoming(_) | MapFriendsPageRow::Outgoing { .. } | MapFriendsPageRow::Friend(_) => {
+        MapFriendsPageRow::Incoming(_) | MapFriendsPageRow::Outgoing { .. } | MapFriendsPageRow::Friend { .. } => {
             (SECTION_SPACING, MapPersonRowView::element(row, theme_mark, window, cx))
         }
         MapFriendsPageRow::FriendsEmpty => (
@@ -454,14 +464,29 @@ fn outgoing_row(request: &MapFriendRequest, is_first: bool) -> impl IntoElement 
         .guide_anchor(if is_first { Some(RiseGuideAnchor::MapOutgoingFirst) } else { None })
 }
 
-fn friend_row(friend: &MapFriend) -> MapPersonRow {
+fn friend_row(friend: &MapFriend, is_first: bool) -> impl IntoElement {
     let pending_removal = friend.clone();
-    MapPersonRow::new(format!("friend-{}", friend.id()), friend.user.clone(), None).child(MapRowButton::new(
-        format!("remove-{}", friend.id()),
-        tr("map_friend_remove_action"),
-        false,
-        move |cx| present_removal_confirmation(pending_removal.clone(), cx),
-    ))
+    let focused_id = friend.id().to_owned();
+    MapPersonRow::new(format!("friend-{}", friend.id()), friend.user.clone(), None)
+        .on_open(
+            move |cx| show_friend_on_map(&focused_id, cx),
+            is_first.then_some(RiseGuideAnchor::MapFriendsStripFirst),
+        )
+        .child(MapRowButton::new(
+            format!("remove-{}", friend.id()),
+            tr("map_friend_remove_action"),
+            false,
+            move |cx| present_removal_confirmation(pending_removal.clone(), cx),
+        ))
+}
+
+fn show_friend_on_map(user_id: &str, cx: &mut App) {
+    if let Some(nav_store) = env::<NavigationStoreKey>(cx)
+        && nav_store.read(cx).path.last() == Some(&RootRoute::MapFriends)
+    {
+        nav_store.update(cx, |nav_store, cx| nav_store.pop(cx));
+    }
+    MapInteractionsStore::shared(cx).update(cx, |interactions, cx| interactions.focus_friend(user_id, cx));
 }
 
 fn present_removal_confirmation(friend: MapFriend, cx: &mut App) {
@@ -523,11 +548,19 @@ struct MapPersonRow {
     user: MapUser,
     subtitle: Option<String>,
     trailing: Vec<AnyElement>,
+    on_open: Option<Rc<dyn Fn(&mut App)>>,
+    open_anchor: Option<RiseGuideAnchor>,
 }
 
 impl MapPersonRow {
     fn new(id: String, user: MapUser, subtitle: Option<String>) -> Self {
-        Self { id, user, subtitle, trailing: Vec::new() }
+        Self { id, user, subtitle, trailing: Vec::new(), on_open: None, open_anchor: None }
+    }
+
+    fn on_open(mut self, on_open: impl Fn(&mut App) + 'static, anchor: Option<RiseGuideAnchor>) -> Self {
+        self.on_open = Some(Rc::new(on_open));
+        self.open_anchor = anchor;
+        self
     }
 }
 
@@ -545,24 +578,53 @@ impl RenderOnce for MapPersonRow {
         let display_name = SharedString::from(user.display_name().to_owned());
         let subtitle = self.subtitle.unwrap_or_else(|| format!("@{}", user.tag));
 
-        hstack(12.0)
-            .w_full()
-            .h(px(MAP_PERSON_ROW_HEIGHT))
+        let person = hstack(12.0)
+            .min_w_0()
             .items_center()
             .child(
                 UserLogoUi::new(ElementId::Name(format!("map-person-logo-{}", self.id).into()))
                     .source(SharedString::from(user.logo.clone()))
                     .name(display_name.clone())
                     .user_id(SharedString::from(user.id.clone()))
-                    .size(44.0),
+                    .size(44.0)
+                    .guide_anchor(self.open_anchor)
+                    .gift_worn_frame(
+                        ElementId::Name(format!("map-person-frame-{}", self.id).into()),
+                        (!user.is_deleted).then(|| user.id.clone()),
+                        44.0,
+                    ),
             )
             .child(
                 vstack(2.0)
                     .align(HorizontalAlignment::Leading)
                     .min_w_0()
-                    .child(MainText::new(display_name).px(16.0).font_weight(FontWeight::MEDIUM).number_of_lines(1))
+                    .child(
+                        UserNameWithBadges::new(Some(SharedString::from(user.id.clone())), display_name)
+                            .font(16.0, FontWeight::MEDIUM)
+                            .official(user.is_official)
+                            .premium(user.is_premium, user.premium_badge_emoji.clone(), user.name_color.clone()),
+                    )
                     .child(MainText::new(subtitle).px(13.0).color(secondary).number_of_lines(1)),
-            )
+            );
+        let person = match self.on_open {
+            Some(on_open) => plain(ElementId::Name(format!("map-person-open-{}", self.id).into()))
+                .min_w_0()
+                .rounded(px(10.0))
+                .hover_fill(row_hover_fill(theme))
+                .on_press(move |_, cx| {
+                    if claim_row_action() {
+                        on_open(cx);
+                    }
+                })
+                .child(person)
+                .into_any_element(),
+            None => person.into_any_element(),
+        };
+        hstack(12.0)
+            .w_full()
+            .h(px(MAP_PERSON_ROW_HEIGHT))
+            .items_center()
+            .child(person)
             .child(spacer_min_w(8.0))
             .children(self.trailing)
     }

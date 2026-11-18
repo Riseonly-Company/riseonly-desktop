@@ -189,10 +189,9 @@ impl PostTextLayout {
             canvas.fill(background.rect, background.color, resolved_scale);
         }
         for line in self.lines.iter() {
-            if is_cancelled() {
+            if is_cancelled() || !Self::rasterize_line(&mut canvas, &text_system, line, resolved_scale) {
                 return None;
             }
-            Self::rasterize_line(&mut canvas, &text_system, line, resolved_scale);
         }
         for stroke in self.strikethroughs.iter() {
             canvas.fill(stroke.rect, stroke.color, resolved_scale);
@@ -213,7 +212,7 @@ impl PostTextLayout {
         text_system: &Arc<TextSystem>,
         line: &PostTextLayoutLine,
         scale: f32,
-    ) {
+    ) -> bool {
         let baseline_x = f32::from(line.baseline_origin.x);
         let baseline_y = f32::from(line.baseline_origin.y);
         for piece in line.line.pieces.iter() {
@@ -239,6 +238,9 @@ impl PostTextLayout {
                         continue;
                     }
                     let Ok((raster_size, bytes)) = text_system.rasterize_glyph(&params) else {
+                        if glyph.is_emoji {
+                            return false;
+                        }
                         continue;
                     };
                     let left = origin_x + raster_bounds.origin.x.0;
@@ -253,6 +255,7 @@ impl PostTextLayout {
                 }
             }
         }
+        true
     }
 
     /// whole device pixel and subpixel variant gpui picks for a glyph origin

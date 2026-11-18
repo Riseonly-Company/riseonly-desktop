@@ -364,6 +364,15 @@ impl NotificationItem {
         self.value(events::TYPE).unwrap_or_default()
     }
 
+    /// id of the achievement an earned achievement row names
+    pub fn achievement_id(&self) -> Option<i64> {
+        if self.event_type() != rise_events::name::ACHIEVEMENT_EARNED {
+            return None;
+        }
+        let raw = self.value(user::ACHIEVEMENT_ID)?;
+        trimming_whitespaces_and_newlines(&raw).parse::<i64>().ok().filter(|id| *id > 0)
+    }
+
     pub fn action(&self) -> String {
         self.value(events::ACTION).unwrap_or_default()
     }
@@ -527,6 +536,9 @@ impl NotificationItem {
         if self.is_admin_alert() {
             return "exclamationmark.triangle.fill";
         }
+        if self.achievement_id().is_some() {
+            return "trophy.fill";
+        }
         match self.kind {
             NotificationKind::PostLike
             | NotificationKind::CommentLike
@@ -556,6 +568,7 @@ impl NotificationItem {
 
     pub fn empty_avatar_glyph(&self, theme: &AppTheme) -> Option<NotificationAvatarGlyph> {
         let product_written = self.kind == NotificationKind::Announcement
+            || self.achievement_id().is_some()
             || (self.kind == NotificationKind::SparksReceived && self.event_type() == "sparks_granted")
             || (self.kind == NotificationKind::Music && self.facepile_actors().is_empty())
             || self.is_admin_alert();

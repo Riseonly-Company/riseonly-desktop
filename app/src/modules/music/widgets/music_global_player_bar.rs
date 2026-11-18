@@ -9,6 +9,7 @@ use rise_i18n::tr;
 use rise_ui::IconUi;
 use rise_ui::liquid_chrome::LiquidChrome;
 use rise_ui::main_text::MainText;
+use rise_ui::skeleton_ui::{SkeletonLine, SkeletonShimmerExt};
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 
@@ -18,8 +19,9 @@ use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::canon_format::RiseFormat;
 use crate::modules::music::pages::music_tab::mini_player_bar::MiniPlayerBar;
 use crate::modules::music::pages::now_playing::music_live_playback_seek_bar::MusicLivePlaybackSeekBar;
+use crate::modules::music::pages::playlist_detail::music_playlist_listener_cluster::MusicPlaylistListenerCluster;
 use crate::modules::music::shared::utils::music::music_models::{MusicRepeatMode, MusicRepeatModeExt, TrackModel};
-use crate::modules::music::shared::utils::music::music_output_volume::MusicOutputVolume;
+use crate::modules::music::shared::utils::music::music_output_volume::{MusicOutputVolume, MusicOutputVolumeRevision};
 use crate::modules::music::shared::utils::music::music_player_state::{MusicListeningBlockedControl, MusicPlayerState};
 use crate::modules::music::stores::music_actions::music_types::MusicPlaylistListener;
 use crate::modules::music::stores::music_interactions::music_interactions::MusicInteractionsStore;
@@ -41,6 +43,9 @@ const LINE_GAP: f32 = 6.0;
 const VOLUME_WIDTH: f32 = 96.0;
 const LIKED_COLOR: &str = "#E84393";
 const MARKER_STEP_POINTS: f64 = 0.5;
+const MARKER_STEM_GAP: f32 = 2.0;
+const MARKER_STEM_WIDTH: f32 = 1.5;
+const SESSIONS_CLUSTER_SIDE: f32 = 24.0;
 const MARKER_MIN_TICK: TimeInterval = 0.4;
 
 fn glyph(name: &str, side: f32, tint: Hsla) -> Option<gpui::Svg> {
@@ -159,7 +164,7 @@ impl MusicGlobalPlayerBar {
             centre_width: 0.0,
             line: cx.new(MusicGlobalPlayerLine::new),
             listeners: cx.new(MusicGlobalPlayerListeners::new),
-            volume: cx.new(|_| MusicGlobalPlayerVolume),
+            volume: cx.new(MusicGlobalPlayerVolume::new),
             _player: cx.observe(&player, |bar: &mut Self, player, cx| {
                 if player.read(cx).show_now_playing() {
                     return;
@@ -346,7 +351,29 @@ impl MusicGlobalPlayerBar {
             ))
     }
 
-    fn trailing(&self, key: &MusicGlobalPlayerBarKey, theme: &rise_theme::AppTheme) -> Div {
+    fn sessions(listeners: Vec<MusicPlaylistListener>, is_together: bool, theme: &rise_theme::AppTheme) -> Stateful<Div> {
+        let content = if listeners.is_empty() {
+            div()
+                .children(glyph("shareplay", 18.0, if is_together { theme.primary._100 } else { theme.text.secondary }))
+                .into_any_element()
+        } else {
+            let total_count = listeners.len() as i64;
+            MusicPlaylistListenerCluster::new("global-player-sessions-cluster", listeners, total_count)
+                .size(SESSIONS_CLUSTER_SIDE)
+                .is_loading(false)
+                .into_any_element()
+        };
+        icon_button("global-player-sessions", tr("music_live_listeners_title"), content, true, |_, cx| {
+            MusicInteractionsStore::shared(cx).update(cx, |interactions, cx| interactions.open_playlist_listeners(cx));
+        })
+    }
+
+    fn trailing(
+        &self,
+        key: &MusicGlobalPlayerBarKey,
+        sessions: Option<Stateful<Div>>,
+        theme: &rise_theme::AppTheme,
+    ) -> Div {
         let effects = key.is_music_playback.then(|| {
             icon_button(
                 "global-player-effects",
@@ -400,6 +427,7 @@ impl MusicGlobalPlayerBar {
             .min_w_0()
             .children(effects)
             .child(queue)
+            .children(sessions)
             .child(expand)
             .child(
                 AnyView::from(self.volume.clone())
@@ -424,6 +452,16 @@ impl Render for MusicGlobalPlayerBar {
         let like_track = track.clone();
         let is_liked = MusicInteractionsStore::shared(cx).update(cx, |interactions, cx| interactions.is_liked(&like_track, cx));
         let nav_store = env::<NavigationStoreKey>(cx);
+        let sessions = if player.update(cx, |player, cx| player.can_show_playlist_listeners(cx)) {
+            let (playlist_id, is_together) = {
+                let player = player.read(cx);
+                (player.listening_playlist_id().map(str::to_owned), player.is_listening_together())
+            };
+            let listeners = MusicLivePlaybackSeekBar::visible_playlist_listeners(&player, playlist_id.as_deref(), cx);
+            Some(Self::sessions(listeners, is_together, &theme))
+        } else {
+            None
+        };
 
         let bar = cx.entity();
         let line_style = if self.centre_width > 0.0 {
@@ -452,7 +490,7 @@ impl Render for MusicGlobalPlayerBar {
             .px(px(12.0))
             .child(Self::leading(&track, is_liked, nav_store, &theme))
             .child(centre)
-            .child(self.trailing(&key, &theme))
+            .child(self.trailing(&key, sessions, &theme))
     }
 }
 
@@ -462,12 +500,15 @@ pub struct MusicGlobalPlayerLine {
     width: f32,
     scrubbed: Option<f64>,
     is_hovered: bool,
-    shown: (String, i64),
+    shown: (String, i64, i64),
     _player: Subscription,
     _position: Subscription,
 }
 
 impl MusicGlobalPlayerLine {
+    const NOT_LOADING: i64 = -1;
+    const LOADING_UNKNOWN: i64 = -2;
+
     fn new(cx: &mut Context<Self>) -> Self {
         let player = MusicPlayerState::shared(cx);
         let publication = player.read(cx).position_publication().clone();
@@ -477,7 +518,7 @@ impl MusicGlobalPlayerLine {
             width: 0.0,
             scrubbed: None,
             is_hovered: false,
-            shown: (String::new(), -1),
+            shown: (String::new(), -1, Self::NOT_LOADING),
             _player: cx.observe(&player, |line: &mut Self, player, cx| {
                 if player.read(cx).show_now_playing() {
                     return;
@@ -529,11 +570,22 @@ impl MusicGlobalPlayerLine {
         }
     }
 
+    fn loading(player: &MusicPlayerState) -> Option<Option<f64>> {
+        player
+            .is_preparing_playback
+            .then(|| player.current_track_download_progress().and_then(|download| download.fraction()))
+    }
+
     /// what a render would put on screen, the elapsed label and fill end in half points
-    fn drawn(&self, player: &MusicPlayerState) -> (String, i64) {
+    fn drawn(&self, player: &MusicPlayerState) -> (String, i64, i64) {
         let label = RiseFormat::duration_time_interval(self.current_time(player));
         let end = (self.fraction(player) * f64::from(self.width) * 2.0).round() as i64;
-        (label, end)
+        let loading = match Self::loading(player) {
+            None => Self::NOT_LOADING,
+            Some(None) => Self::LOADING_UNKNOWN,
+            Some(Some(fraction)) => (fraction * f64::from(self.width) * 2.0).round() as i64,
+        };
+        (label, end, loading)
     }
 
     fn is_interactive(player: &MusicPlayerState) -> bool {
@@ -585,7 +637,7 @@ impl MusicGlobalPlayerLine {
 impl Render for MusicGlobalPlayerLine {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let player = MusicPlayerState::shared(cx);
-        let (fraction, current_label, duration_label, is_interactive) = {
+        let (fraction, current_label, duration_label, is_interactive, loading) = {
             let player = player.read(cx);
             self.shown = self.drawn(player);
             (
@@ -593,6 +645,7 @@ impl Render for MusicGlobalPlayerLine {
                 RiseFormat::duration_time_interval(self.current_time(player)),
                 RiseFormat::duration_time_interval(Self::duration(player)),
                 Self::is_interactive(player),
+                Self::loading(player),
             )
         };
         let theme = rise_ui::theme(cx).clone();
@@ -636,16 +689,40 @@ impl Render for MusicGlobalPlayerLine {
                     .rounded_full()
                     .bg(LiquidChrome::surface_fill(&theme, 1)),
             )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px((LINE_ROW_HEIGHT - LINE_HEIGHT) / 2.0))
-                    .w(px(filled))
-                    .h(px(LINE_HEIGHT))
-                    .rounded_full()
-                    .bg(fill_tint),
-            )
+            .when(loading.is_none(), |track| {
+                track.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px((LINE_ROW_HEIGHT - LINE_HEIGHT) / 2.0))
+                        .w(px(filled))
+                        .h(px(LINE_HEIGHT))
+                        .rounded_full()
+                        .bg(fill_tint),
+                )
+            })
+            .when_some(loading, |track, downloaded| {
+                let top = px((LINE_ROW_HEIGHT - LINE_HEIGHT) / 2.0);
+                match downloaded {
+                    Some(downloaded) => track.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(top)
+                            .w(px(self.width * downloaded as f32))
+                            .h(px(LINE_HEIGHT))
+                            .rounded_full()
+                            .bg(theme.primary._100),
+                    ),
+                    None => track.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(top)
+                            .child(SkeletonLine::new(self.width, LINE_HEIGHT).skeleton_shimmer(None)),
+                    ),
+                }
+            })
             .when(active && is_interactive, |track| {
                 track.child(
                     div()
@@ -819,14 +896,26 @@ impl Render for MusicGlobalPlayerListeners {
             };
             let avatar_side = MusicLivePlaybackSeekBar::LISTENER_AVATAR_SIDE;
             let dot_side = MusicLivePlaybackSeekBar::LISTENER_DOT_SIDE;
+            let avatar_top = (f32::from(centre.top() - frame.origin.y) - MARKER_STEM_GAP - avatar_side).max(0.0);
+            let stem_top = avatar_top + avatar_side;
+            let stem_height = (line_y - dot_side / 2.0 - stem_top).max(0.0);
             for (index, (listener, fraction)) in key.listeners.iter().zip(fractions).enumerate().rev() {
                 let x = MusicLivePlaybackSeekBar::listener_marker_x(index, track_left + self.track_width * fraction as f32);
                 let accent = if listener.is_playing { playing_accent } else { paused_accent };
                 markers.push(
                     div()
                         .absolute()
+                        .left(px(x - MARKER_STEM_WIDTH / 2.0))
+                        .top(px(stem_top))
+                        .w(px(MARKER_STEM_WIDTH))
+                        .h(px(stem_height))
+                        .bg(accent),
+                );
+                markers.push(
+                    div()
+                        .absolute()
                         .left(px(x - avatar_side / 2.0))
-                        .top(px(0.0))
+                        .top(px(avatar_top))
                         .child(MusicLivePlaybackSeekBar::listener_avatar(&id, listener, accent)),
                 );
                 markers.push(
@@ -845,9 +934,15 @@ impl Render for MusicGlobalPlayerListeners {
 }
 
 /// speaker (mute and back) and volume line, redraws only itself
-pub struct MusicGlobalPlayerVolume;
+pub struct MusicGlobalPlayerVolume {
+    _level: Subscription,
+}
 
 impl MusicGlobalPlayerVolume {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self { _level: cx.observe_global::<MusicOutputVolumeRevision>(|_, cx| cx.notify()) }
+    }
+
     fn set_from(x: f32, view: &Entity<Self>, cx: &mut App) {
         MusicOutputVolume::set_level(x / VOLUME_WIDTH, cx);
         view.update(cx, |_, cx| cx.notify());

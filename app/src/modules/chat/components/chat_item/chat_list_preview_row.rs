@@ -52,7 +52,6 @@ const BADGE_SPRING_DAMPING_FRACTION: f64 = 0.85;
 const MARK_BADGE_TRANSITION_SCALE: f32 = 0.4;
 const ROW_MIN_HEIGHT: f32 = 70.0;
 const SNIPPET_THUMBNAIL_SIDE: f32 = 17.0;
-const HOVER_OPACITY: f32 = 0.05;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatListPreviewPresentationTitleAccessory {
@@ -414,7 +413,8 @@ impl ChatListPreviewFactory {
         }
         match chat.r#type {
             ChatType::Group => {
-                accessories.push(ChatListPreviewPresentationTitleAccessory::SystemImage("person.2.fill".to_owned()));
+                let symbol = if chat.topics_enabled { "person.3.fill" } else { "person.2.fill" };
+                accessories.push(ChatListPreviewPresentationTitleAccessory::SystemImage(symbol.to_owned()));
             }
             ChatType::Channel => {
                 accessories.push(ChatListPreviewPresentationTitleAccessory::SystemImage("megaphone.fill".to_owned()));
@@ -894,7 +894,7 @@ impl RenderOnce for ChatListPreviewRow {
 
         let row = div().flex().items_start();
         let row = if LayoutDirection::current().is_right_to_left() { row.flex_row() } else { row.flex_row_reverse() };
-        let hover_color = theme.text.primary.opacity(HOVER_OPACITY);
+        let hover_color = row_hover_fill(&theme);
         div()
             .flex()
             .items_center()

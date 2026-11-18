@@ -287,7 +287,7 @@ impl MyReportsList {
             .rounded_rect(8.0)
             .bg(color(record.status.color()))
             .children(IconUi::sized(symbol, px(15.0), white(), true));
-        let texts = div()
+        let mut texts = div()
             .flex()
             .flex_col()
             .flex_1()
@@ -301,6 +301,14 @@ impl MyReportsList {
                     .number_of_lines(2),
             )
             .child(MainText::new(Self::subtitle(record)).px(12.0).color(theme.text.secondary).number_of_lines(1));
+        if let Some(comment) = &record.status_comment {
+            texts = texts.child(
+                MainText::new(format!("{}: {comment}", tr("bug_report_status_comment_title")))
+                    .px(12.0)
+                    .color(color(record.status.color()))
+                    .number_of_lines(2),
+            );
+        }
         let mut chips = div().flex().flex_col().flex_none().items_end().gap(px(4.0)).child(Self::status_chip(record.status));
         if record.attempt_count > 1 {
             chips = chips.child(Self::attempt_chip(record.attempt_count));

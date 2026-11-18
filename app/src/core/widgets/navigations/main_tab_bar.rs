@@ -3,9 +3,10 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, App, BoxShadow, ClickEvent, Context, Div, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Task, Window,
-    deferred, div, hsla, point, prelude::FluentBuilder, px,
+    AnyElement, AnyView, App, BoxShadow, ClickEvent, Context, Div, ElementId, Entity, FontWeight, Hsla,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, RenderOnce, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Task, Window, deferred, div, hsla, point, prelude::FluentBuilder,
+    px,
 };
 use rise_canon::{RiseGuideAnchor, RiseTabBarButton};
 use rise_core::foundation::foundation_date::RiseClock;
@@ -21,6 +22,8 @@ use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::button_style::plain;
 use rise_ui::swiftui::environment::{env, env_scope};
+use rise_ui::reorder_grip::ReorderMotion;
+use rise_ui::swiftui::drag_gesture::{DragGesture, DragGestureModifiers, DragGestureValue};
 use rise_ui::swiftui::environment_values::{ColorScheme, ColorSchemeKey};
 use rise_ui::swiftui::motion::{ease_in_out, ease_out, spring};
 use rise_widgets::navigations::tab_strip_math::TabStripLayout;
@@ -33,13 +36,16 @@ use crate::core::lib::rise_feature_gate::RiseFeatureGate;
 #[cfg(any(debug_assertions, feature = "sai_debug_tools"))]
 use crate::core::lib::sai::modules::sai_debugger::sai_debugger_overlay_state::SaiDebuggerOverlayState;
 use crate::core::widgets::navigations::chat_launch_unread_bubble::ChatLaunchUnreadBubbleUi;
+use crate::core::preferences::tab_bar_browse_preferences::TabBarBrowsePreferences;
+use crate::core::widgets::navigations::main_tab_bar_buttons::{RailEntry, RiseTabBarButtonExt};
 use crate::core::widgets::navigations::main_tab_bar_parts::MainTabBarItemLabel;
 use crate::core::widgets::navigations::main_tab_bar_settings::{
-    RiseTabBarButtonOrder, RiseTabBarSettings, RiseTabBarSurface,
+    RiseTabBarButtonOrder, RiseTabBarPlatform, RiseTabBarSettings,
 };
 use crate::core::widgets::navigations::main_tab_scroll_to_top::MainTabScrollToTop;
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::user::engine::rise_user_tab_bar_presentation::RiseUserTabBarPresentation;
+use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MainTabBarItem {
@@ -80,6 +86,7 @@ impl MainTabBarMetrics {
     pub const INSET: f32 = 4.0;
     pub const ITEM_HEIGHT: f32 = Self::HEIGHT - Self::INSET * 2.0;
     pub const RAIL_ITEM_HEIGHT: f32 = 50.0;
+    pub const REORDER_DRAG_DISTANCE: f32 = 4.0;
     pub const RAIL_ICON_SIZE: f32 = 24.0;
     pub const TRAFFIC_LIGHT_HEIGHT: f32 = 14.0;
     pub const RAIL_TOP_GAP: f32 = 8.0;
@@ -207,6 +214,8 @@ pub struct MainTabBarState {
     last_offset: Option<f32>,
     bubble_opacity: Animated<f32>,
     bubble_placed: bool,
+    reorder: ReorderMotion<RailEntry>,
+    drag_swallows_click: bool,
 }
 
 impl MainTabBarState {
@@ -225,6 +234,8 @@ impl MainTabBarState {
             last_offset: None,
             bubble_opacity: Animated::new(0.0),
             bubble_placed: false,
+            reorder: ReorderMotion::new(),
+            drag_swallows_click: false,
         }
     }
 
@@ -304,13 +315,133 @@ impl MainTabBar {
         MainTabBarItem::ordered(&self.settings.button_order)
     }
 
-    /// sections stacked from the top, every button but the profile which sits at the foot
-    fn strip_items(items: &[MainTabBarItem]) -> impl Iterator<Item = (usize, MainTabBarItem)> + '_ {
-        items.iter().copied().enumerate().filter(|(_, item)| item.id != MainTab::Profile)
+    /// height of the settings preview copy, every button shown without scrolling
+    pub fn preview_height() -> f32 {
+        MainTabBarMetrics::INSET * 5.0 + MainTabBarMetrics::RAIL_ITEM_HEIGHT * (MainTabBarItem::all().len() + 1) as f32
     }
 
-    fn strip_slot(items: &[MainTabBarItem], index: usize) -> Option<usize> {
-        Self::strip_items(items).position(|(candidate, _)| candidate == index)
+    fn wire_button(tab: MainTab) -> Option<RiseTabBarButton> {
+        RiseTabBarButton::ALL.into_iter().find(|button| button.tab() == tab)
+    }
+
+    fn rail_entries(items: &[MainTabBarItem], cx: &mut App) -> Vec<RailEntry> {
+        let buttons: Vec<RiseTabBarButton> = items.iter().filter_map(|item| Self::wire_button(item.id)).collect();
+        RailEntry::rail(TabBarBrowsePreferences::shared(cx).read(cx).rail_order(), &buttons)
+    }
+
+    fn rail_slots(&self, count: usize, strip_top: f32, scroll_offset: f32, window: &Window) -> Rc<Vec<f32>> {
+        let foot_start = count.saturating_sub(RailEntry::FOOT_SIZE);
+        let item = MainTabBarMetrics::RAIL_ITEM_HEIGHT;
+        let inset = MainTabBarMetrics::INSET;
+        let bottom = f32::from(window.viewport_size().height) - inset;
+        Rc::new(
+            (0..count)
+                .map(|slot| {
+                    if slot < foot_start {
+                        strip_top + inset + item * slot as f32 + scroll_offset
+                    } else {
+                        let from_bottom = (count - slot) as f32;
+                        bottom - item * from_bottom - inset * (from_bottom - 1.0)
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// a bar place that follows the mouse when dragged, neighbours of its part make room and a drop glides home
+    #[allow(clippy::too_many_arguments)]
+    fn reorderable(
+        &self,
+        entry: RailEntry,
+        element: AnyElement,
+        base: &[RailEntry],
+        slots: &Rc<Vec<f32>>,
+        state: &Entity<MainTabBarState>,
+        window: &Window,
+        cx: &App,
+    ) -> AnyElement {
+        if self.is_preview {
+            return element;
+        }
+        let slot_of = |slots: &[f32], index: usize| slots.get(index).copied().unwrap_or(0.0);
+        let (offset, raise, leaves_strip) = {
+            let motion = &state.read(cx).reorder;
+            let foot_start = RailEntry::foot_start(base);
+            let kept = base.iter().position(|candidate| *candidate == entry);
+            let laid = motion.shown_order(base).iter().position(|candidate| *candidate == entry);
+            (
+                motion.offset_from_slots(&entry, base, |index| slot_of(slots, index), window),
+                motion.lift(&entry, window),
+                kept.is_some_and(|kept| kept < foot_start) && laid.is_some_and(|laid| laid >= foot_start),
+            )
+        };
+        let base = base.to_vec();
+        let drag_slots = slots.clone();
+        let surface = rise_ui::theme(cx).bg._100;
+        let change_state = state.clone();
+        let end_state = state.clone();
+        let down_state = state.clone();
+        let key = match entry {
+            RailEntry::Button(button) => SharedString::from(format!("main-tab-bar-reorder-{}", button.wire())),
+            RailEntry::Settings => SharedString::new_static("main-tab-bar-reorder-settings"),
+        };
+        let gesture = DragGesture::new(MainTabBarMetrics::REORDER_DRAG_DISTANCE)
+            .on_changed(move |value: &DragGestureValue, _: &mut Window, cx: &mut App| {
+                let translation = f32::from(value.translation.height);
+                let reduce_motion = cx.reduce_motion();
+                change_state.update(cx, |state, cx| {
+                    state.drag_swallows_click = true;
+                    state.reorder.drag_slots(
+                        &entry,
+                        translation,
+                        &base,
+                        |index| slot_of(&drag_slots, index),
+                        RiseClock::monotonic(),
+                        reduce_motion,
+                    );
+                    cx.notify();
+                });
+            })
+            .on_ended(move |_: &DragGestureValue, _: &mut Window, cx: &mut App| {
+                let reduce_motion = cx.reduce_motion();
+                let order = end_state.update(cx, |state, cx| {
+                    let order = state.reorder.end(RiseClock::monotonic(), reduce_motion);
+                    cx.notify();
+                    order
+                });
+                if let Some(order) = order {
+                    RailEntry::save(&order, cx);
+                    end_state.update(cx, |state, _| state.reorder.settle());
+                }
+            });
+        let place = div()
+            .id(ElementId::Name(key.clone()))
+            .relative()
+            .top(px(offset))
+            .flex_shrink_0()
+            .w_full()
+            .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
+            .when(raise > 0.0, |place| {
+                place.bg(surface).shadow(vec![BoxShadow {
+                    color: hsla(0.0, 0.0, 0.0, 0.22 * raise),
+                    offset: point(px(0.0), px(4.0 * raise)),
+                    blur_radius: px(14.0 * raise),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
+            })
+            .capture_any_mouse_down(move |_, _, cx| {
+                down_state.update(cx, |state, _| state.drag_swallows_click = false);
+            })
+            .child(element)
+            .gesture(ElementId::Name(key), gesture);
+        if raise > 0.0 {
+            deferred(place).with_priority(1).into_any_element()
+        } else if leaves_strip {
+            deferred(place).into_any_element()
+        } else {
+            place.into_any_element()
+        }
     }
 
     fn slot_center(slot: usize) -> f32 {
@@ -525,6 +656,9 @@ impl MainTabBar {
             })
             .on_click(move |_: &ClickEvent, window, cx| {
                 tracing::warn!(target: "riseonly::X1107", tab = ?item.id, "rail click");
+                if state.update(cx, |state, _| std::mem::take(&mut state.drag_swallows_click)) {
+                    return;
+                }
                 Self::commit(item, slot, &current_tab, &state, nav_store.as_ref(), is_preview, window, cx);
             })
             .child(label);
@@ -540,9 +674,11 @@ impl MainTabBar {
         tint: Hsla,
         is_selected: bool,
         dark: bool,
+        state: &Entity<MainTabBarState>,
     ) -> AnyElement {
         let entry = MainTabBarMoreEntry::settings();
         let is_preview = self.is_preview;
+        let press_state = state.clone();
         let (glyph, text) = if is_selected { (tint, tint) } else { (glyph, text) };
         let button = plain(ElementId::Name(SharedString::new_static(entry.id)))
             .flex()
@@ -555,6 +691,9 @@ impl MainTabBar {
             .h(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT))
             .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
             .on_press(move |_window, cx| {
+                if press_state.update(cx, |state, _| std::mem::take(&mut state.drag_swallows_click)) {
+                    return;
+                }
                 if !is_preview {
                     entry.open(nav_store.as_ref(), cx);
                 }
@@ -612,7 +751,17 @@ impl RenderOnce for MainTabBar {
         let over_media = !theme_dark && !self.is_preview && current == MainTab::Shorts && !page_pushed;
         let dark = theme_dark || over_media;
         let selected_index = items.iter().position(|item| item.id == current).unwrap_or(0);
-        let selected_slot = if settings_open { None } else { Self::strip_slot(&items, selected_index) };
+        let entries = Self::rail_entries(&items, cx);
+        let foot_start = RailEntry::foot_start(&entries);
+        let strip_base = entries[..foot_start].to_vec();
+        let foot_entries = entries[foot_start..].to_vec();
+        let strip_entries = strip_base.clone();
+        let selected_slot = if settings_open {
+            None
+        } else {
+            Self::wire_button(current)
+                .and_then(|button| strip_entries.iter().position(|entry| *entry == RailEntry::Button(button)))
+        };
         let order = self.settings.button_order;
         if let Some(slot) = selected_slot {
             state.update(cx, |state, cx| state.follow(Self::slot_center(slot), order, cx));
@@ -620,6 +769,15 @@ impl RenderOnce for MainTabBar {
 
         let geometry = state.read(cx).geometry.clone();
         geometry.set_items(&items);
+        geometry.set_strip(
+            strip_entries
+                .iter()
+                .map(|entry| match entry {
+                    RailEntry::Button(button) => Some(button.tab()),
+                    RailEntry::Settings => None,
+                })
+                .collect(),
+        );
         if !self.is_preview {
             let reveal = MainTabBarReveal::shared(cx);
             reveal.update(cx, |reveal, _| reveal.attach(&geometry));
@@ -647,12 +805,15 @@ impl RenderOnce for MainTabBar {
         };
 
         let strip_width = f32::from(shell.rail_width) - MainTabBarMetrics::INSET * 2.0;
-        let strip_top = if HostOs::current() == HostOs::MacOs {
+        let strip_top = if self.is_preview {
+            MainTabBarMetrics::INSET
+        } else if HostOs::current() == HostOs::MacOs {
             f32::from(shell.traffic_light_inset) + MainTabBarMetrics::TRAFFIC_LIGHT_HEIGHT + MainTabBarMetrics::RAIL_TOP_GAP
                 - MainTabBarMetrics::INSET
         } else {
             f32::from(shell.window_drag_height)
         };
+        let slots = self.rail_slots(entries.len(), strip_top, offset, window);
         let (settings_glyph, settings_text) =
             if over_media { (hsla(0.0, 0.0, 1.0, 0.72), gpui::white()) } else { (theme.text.secondary, theme.text.primary) };
         let hover = Self::resting_fill(dark).opacity(0.5);
@@ -673,58 +834,78 @@ impl RenderOnce for MainTabBar {
         } else {
             div().absolute().into_any_element()
         });
-        for (slot, (index, item)) in Self::strip_items(&items).enumerate() {
-            strip = strip.child(self.strip_button(
-                index,
-                item,
-                Some(slot),
-                index == selected_index && !settings_open,
-                lift,
-                hover,
-                &state,
-                nav_store.as_ref(),
-            ));
+        for (slot, entry) in strip_entries.iter().copied().enumerate() {
+            let element = match entry {
+                RailEntry::Button(button) => {
+                    let Some(index) = items.iter().position(|item| item.id == button.tab()) else {
+                        continue;
+                    };
+                    self.strip_button(
+                        index,
+                        items[index],
+                        Some(slot),
+                        index == selected_index && !settings_open,
+                        lift,
+                        hover,
+                        &state,
+                        nav_store.as_ref(),
+                    )
+                }
+                RailEntry::Settings => self.settings_button(
+                    nav_store.clone(),
+                    settings_glyph,
+                    settings_text,
+                    theme.primary._100,
+                    settings_open,
+                    dark,
+                    &state,
+                ),
+            };
+            strip = strip.child(self.reorderable(entry, element, &entries, &slots, &state, window, cx));
         }
 
-        let foot_profile = items.iter().position(|item| item.id == MainTab::Profile).map(|profile_index| {
-            let profile_selected = !settings_open && current == MainTab::Profile;
-            let profile = self.strip_button(
-                profile_index,
-                items[profile_index],
-                None,
-                profile_selected,
-                if profile_selected { lift } else { 0.0 },
-                hover,
-                &state,
-                nav_store.as_ref(),
-            );
-            if profile_selected {
-                div()
-                    .flex_shrink_0()
-                    .w_full()
-                    .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
-                    .bg(Self::resting_fill(dark))
-                    .child(profile)
-                    .into_any_element()
-            } else {
-                profile
-            }
-        });
-        let foot = div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(MainTabBarMetrics::INSET))
-            .w_full()
-            .children(foot_profile)
-            .child(self.settings_button(
-                nav_store,
-                settings_glyph,
-                settings_text,
-                theme.primary._100,
-                settings_open,
-                dark,
-            ));
+        let mut foot = div().flex().flex_col().items_center().gap(px(MainTabBarMetrics::INSET)).w_full();
+        for entry in foot_entries {
+            let element = match entry {
+                RailEntry::Settings => self.settings_button(
+                    nav_store.clone(),
+                    settings_glyph,
+                    settings_text,
+                    theme.primary._100,
+                    settings_open,
+                    dark,
+                    &state,
+                ),
+                RailEntry::Button(button) => {
+                    let Some(index) = items.iter().position(|item| item.id == button.tab()) else {
+                        continue;
+                    };
+                    let selected = !settings_open && current == button.tab();
+                    let element = self.strip_button(
+                        index,
+                        items[index],
+                        None,
+                        selected,
+                        if selected { lift } else { 0.0 },
+                        hover,
+                        &state,
+                        nav_store.as_ref(),
+                    );
+                    if selected {
+                        div()
+                            .flex_shrink_0()
+                            .w_full()
+                            .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
+                            .bg(Self::resting_fill(dark))
+                            .child(element)
+                            .into_any_element()
+                    } else {
+                        element
+                    }
+                }
+            };
+            foot = foot.child(self.reorderable(entry, element, &entries, &slots, &state, window, cx));
+        }
         let foot = div()
             .flex()
             .flex_col()
@@ -789,6 +970,7 @@ pub struct MainTabBarGeometry {
     pub scroll: ScrollHandle,
     pub loops: Cell<bool>,
     items: RefCell<Vec<MainTabBarItem>>,
+    strip: RefCell<Vec<Option<MainTab>>>,
 }
 
 impl Default for MainTabBarGeometry {
@@ -799,7 +981,18 @@ impl Default for MainTabBarGeometry {
 
 impl MainTabBarGeometry {
     pub fn new() -> Self {
-        Self { scroll: ScrollHandle::new(), loops: Cell::new(false), items: RefCell::new(MainTabBarItem::all().to_vec()) }
+        let strip = MainTabBarItem::all()
+            .iter()
+            .filter(|item| item.id != MainTab::Profile)
+            .map(|item| Some(item.id))
+            .chain(std::iter::once(None))
+            .collect();
+        Self {
+            scroll: ScrollHandle::new(),
+            loops: Cell::new(false),
+            items: RefCell::new(MainTabBarItem::all().to_vec()),
+            strip: RefCell::new(strip),
+        }
     }
 
     /// horizontal strip layout of the phone, for bar copies that still draw one
@@ -814,8 +1007,21 @@ impl MainTabBarGeometry {
         }
     }
 
+    fn set_strip(&self, strip: Vec<Option<MainTab>>) {
+        let mut stored = self.strip.borrow_mut();
+        if *stored != strip {
+            *stored = strip;
+        }
+    }
+
+    /// strip slot of the button at index of the items, none when it sits at the foot
+    fn slot_of(&self, index: usize) -> Option<usize> {
+        let tab = self.items.borrow().get(index)?.id;
+        self.strip.borrow().iter().position(|entry| *entry == Some(tab))
+    }
+
     fn scroll_item(&self, index: usize) -> Option<usize> {
-        MainTabBar::strip_slot(&self.items.borrow(), index).map(|slot| slot + 1)
+        self.slot_of(index).map(|slot| slot + 1)
     }
 
     pub fn is_fully_visible(&self, index: usize, count: usize) -> bool {
@@ -847,7 +1053,7 @@ impl MainTabBarGeometry {
         if index >= MainTabBarMetrics::VISIBLE_COUNT {
             return None;
         }
-        let slot = MainTabBar::strip_slot(&items, index)?;
+        let slot = self.slot_of(index)?;
         let viewport = f32::from(self.scroll.bounds().size.height);
         let offset = f32::from(self.scroll.offset().y);
         let center = MainTabBar::slot_center(slot) + offset;
@@ -857,12 +1063,8 @@ impl MainTabBarGeometry {
     }
 
     fn chats_center_in_window(&self) -> f32 {
-        let items = self.items.borrow();
-        let center = items
-            .iter()
-            .position(|item| item.id == MainTab::Chats)
-            .and_then(|index| MainTabBar::strip_slot(&items, index))
-            .map_or(0.0, MainTabBar::slot_center);
+        let index = self.items.borrow().iter().position(|item| item.id == MainTab::Chats);
+        let center = index.and_then(|index| self.slot_of(index)).map_or(0.0, MainTabBar::slot_center);
         f32::from(self.scroll.bounds().top()) + center + f32::from(self.scroll.offset().y)
     }
 }

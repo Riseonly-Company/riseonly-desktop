@@ -106,6 +106,8 @@ struct RiseRTCDomainAppliedServerModeration {
     session: RiseRTCMediaSessionKey,
     silenced: bool,
     deafened: bool,
+    camera_blocked: bool,
+    screen_share_blocked: bool,
 }
 
 #[derive(Clone)]
@@ -310,6 +312,24 @@ impl RiseRTCDomain {
 
     pub const CAMERA_PUBLISH_FAILED_CODE: &'static str = "rtc_media_camera_failed";
     pub const MICROPHONE_PUBLISH_FAILED_CODE: &'static str = "rtc_media_microphone_failed";
+    pub const MICROPHONE_UNAVAILABLE_CODE: &'static str = "desktop_rtc_microphone_unavailable";
+    pub const SPEAKER_UNAVAILABLE_CODE: &'static str = "desktop_rtc_speaker_unavailable";
+    pub const SCREEN_SHARE_NO_PORTAL_CODE: &'static str = "desktop_screen_share_no_portal";
+
+    /// text of a desktop media failure code that has its own message, none for the generic ones
+    pub fn desktop_failure_text(error: &anyhow::Error) -> Option<String> {
+        let Some(RiseRTCStateError::Remote(code)) = error.downcast_ref::<RiseRTCStateError>() else {
+            return None;
+        };
+        Self::desktop_failure_code_text(code)
+    }
+
+    /// text of a desktop media failure code, none for codes other screens already explain
+    pub fn desktop_failure_code_text(code: &str) -> Option<String> {
+        [Self::MICROPHONE_UNAVAILABLE_CODE, Self::SPEAKER_UNAVAILABLE_CODE, Self::SCREEN_SHARE_NO_PORTAL_CODE]
+            .contains(&code)
+            .then(|| rise_i18n::tr(code))
+    }
 
     /// builds the domain with the default media driver provider
     pub fn new(engine: Arc<RiseEngine>) -> Arc<Self> {
@@ -1299,6 +1319,7 @@ impl RiseRTCDomain {
             domain: self,
             release: Self::release_screen_share_mutation_lane,
         };
+        let server_asked = AtomicBool::new(false);
         let outcome: anyhow::Result<()> = async {
             self.perform_media(RiseRTCMediaIntent::SetScreenShare {
                 session: session.clone(),
@@ -1308,6 +1329,7 @@ impl RiseRTCDomain {
             })
             .await?;
             self.ensure_current_screen_share_mutation(generation, &session)?;
+            server_asked.store(true, Ordering::Release);
             self.repository
                 .update_self_media(&credentials, None, None, Some(enabled), None)
                 .await?;
@@ -1317,7 +1339,7 @@ impl RiseRTCDomain {
         let Err(error) = outcome else {
             return Ok(());
         };
-        if self.is_current_screen_share_mutation(generation, &session) {
+        if previous != enabled && self.is_current_screen_share_mutation(generation, &session) {
             let _ = self
                 .perform_media(RiseRTCMediaIntent::SetScreenShare {
                     session: session.clone(),
@@ -1327,7 +1349,7 @@ impl RiseRTCDomain {
                 })
                 .await;
         }
-        if self.is_current_screen_share_mutation(generation, &session) {
+        if server_asked.load(Ordering::Acquire) && self.is_current_screen_share_mutation(generation, &session) {
             let _ = self
                 .repository
                 .update_self_media(&credentials, None, None, Some(previous), None)
@@ -1354,9 +1376,11 @@ impl RiseRTCDomain {
         }) else {
             return;
         };
-        if !self
-            .latest_self_participant()
-            .is_some_and(|participant| participant.screen_share_enabled)
+        let start_in_flight = self.state.with(|state| state.screen_share_mutation_lane_busy);
+        if !start_in_flight
+            && !self
+                .latest_self_participant()
+                .is_some_and(|participant| participant.screen_share_enabled)
         {
             return;
         }
@@ -1373,6 +1397,35 @@ impl RiseRTCDomain {
             .repository
             .update_self_media(&credentials, None, None, Some(false), None)
             .await;
+    }
+
+    async fn clear_microphone_after_media_loss(&self, session: &RiseRTCMediaSessionKey) {
+        let Some(credentials) = self.state.with(|state| {
+            state
+                .active_credentials
+                .clone()
+                .filter(|credentials| &credentials.session_key() == session)
+        }) else {
+            return;
+        };
+        self.advance_microphone_mutation_generation();
+        let _ = self
+            .perform_media(RiseRTCMediaIntent::SetMicrophone {
+                session: session.clone(),
+                enabled: false,
+            })
+            .await;
+        if self.latest_self_participant().is_some_and(|participant| participant.microphone_enabled) {
+            let _ = self
+                .repository
+                .update_self_media(&credentials, Some(false), None, None, None)
+                .await;
+        }
+        self.publish_nonfatal_media_error(
+            Self::MICROPHONE_UNAVAILABLE_CODE,
+            Some("call microphone did not open, the call goes on with the microphone off".to_owned()),
+        )
+        .await;
     }
 
     pub async fn switch_camera(&self, position: RiseRTCCameraPosition) -> anyhow::Result<()> {
@@ -2964,6 +3017,10 @@ impl RiseRTCDomain {
                 session: credentials.session_key(),
                 silenced: participant.as_ref().is_some_and(RiseRTCParticipant::is_server_silenced),
                 deafened: participant.as_ref().is_some_and(|participant| participant.server_deafened),
+                camera_blocked: participant.as_ref().is_some_and(|participant| participant.server_camera_blocked),
+                screen_share_blocked: participant
+                    .as_ref()
+                    .is_some_and(|participant| participant.server_screen_share_blocked),
             };
             if state.applied_server_moderation.as_ref() == Some(&applied) {
                 return None;
@@ -2982,6 +3039,29 @@ impl RiseRTCDomain {
                 .perform(RiseRTCMediaIntent::SetMicrophone {
                     session: applied.session.clone(),
                     enabled: false,
+                })
+                .await;
+        }
+        if applied.camera_blocked
+            && let Some(media_driver) = media_driver.as_ref()
+        {
+            let _ = media_driver
+                .perform(RiseRTCMediaIntent::SetCamera {
+                    session: applied.session.clone(),
+                    enabled: false,
+                    position: RiseRTCCameraPosition::Front,
+                })
+                .await;
+        }
+        if applied.screen_share_blocked
+            && let Some(media_driver) = media_driver.as_ref()
+        {
+            let _ = media_driver
+                .perform(RiseRTCMediaIntent::SetScreenShare {
+                    session: applied.session.clone(),
+                    enabled: false,
+                    include_device_audio: false,
+                    quality: RiseRTCScreenShareQuality::Balanced,
                 })
                 .await;
         }
@@ -3087,6 +3167,22 @@ impl RiseRTCDomain {
                         return Ok(());
                     }
                     self.clear_screen_share_after_media_loss(&session).await;
+                }
+                RiseRTCMediaEvent::LocalMicrophoneLost { session } => {
+                    if !owns(&session) {
+                        return Ok(());
+                    }
+                    self.clear_microphone_after_media_loss(&session).await;
+                }
+                RiseRTCMediaEvent::LocalPlayoutLost { session } => {
+                    if !owns(&session) {
+                        return Ok(());
+                    }
+                    self.publish_nonfatal_media_error(
+                        Self::SPEAKER_UNAVAILABLE_CODE,
+                        Some("call sound device did not open".to_owned()),
+                    )
+                    .await;
                 }
                 RiseRTCMediaEvent::LocalBroadcastStarted { session } => {
                     if !owns(&session) {

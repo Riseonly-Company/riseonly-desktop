@@ -8,10 +8,11 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext, Bounds, ClickEvent, Context, ElementId, Entity, EntityId, FocusHandle, Focusable, Hsla,
-    ImageSource, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement, Pixels, Point,
-    Render, ScrollDelta, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement, Styled, StyledImage,
-    Subscription, Task, WeakEntity, Window, black, div, hsla, img, point, px, size, white,
+    AnyElement, AnyView, App, AppContext, Bounds, ClickEvent, Context, DispatchPhase, ElementId, Entity, EntityId, FocusHandle,
+    Focusable, Hitbox, HitboxBehavior, Hsla, ImageSource, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ObjectFit, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString, Size,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, Task, WeakEntity, Window, black, canvas, div, hsla, img, point,
+    px, size, white,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
@@ -22,6 +23,7 @@ use rise_platform::wheel_gesture::{WHEEL_SETTLE_DELAY, WheelGestureTracker, Whee
 use rise_theme::alpha;
 use rise_ui::hold_context_menu_ui::bubble_scroll_passthrough::BubbleScrollPassthrough;
 use rise_ui::IconUi;
+use rise_ui::image_ui::render_image_atlas::RenderImageAtlas;
 use rise_ui::liquid_chrome::LiquidChromeModifiers;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::button_style::plain;
@@ -135,6 +137,8 @@ pub struct PostRowMediaPageView {
     palette: Option<PostRowPalette>,
     installed_image: Option<CleverImage>,
     surface: PostRowMediaPageViewSurface,
+    wants_image: bool,
+    deferred_image: bool,
     image_generation: u64,
     image_task: Option<Task<()>>,
     backdrop_generation: u64,
@@ -191,6 +195,8 @@ impl PostRowMediaPageView {
             palette: None,
             installed_image: None,
             surface: PostRowMediaPageViewSurface::Blank,
+            wants_image: true,
+            deferred_image: false,
             image_generation: 0,
             image_task: None,
             backdrop_generation: 0,
@@ -315,6 +321,16 @@ impl PostRowMediaPageView {
         self.refresh_video_chrome(cx);
     }
 
+    pub fn set_wants_image(&mut self, wants_image: bool, cx: &mut Context<Self>) {
+        if self.wants_image == wants_image {
+            return;
+        }
+        self.wants_image = wants_image;
+        if wants_image && self.deferred_image && self.image_task.is_none() && self.installed_image.is_none() {
+            self.begin_image(cx);
+        }
+    }
+
     pub fn set_visible_in_viewport(&mut self, is_visible: bool, cx: &mut Context<Self>) {
         if self.is_visible_in_viewport == is_visible {
             return;
@@ -374,6 +390,8 @@ impl PostRowMediaPageView {
         self.content = None;
         self.decoded_aspect = None;
         self.installed_image = None;
+        self.wants_image = true;
+        self.deferred_image = false;
         self.is_current = false;
         self.shows_video_sound_button = false;
         self.set_surface(PostRowMediaPageViewSurface::Blank, cx);
@@ -388,6 +406,7 @@ impl PostRowMediaPageView {
     fn begin_image(&mut self, cx: &mut Context<Self>) {
         self.installed_image = None;
         self.decoded_aspect = None;
+        self.deferred_image = false;
         let Some(content) = self.content.clone() else {
             self.set_surface(PostRowMediaPageViewSurface::Blank, cx);
             return;
@@ -412,6 +431,11 @@ impl PostRowMediaPageView {
                 self.install(image, &url, cx);
                 return;
             }
+        }
+        if !self.wants_image {
+            self.deferred_image = true;
+            self.set_surface(PostRowMediaPageViewSurface::Loading, cx);
+            return;
         }
         let surface = if Self::link_is_down(cx) {
             PostRowMediaPageViewSurface::Failed
@@ -630,8 +654,12 @@ impl PostRowMediaPageView {
 }
 
 impl Render for PostRowMediaPageView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (placeholder, shows_spinner, shows_failure) = self.surface_chrome();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (mut placeholder, shows_spinner, shows_failure) = self.surface_chrome();
+        let installed = self.installed_image.clone().filter(|image| RenderImageAtlas::is_ready(image, window, cx));
+        if installed.is_none() && self.installed_image.is_some() {
+            placeholder = placeholder.or(self.palette.as_ref().map(|palette| palette.background300));
+        }
         let fills = self.resolved_fills();
         let box_size = self.content.as_ref().map(|content| content.box_size);
         let frame_view = self.focus_frame_view.clone();
@@ -650,7 +678,9 @@ impl Render for PostRowMediaPageView {
             .when_some(placeholder, |page, color| page.child(div().absolute().inset_0().bg(color)));
 
         if !self.backdrop_is_hidden {
-            if let (Some(image), Some(box_size)) = (&self.backdrop_image, box_size) {
+            if let (Some(image), Some(box_size)) = (&self.backdrop_image, box_size)
+                && RenderImageAtlas::is_ready(image, window, cx)
+            {
                 let overscan = PostRowMediaMetrics::BLUR_OVERSCAN;
                 let width = f32::from(box_size.width);
                 let height = f32::from(box_size.height);
@@ -667,9 +697,9 @@ impl Render for PostRowMediaPageView {
             page = page.child(div().absolute().inset_0().bg(alpha(black(), PostRowMediaMetrics::BLUR_DIM)));
         }
 
-        if let Some(image) = &self.installed_image {
+        if let Some(image) = installed {
             page = page.child(
-                img(ImageSource::Render(image.clone()))
+                img(ImageSource::Render(image))
                     .absolute()
                     .inset_0()
                     .size_full()
@@ -1325,8 +1355,10 @@ impl PostRowMediaView {
                         draws_placeholder: true,
                     };
                     let palette = context.palette.clone();
+                    let wants_image = index.abs_diff(current_page) <= 1;
                     page.update(cx, |page, cx| {
                         page.index = index;
+                        page.set_wants_image(wants_image, cx);
                         page.configure(content, palette, cx);
                         page.set_visible_in_viewport(is_visible, cx);
                         page.set_current(index == current_page, shows_video_sound, cx);
@@ -1514,6 +1546,9 @@ impl PostRowMediaView {
         }
         if let Some(page) = self.pages.get(index).cloned() {
             page.update(cx, |page, cx| page.set_current(true, shows_video_sound, cx));
+        }
+        for (position, page) in self.pages.clone().into_iter().enumerate() {
+            page.update(cx, |page, cx| page.set_wants_image(position.abs_diff(index) <= 1, cx));
         }
         self.sync_tag_slide(cx);
         self.update_back_swipe_arbitration(cx);
@@ -2621,14 +2656,27 @@ impl Render for PostRowMediaView {
         let click_weak = weak_self.clone();
         let wheel_weak = weak_self.clone();
         let key_weak = weak_self.clone();
+        let wheel_capture = self.pager_in_use.then(|| {
+            canvas(
+                |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                move |_, hitbox: Hitbox, window, _| {
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) {
+                            return;
+                        }
+                        wheel_weak.update(cx, |this, cx| this.handle_scroll_wheel(event, window, cx)).ok();
+                    });
+                },
+            )
+            .absolute()
+            .inset_0()
+        });
         let box_view = box_view
+            .children(wheel_capture)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 down_weak.update(cx, |this, _| this.drag_did_move = false).ok();
             })
             .on_click(move |event: &ClickEvent, _, cx| Self::handle_box_click(&click_weak, event, cx))
-            .on_scroll_wheel(move |event: &ScrollWheelEvent, window, cx| {
-                wheel_weak.update(cx, |this, cx| this.handle_scroll_wheel(event, window, cx)).ok();
-            })
             .on_key_down(move |event: &KeyDownEvent, _, cx| Self::handle_key_down(&key_weak, event, cx));
 
         let box_view = if self.pager_in_use {

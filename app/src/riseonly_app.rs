@@ -10,6 +10,7 @@ use gpui_platform::application;
 use rise_canon::RiseLimits;
 use rise_core::foundation::foundation_calendar::TimeZone;
 use rise_core::rise_app_events::{RiseAppEvents, RiseNotificationName, UIApplication};
+use rise_diagnostics::rise_breadcrumbs::{RiseBreadcrumbs, RiseBreadcrumbsChannel};
 use rise_energy::rise_energy_saving::RiseEnergySavingStore;
 use rise_i18n::language_store::LanguageStore;
 use rise_platform::single_instance::{self, Instance};
@@ -73,6 +74,29 @@ struct RiseonlyAppScene(Entity<RiseonlyApp>);
 impl Global for RiseonlyAppScene {}
 
 impl RiseonlyApp {
+    fn report_renderer(cx: &mut App) {
+        let Some(window) = cx.windows().first().copied() else {
+            return;
+        };
+        let Ok(Some(specs)) = window.update(cx, |_, window, _| window.gpu_specs()) else {
+            return;
+        };
+        let line = format!(
+            "renderer {} driver {} {} software {}",
+            specs.device_name, specs.driver_name, specs.driver_info, specs.is_software_emulated
+        );
+        tracing::info!(target: "riseonly", "{line}");
+        RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Lifecycle, || line.clone());
+        if specs.is_software_emulated {
+            tracing::warn!(
+                target: "riseonly",
+                device = %specs.device_name,
+                "frames are drawn on the CPU: no hardware Vulkan or OpenGL driver opened the window, \
+                 install the GPU driver (Mesa vulkan-intel or vulkan-radeon, or the NVIDIA driver)"
+            );
+        }
+    }
+
     fn install_tracing(log_file: Option<RiseLogFile>) {
         let console = tracing_subscriber::fmt::layer().with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "riseonly=info".into()),
@@ -109,8 +133,7 @@ impl RiseonlyApp {
         if let Some(log_file) = log_file {
             Self::install_panic_logging(log_file);
         }
-        let local_override = std::path::Path::new("config/local.json");
-        let endpoints = Endpoints::from_process(environment, Some(local_override));
+        let endpoints = Endpoints::effective(environment);
         let data_directory = Self::data_directory_for(environment);
         let show_storybook = storybook::requested_by(rise_platform::process_info::arguments());
 
@@ -199,6 +222,7 @@ impl RiseonlyApp {
             crate::app::perf::rise_perf_log::RisePerfLog::install_from_launch(cx);
 
             let fonts = rise_ui::fonts::load_bundled_fonts(cx);
+            rise_ui::fonts::load_fallback_fonts(cx);
             if !fonts.is_complete() {
                 tracing::error!(
                     target: "riseonly",
@@ -245,6 +269,7 @@ impl RiseonlyApp {
                 let presentation = TrayController::launch_presentation();
                 activates = matches!(presentation, LaunchPresentation::Window);
                 WindowPresenter::open_shell_for_launch(presentation, cx);
+                Self::report_renderer(cx);
                 TrayController::install(cx, handover::raise_app);
 
                 let launch = split_launch_arguments(&arguments);

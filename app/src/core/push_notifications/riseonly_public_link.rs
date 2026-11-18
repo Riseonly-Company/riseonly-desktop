@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-use rise_canon::rise_key::{bot, events, ledger, map, music, stories, theme, user};
+use rise_canon::rise_key::{bot, deep_link, events, ledger, map, music, stories, theme, user};
 use rise_canon::rise_ledger::{PREMIUM_PERIODS, SPARKS_PACKS};
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_core::foundation::foundation_url::{
@@ -112,6 +112,7 @@ pub enum RiseonlyPublicLink {
     PremiumPromo { code: String },
     MapInvite { token: String },
     StickerPackInvite { token: String },
+    MyReport { report_id: String },
     PurchaseSparks { amount: i64, shortfall: Option<i64> },
     PurchaseGift { user_id: String, period: String },
     PurchasePremium { period: String },
@@ -210,6 +211,9 @@ impl RiseonlyPublicLink {
             }
             Self::StickerPackInvite { token } => {
                 PushDeepLink::StickerPackInvite { token: Self::normalized_join_token(token)? }
+            }
+            Self::MyReport { report_id } => {
+                PushDeepLink::MyReport { report_id: RiseonlyUniversalLink::canonical_resource_id(report_id)? }
             }
             Self::PurchaseSparks { .. } | Self::PurchaseGift { .. } | Self::PurchasePremium { .. } => {
                 return None;
@@ -431,6 +435,10 @@ impl RiseonlyPublicLink {
             Self::StickerPackInvite { token } => {
                 let token = Self::normalized_join_token(token)?;
                 Some((RouteKind::StickerPackInvite, HashMap::from([(bot::TOKEN, token)])))
+            }
+            Self::MyReport { report_id } => {
+                let report_id = RiseonlyUniversalLink::canonical_resource_id(report_id)?;
+                Some((RouteKind::MyReport, HashMap::from([(deep_link::REPORT_ID, report_id)])))
             }
             Self::PurchaseSparks { amount, shortfall } => {
                 let amount = Self::normalized_pack_amount(&amount.to_string())?;

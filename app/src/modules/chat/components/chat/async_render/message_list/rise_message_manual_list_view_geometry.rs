@@ -1349,6 +1349,7 @@ impl RiseMessageManualListView {
                                 &message.resolved_entities().topic_mentions,
                                 &message.chat_id,
                             ))
+                            .chain(MessageContent::text_link_spans(&message.resolved_entities().text_links))
                             .collect(),
                         ),
                     ));

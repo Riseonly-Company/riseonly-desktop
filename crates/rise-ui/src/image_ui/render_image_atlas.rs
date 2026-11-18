@@ -1,7 +1,9 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
-use gpui::{App, AsyncApp, ImageId, RenderImage};
+use gpui::{App, AsyncApp, AtlasKey, EntityId, ImageId, RenderImage, RenderImageParams, Window};
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
@@ -17,8 +19,67 @@ struct TrackedImage {
 
 static TRACKED: LazyLock<Mutex<Vec<TrackedImage>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
+thread_local! {
+    static PENDING_UPLOADS: RefCell<HashMap<ImageId, Vec<EntityId>>> = RefCell::new(HashMap::new());
+    static REFUSED_UPLOADS: RefCell<HashSet<ImageId>> = RefCell::new(HashSet::new());
+}
+
 impl RenderImageAtlas {
     const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
+    const PAINT_UPLOAD_BYTES: usize = 512 * 1024;
+
+    /// true when it paints now with no big gpu copy on the main thread, else a worker uploads it
+    pub fn is_ready(image: &Arc<RenderImage>, window: &mut Window, cx: &mut App) -> bool {
+        if image.frame_count() != 1
+            || image.as_bytes(0).is_none_or(|bytes| bytes.len() <= Self::PAINT_UPLOAD_BYTES)
+            || REFUSED_UPLOADS.with_borrow(|refused| refused.contains(&image.id))
+        {
+            return true;
+        }
+        let Some(uploader) = window.image_uploader() else {
+            return true;
+        };
+        let key: AtlasKey = RenderImageParams { image_id: image.id, frame_index: 0 }.into();
+        if uploader.is_resident(&key) {
+            return true;
+        }
+        let view = window.current_view();
+        let id = image.id;
+        let starts = PENDING_UPLOADS.with_borrow_mut(|pending| match pending.get_mut(&id) {
+            Some(views) => {
+                if !views.contains(&view) {
+                    views.push(view);
+                }
+                false
+            }
+            None => {
+                pending.insert(id, vec![view]);
+                true
+            }
+        });
+        if starts {
+            let image = image.clone();
+            let upload = cx.background_executor().spawn(async move {
+                if let Some(bytes) = image.as_bytes(0) {
+                    uploader.upload(&key, image.size(0), bytes);
+                }
+                uploader.is_resident(&key)
+            });
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                if !upload.await {
+                    REFUSED_UPLOADS.with_borrow_mut(|refused| refused.insert(id));
+                }
+                let views = PENDING_UPLOADS.with_borrow_mut(|pending| pending.remove(&id)).unwrap_or_default();
+                cx.update(|cx| {
+                    for view in views {
+                        cx.notify(view);
+                    }
+                });
+            })
+            .detach();
+        }
+        false
+    }
 
     /// registers the image for reclamation and hands it back, safe from any thread
     pub fn tracked(image: Arc<RenderImage>) -> Arc<RenderImage> {

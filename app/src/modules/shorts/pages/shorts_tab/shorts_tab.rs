@@ -26,7 +26,7 @@ use crate::core::rise_engine_bridge::rise_engine_app_runtime::RiseEngineAppRunti
 use crate::core::rise_engine_bridge::rise_transport_status::RiseTransportStatus;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
 use crate::core::widgets::navigations::bottom_chrome_insets::{BottomChromeInsets, BottomChromeOwner, BottomChromePolicy};
-use crate::core::widgets::wrappers::list_shell_ui::{ListShellFloatingTopInsetKey, ListShellUi};
+use crate::core::widgets::wrappers::list_shell_ui::{ListShellUi, list_shell_floating_top_inset};
 use crate::modules::analytics::stores::engagement::engagement_actions::engagement_types::EngagementSurface;
 use crate::modules::analytics::stores::engagement::engagement_interactions::engagement_interactions::EngagementInteractionsStore;
 use crate::modules::comment::stores::comment_interactions::comment_interactions::CommentInteractionsStore;
@@ -37,7 +37,7 @@ use crate::modules::post::stores::post_actions::post_types::GetPostFeedResponse;
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
 use crate::modules::post::stores::post_services::post_services::PostServicesStore;
 use crate::modules::post::pages::posts::post_detail::native_list::behaviour::post_list_refresh_control::PostListRefreshControl;
-use crate::modules::shorts::components::shorts_feed_cell::{ShortsFeedCell, ShortsReturnRewind};
+use crate::modules::shorts::components::shorts_feed_cell::{ShortsAutoAdvance, ShortsFeedCell, ShortsReturnRewind};
 use crate::modules::shorts::components::shorts_media_prefetch::ShortsMediaPrefetchController;
 use crate::modules::shorts::pages::shorts_tab::shorts_tab_aside_hooks::shorts_tab_aside_hooks;
 use crate::modules::shorts::pages::shorts_vertical_pager::{ShortsVerticalPager, ShortsVerticalPagerController};
@@ -347,11 +347,13 @@ struct ShortsTabFeedCellProps {
     cache_key: SharedString,
     relative_id: Option<String>,
     has_more: bool,
+    pager: Entity<ShortsVerticalPagerController>,
 }
 
 impl ShortsTabFeedCellProps {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.post, &other.post)
+        self.pager.entity_id() == other.pager.entity_id()
+            && Rc::ptr_eq(&self.post, &other.post)
             && self.is_active == other.is_active
             && self.bottom_inset == other.bottom_inset
             && self.progress_floor == other.progress_floor
@@ -384,9 +386,18 @@ impl Render for ShortsTabFeedCellView {
             return div().into_any_element();
         };
         let prefetch_id = ElementId::from(SharedString::from(format!("shorts-tab-prefetch-{}", props.post.id)));
+        let on_auto_advance = (props.index + 1 < props.item_count).then(|| {
+            let pager = props.pager.clone();
+            Rc::new(move |cx: &mut App| {
+                pager.update(cx, |pager, cx| {
+                    pager.step_page(1.0, cx);
+                });
+            }) as ShortsAutoAdvance
+        });
         ShortsFeedCell::new(props.post.clone(), props.is_active, props.bottom_inset)
             .progress_floor(Some(props.progress_floor))
             .rewind_token(props.rewind_token)
+            .on_auto_advance(on_auto_advance)
             .sai_pagination_prefetch(
                 prefetch_id,
                 SaiPaginationPrefetchOptions::new(
@@ -611,6 +622,7 @@ impl ShortsTab {
         let has_more = snapshot.feed_has_more;
         let progress_floor = snapshot.last_chrome_lift.unwrap_or(bottom_inset);
         let pager = snapshot.pager.clone();
+        let advance_pager = pager.clone();
         let page_height = f32::from(size.height).max(MINIMUM_PAGE_HEIGHT);
         pager.update(cx, |pager, _| pager.update_pages(&items, 0, page_height));
         let cache_key = SharedString::from(ShortsServicesStore::feed_cache_key());
@@ -635,6 +647,7 @@ impl ShortsTab {
                     cache_key: cache_key.clone(),
                     relative_id: relative_id.clone(),
                     has_more,
+                    pager: advance_pager.clone(),
                 };
                 let cell = cells.update(cx, |state, cx| state.feed_cell(&post.id, pass, cx));
                 cell.update(cx, |cell, cx| cell.set_props(props, cx));
@@ -793,7 +806,7 @@ struct ShortsPullRefreshIndicator;
 
 impl RenderOnce for ShortsPullRefreshIndicator {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let top_inset = env::<ListShellFloatingTopInsetKey>(cx);
+        let top_inset = list_shell_floating_top_inset(cx);
         pass_through()
             .absolute()
             .top_0()

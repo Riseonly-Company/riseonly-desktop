@@ -42,7 +42,7 @@ fn ask_camera_portal(done: AccessAnswer) {
     let unanswered = Arc::new(Mutex::new(Some(done)));
     let answer = Arc::clone(&unanswered);
     let spawned = std::thread::Builder::new().name("rise-camera-portal".to_owned()).spawn(move || {
-        let granted = zbus::block_on(camera_portal_answer());
+        let granted = crate::dbus_block_on::block_on(camera_portal_answer());
         let done = answer.lock().take();
         if let Some(done) = done {
             done(granted);

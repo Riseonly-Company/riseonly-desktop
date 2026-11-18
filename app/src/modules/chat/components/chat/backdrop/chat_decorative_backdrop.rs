@@ -19,7 +19,7 @@ use rise_energy::rise_energy_saving::{RiseEnergySavingFeature, RiseEnergySavingS
 use rise_theme::theme::theme_environment::theme_store;
 use rise_theme::{RiseThemeAppearance, alpha};
 use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyle, ScrollChromeShadowStyleAnchor, ScrollChromeShadowUi};
-use rise_ui::scroll_edge_blur_ui::ScrollEdgeBlurUi;
+use rise_ui::scroll_edge_blur_ui::{ScrollEdgeBlurFalloff, ScrollEdgeBlurUi};
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::content_mode::ContentMode;
 use rise_ui::swiftui::environment::reduce_motion;
@@ -448,7 +448,7 @@ impl RenderOnce for ChatEdgeShadows {
         let is_dark = theme_store(cx).read(cx).resolved_appearance() == RiseThemeAppearance::Dark;
         let color = if is_dark { black() } else { white() };
         let chrome_bottom = list_shell_safe_area_insets(cx).top.max(0.0).max(self.top_inset);
-        let top_blur_height = chrome_bottom + Self::TOP_BLUR_FADE;
+        let blur_bottom = chrome_bottom + Self::TOP_BLUR_FADE;
 
         pass_through()
             .relative()
@@ -459,9 +459,13 @@ impl RenderOnce for ChatEdgeShadows {
                     .top_0()
                     .left_0()
                     .right_0()
-                    .h(px(top_blur_height))
+                    .h(px(blur_bottom))
                     .max_h_full()
-                    .child(ScrollEdgeBlurUi::new()),
+                    .child(
+                        ScrollEdgeBlurUi::new()
+                            .solid_end(ScrollEdgeBlurFalloff::DEFAULT_SOLID_END)
+                            .fit_height(blur_bottom),
+                    ),
             )
             .child(
                 pass_through()

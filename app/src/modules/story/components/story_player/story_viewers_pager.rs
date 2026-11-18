@@ -32,6 +32,7 @@ use crate::core::ui::premium_badge::PremiumBadge;
 use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::core::ui::sai_pagination_prefetch::{SaiPaginationPrefetchModifiers, SaiPaginationPrefetchOptions};
 use crate::core::ui::user_logo_ui::UserLogoUi;
+use crate::modules::gifts::components::gift_worn_cosmetics::GiftWornCosmeticsModifiers;
 use crate::modules::post::components::post::post_music_plate_overlay::MusicPlateOverlay;
 use crate::modules::story::components::story_player::story_media_view::StoryMediaView;
 use crate::modules::story::components::story_thumbnail_ui::StoryThumbnailUi;
@@ -1440,7 +1441,8 @@ impl StoryViewersSheetPage {
                             .name(Some(SharedString::from(viewer.name.clone())))
                             .user_id(Some(SharedString::from(viewer.id.clone())))
                             .size(42.0)
-                            .show_story_ring(false),
+                            .open_story_on_press(false)
+                            .gift_worn_frame(row_id("frame"), Some(viewer.id.clone()), 42.0),
                     )
                     .child(
                         vstack(2.0)

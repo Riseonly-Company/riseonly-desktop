@@ -2,7 +2,8 @@ use ::windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use ::windows::Win32::UI::WindowsAndMessaging::{
     FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FLASHWINFO_FLAGS,
-    FlashWindowEx, GetCursorPos, HTCAPTION, PostMessageW, WM_NCLBUTTONDOWN,
+    FlashWindowEx, GetCursorPos, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTTOPLEFT, HTTOPRIGHT,
+    PostMessageW, WM_NCLBUTTONDOWN,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -28,21 +29,41 @@ impl CallWindowLayer for NativeCallWindow {
     }
 
     fn start_move(&self, window: &gpui::Window) -> Result<(), CallWindowUnavailable> {
-        let raw_hwnd = raw_hwnd_of(window)?;
-        let mut cursor = POINT::default();
-        unsafe { GetCursorPos(&mut cursor) }
-            .map_err(|error| CallWindowUnavailable::SystemRefused(error.to_string()))?;
-        let _ = unsafe { ReleaseCapture() };
-        unsafe {
-            PostMessageW(
-                Some(HWND(raw_hwnd as *mut core::ffi::c_void)),
-                WM_NCLBUTTONDOWN,
-                WPARAM(HTCAPTION as usize),
-                LPARAM(screen_point_lparam(cursor.x, cursor.y)),
-            )
-        }
-        .map_err(|error| CallWindowUnavailable::SystemRefused(error.to_string()))
+        non_client_press(window, HTCAPTION)
     }
+
+    fn start_resize(
+        &self,
+        window: &gpui::Window,
+        corner: FloatingResizeCorner,
+    ) -> Result<CallWindowResize, CallWindowUnavailable> {
+        let hit = match corner {
+            FloatingResizeCorner::TopLeft => HTTOPLEFT,
+            FloatingResizeCorner::TopRight => HTTOPRIGHT,
+            FloatingResizeCorner::BottomLeft => HTBOTTOMLEFT,
+            FloatingResizeCorner::BottomRight => HTBOTTOMRIGHT,
+        };
+        non_client_press(window, hit)?;
+        Ok(CallWindowResize::System)
+    }
+}
+
+/// hands the press to the system as one on a frame part, it runs the move or resize loop itself
+fn non_client_press(window: &gpui::Window, hit: u32) -> Result<(), CallWindowUnavailable> {
+    let raw_hwnd = raw_hwnd_of(window)?;
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) }
+        .map_err(|error| CallWindowUnavailable::SystemRefused(error.to_string()))?;
+    let _ = unsafe { ReleaseCapture() };
+    unsafe {
+        PostMessageW(
+            Some(HWND(raw_hwnd as *mut core::ffi::c_void)),
+            WM_NCLBUTTONDOWN,
+            WPARAM(hit as usize),
+            LPARAM(screen_point_lparam(cursor.x, cursor.y)),
+        )
+    }
+    .map_err(|error| CallWindowUnavailable::SystemRefused(error.to_string()))
 }
 
 fn raw_hwnd_of(window: &gpui::Window) -> Result<isize, CallWindowUnavailable> {

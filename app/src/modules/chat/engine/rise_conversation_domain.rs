@@ -5595,6 +5595,8 @@ impl RiseConversationDomain {
         if !self.is_unread_marks_live() || candidates.is_empty() {
             return;
         }
+        let seen: Vec<String> = candidates.iter().map(|candidate| candidate.message_id.clone()).collect();
+        self.unread_marks.note_seen(&seen).await;
         let observed =
             self.state.with(|state| state.unread_mark_observation_counts.get(scope).copied().unwrap_or(0) > 0);
         if !self.unread_marks.is_loaded(scope).await {
@@ -5729,9 +5731,7 @@ impl RiseConversationDomain {
         );
         let mut visible_scope: Option<RiseMessageScope> = None;
         let mut visible_candidates: Vec<RiseUnreadMarkCandidate> = Vec::new();
-        if (change.kind == RiseUnreadMarkKind::Reaction || change.kind == RiseUnreadMarkKind::Reply)
-            && change.change == REACTION_ADDED_CHANGE
-        {
+        if change.change == REACTION_ADDED_CHANGE {
             let topic_scope = RiseMessageScope::new(
                 change.chat_id.clone(),
                 Some(change.topic_id.clone().unwrap_or_default()),

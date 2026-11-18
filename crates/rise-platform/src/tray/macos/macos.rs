@@ -144,6 +144,7 @@ fn build_menu(mtm: MainThreadMarker, target: &TrayEventTarget, items: &[TrayMenu
         };
         unsafe { item.setTarget(Some(target_object)) };
         item.setTag(entry.id as isize);
+        item.setEnabled(entry.enabled);
         if let Some(checked) = entry.checked {
             item.setState(if checked {
                 NSControlStateValueOn

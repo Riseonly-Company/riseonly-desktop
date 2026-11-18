@@ -1,0 +1,214 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use crate::{App, EntityId, ListState, Pixels, Point, ScrollDelta, Window, point, px};
+
+/// Pixels one wheel line scrolls where the wheel glides: 100 pixels for a notch of three lines.
+pub const WHEEL_LINE_HEIGHT: Pixels = px(100.0 / 3.0);
+
+const GLIDE_TIME_CONSTANT_SECONDS: f32 = 0.045;
+const GLIDE_REST: Pixels = px(0.5);
+const FIRST_STEP: Duration = Duration::from_millis(16);
+const LONGEST_STEP: Duration = Duration::from_millis(50);
+const STALE_AFTER: Duration = Duration::from_millis(250);
+
+/// Whether a wheel delta glides over the next frames instead of jumping at once.
+/// Line deltas of a mouse wheel glide on Windows and Linux; macOS and touchpad pixels move as they come.
+pub fn wheel_glides(delta: &ScrollDelta) -> bool {
+    cfg!(not(target_os = "macos")) && matches!(delta, ScrollDelta::Lines(_))
+}
+
+/// Distance a wheel still has to scroll, handed out frame by frame with an ease out.
+#[derive(Clone, Debug, Default)]
+pub struct WheelGlide {
+    remaining: Point<Pixels>,
+    last_step: Option<Instant>,
+}
+
+fn joined(remaining: Pixels, delta: Pixels) -> Pixels {
+    if delta == Pixels::ZERO {
+        remaining
+    } else if remaining != Pixels::ZERO && remaining.signum() != delta.signum() {
+        delta
+    } else {
+        remaining + delta
+    }
+}
+
+impl WheelGlide {
+    /// Adds a wheel delta; a turn of direction drops what was left on that axis.
+    pub fn add(&mut self, delta: Point<Pixels>) {
+        self.remaining = point(joined(self.remaining.x, delta.x), joined(self.remaining.y, delta.y));
+    }
+
+    /// Whether nothing is left to scroll.
+    pub fn is_idle(&self) -> bool {
+        self.remaining == Point::default()
+    }
+
+    /// Drops what was left.
+    pub fn stop(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Takes everything left at once and ends the glide.
+    pub fn take_all(&mut self) -> Point<Pixels> {
+        let rest = self.remaining;
+        *self = Self::default();
+        rest
+    }
+
+    /// The part of the distance this frame scrolls, the rest goes to the next frames.
+    pub fn step(&mut self, now: Instant) -> Point<Pixels> {
+        let elapsed = self
+            .last_step
+            .map_or(FIRST_STEP, |last| now.saturating_duration_since(last))
+            .min(LONGEST_STEP);
+        let share = 1.0 - (-elapsed.as_secs_f32() / GLIDE_TIME_CONSTANT_SECONDS).exp();
+        let mut step = point(self.remaining.x * share, self.remaining.y * share);
+        if (self.remaining.x - step.x).abs() < GLIDE_REST {
+            step.x = self.remaining.x;
+        }
+        if (self.remaining.y - step.y).abs() < GLIDE_REST {
+            step.y = self.remaining.y;
+        }
+        self.remaining = point(self.remaining.x - step.x, self.remaining.y - step.y);
+        self.last_step = if self.is_idle() { None } else { Some(now) };
+        step
+    }
+}
+
+thread_local! {
+    static GLIDES: RefCell<HashMap<usize, WheelGlide>> = RefCell::new(HashMap::default());
+}
+
+/// Adds a delta to the glide of key; true when no glide of key was running yet.
+/// A glide whose frames stopped coming (its window closed) is dropped and started again.
+fn add_to_glide(key: usize, delta: Point<Pixels>) -> bool {
+    GLIDES.with_borrow_mut(|glides| {
+        let now = Instant::now();
+        let stalled = glides.get(&key).is_some_and(|glide| {
+            glide
+                .last_step
+                .is_none_or(|last| now.saturating_duration_since(last) > STALE_AFTER)
+        });
+        if stalled {
+            glides.remove(&key);
+        }
+        let starts = !glides.contains_key(&key);
+        glides.entry(key).or_default().add(delta);
+        starts
+    })
+}
+
+/// The step of key for this frame, None once the glide is over or was stopped.
+fn step_glide(key: usize) -> Option<Point<Pixels>> {
+    GLIDES.with_borrow_mut(|glides| {
+        let glide = glides.get_mut(&key)?;
+        let step = glide.step(Instant::now());
+        if glide.is_idle() {
+            glides.remove(&key);
+        }
+        Some(step)
+    })
+}
+
+fn stop_glide(key: usize) {
+    GLIDES.with_borrow_mut(|glides| glides.remove(&key));
+}
+
+fn is_gliding(key: usize) -> bool {
+    GLIDES.with_borrow(|glides| glides.contains_key(&key))
+}
+
+/// Glides the scroll offset of a scrollable div by delta.
+pub(crate) fn glide_scroll_offset(
+    offset: Rc<RefCell<Point<Pixels>>>,
+    delta: Point<Pixels>,
+    view: EntityId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let key = Rc::as_ptr(&offset) as usize;
+    if add_to_glide(key, delta) {
+        offset_glide_frame(key, offset, None, view, window, cx);
+    }
+}
+
+fn offset_glide_frame(
+    key: usize,
+    offset: Rc<RefCell<Point<Pixels>>>,
+    expected: Option<Point<Pixels>>,
+    view: EntityId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if expected.is_some_and(|expected| *offset.borrow() != expected) {
+        stop_glide(key);
+        return;
+    }
+    let Some(step) = step_glide(key) else {
+        return;
+    };
+    let after = {
+        let mut current = offset.borrow_mut();
+        current.x += step.x;
+        current.y += step.y;
+        *current
+    };
+    cx.notify(view);
+    if is_gliding(key) {
+        window.on_next_frame(move |window, cx| {
+            offset_glide_frame(key, offset, Some(after), view, window, cx)
+        });
+    }
+}
+
+/// Glides a list by delta, a positive y moves toward the start as a wheel pixel delta does.
+pub(crate) fn glide_list(
+    state: ListState,
+    height: Pixels,
+    delta: Point<Pixels>,
+    view: EntityId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let key = state.glide_key();
+    if add_to_glide(key, delta) {
+        list_glide_frame(key, state, height, None, view, window, cx);
+    }
+}
+
+fn list_glide_frame(
+    key: usize,
+    state: ListState,
+    height: Pixels,
+    expected: Option<(usize, Pixels)>,
+    view: EntityId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let before = state.logical_scroll_top();
+    let before = (before.item_ix, before.offset_in_item);
+    if expected.is_some_and(|expected| expected != before) {
+        stop_glide(key);
+        return;
+    }
+    let Some(step) = step_glide(key) else {
+        return;
+    };
+    state.scroll_by_wheel(height, step, view, window, cx);
+    let after = state.logical_scroll_top();
+    let after = (after.item_ix, after.offset_in_item);
+    if after == before && step.y != Pixels::ZERO {
+        stop_glide(key);
+        return;
+    }
+    if is_gliding(key) {
+        window.on_next_frame(move |window, cx| {
+            list_glide_frame(key, state, height, Some(after), view, window, cx)
+        });
+    }
+}

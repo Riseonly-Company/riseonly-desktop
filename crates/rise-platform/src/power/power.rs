@@ -57,12 +57,22 @@ impl BatteryState {
 pub struct BatteryReading {
     pub percent: Option<u8>,
     pub state: BatteryState,
+    pub present: Option<bool>,
 }
 
 impl BatteryReading {
+    /// the system said the machine has no battery
     pub const NO_BATTERY: Self = Self {
         percent: None,
         state: BatteryState::Unknown,
+        present: Some(false),
+    };
+
+    /// no answer about a battery at all
+    pub const UNKNOWN: Self = Self {
+        percent: None,
+        state: BatteryState::Unknown,
+        present: None,
     };
 }
 
@@ -141,6 +151,7 @@ pub fn battery_reading_from_upower(is_present: bool, percentage: f64, state: u32
     BatteryReading {
         percent: battery_percent_from_percentage(percentage),
         state: battery_state_from_upower(state),
+        present: Some(true),
     }
 }
 
@@ -197,7 +208,8 @@ pub fn battery_reading_from_system_power_status(
         let is_charged = !charging && percent == Some(100);
         BatteryState::from_power_source(ac_line_status == AC_LINE_ONLINE, is_charged)
     };
-    BatteryReading { percent, state }
+    let present = (battery_flag != BATTERY_FLAG_UNKNOWN).then_some(true);
+    BatteryReading { percent, state, present }
 }
 
 /// which reading an os layer couldnt give
@@ -298,7 +310,7 @@ impl PowerSnapshot {
         });
         let battery = battery.unwrap_or_else(|reason| {
             unavailable.push(reason);
-            BatteryReading::NO_BATTERY
+            BatteryReading::UNKNOWN
         });
         Self {
             reading: PowerReading {

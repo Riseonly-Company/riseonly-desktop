@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, App, Context, Empty, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, Rgba,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, hsla, px,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use rise_core::foundation::foundation_character::int_from_string;
 use rise_core::foundation::foundation_date::RiseClock;
-use rise_i18n::tr;
-use rise_platform::haptics::{NotificationKind, notification};
+use rise_i18n::{FormatArg, tr, tr_args};
+use rise_platform::haptics::{NotificationKind, notification, selection_changed};
 use rise_platform::pasteboard::UIPasteboard;
 use rise_theme::ui_color_system::UIColor;
 use rise_theme::{AppTheme, ThemeStore, color};
@@ -22,12 +22,14 @@ use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::environment::{env, reduce_motion};
 use rise_ui::swiftui::measure::measure;
 use rise_ui::swiftui::shapes::SwiftUiShapes;
+use rise_ui::switch_ui::SwitchUi;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::canon_format::RiseFormat;
 use crate::core::lib::canon_identity::RiseIdentity;
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_ui::BottomSheetUi;
+use crate::core::ui::bottom_sheet_ui::sheet_floating_header::SheetFloatingHeader;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::core::widgets::sheets::report_sheet::ReportSheetStore;
 use crate::core::widgets::sheets::share_sheet::{SharePayload, ShareSheetStore};
@@ -40,6 +42,7 @@ use crate::modules::post::stores::post_interactions::post_interactions::{
     PostInteractionsStore, PostInteractionsStoreShareReceiptChannel,
 };
 use crate::modules::post::stores::post_services::post_services::PostServicesStore;
+use crate::modules::shorts::components::shorts_autoscroll::{ShortsAutoscroll, ShortsAutoscrollPreferences};
 use crate::modules::shorts::stores::shorts::shorts_interactions::shorts_interactions::ShortsInteractionsStore;
 use crate::modules::shorts::stores::shorts::shorts_services::shorts_services::ShortsServicesStore;
 
@@ -140,7 +143,7 @@ impl ShortsMoreSheetStore {
 pub struct ShortsMoreSheetHost {
     store: Entity<ShortsMoreSheetStore>,
     sheet_fraction: f32,
-    _observations: [Subscription; 3],
+    _observations: [Subscription; 4],
 }
 
 impl ShortsMoreSheetHost {
@@ -151,10 +154,12 @@ impl ShortsMoreSheetHost {
         let store = ShortsMoreSheetStore::shared(cx);
         let shorts_service = ShortsServicesStore::shared(cx);
         let post_service = PostServicesStore::shared(cx);
+        let autoscroll = ShortsAutoscrollPreferences::shared(cx);
         let observations = [
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.observe(&shorts_service, |host, _, cx| host.notify_if_presented(cx)),
             cx.observe(&post_service, |host, _, cx| host.notify_if_presented(cx)),
+            cx.observe(&autoscroll, |host, _, cx| host.notify_if_presented(cx)),
         ];
         Self {
             store,
@@ -247,6 +252,10 @@ pub struct ShortsMoreSheetContent {
 impl ShortsMoreSheetContent {
     const BOTTOM_ALLOWANCE: f32 = 28.0;
     const COLLABORATOR_ICON_BACKGROUND: &'static str = "#7E57F7";
+    const DESTRUCTIVE_ICON_BACKGROUND: &'static str = "#FF3B30";
+    const EDIT_ICON_BACKGROUND: &'static str = "#FF9500";
+    const NOT_INTERESTED_ICON_BACKGROUND: &'static str = "#5856D6";
+    const AUTOSCROLL_ICON_BACKGROUND: &'static str = "#00A9BB";
 
     pub fn new(
         post: GetPostFeedResponse,
@@ -302,7 +311,11 @@ impl ShortsMoreSheetContent {
                 let performer = self.performer();
                 let destructive = item.destructive;
                 let action = item.action;
-                let icon_background = (!destructive).then(|| color(Self::COLLABORATOR_ICON_BACKGROUND));
+                let icon_background = Some(color(if destructive {
+                    Self::DESTRUCTIVE_ICON_BACKGROUND
+                } else {
+                    Self::COLLABORATOR_ICON_BACKGROUND
+                }));
                 Self::row(item.id, item.system_image, icon_background, item.title, destructive, move |window, cx| {
                     let action = action.clone();
                     performer.perform(
@@ -314,6 +327,34 @@ impl ShortsMoreSheetContent {
                 })
             })
             .collect()
+    }
+
+    fn autoscroll_item(&self, cx: &mut App) -> GroupedBtn {
+        let is_on = ShortsAutoscrollPreferences::shared(cx).read(cx).is_enabled();
+        let switch_performer = self.performer();
+        let row_performer = self.performer();
+        let value = Binding::new(
+            |cx: &App| ShortsAutoscrollPreferences::global_is_enabled(cx),
+            move |value: bool, _: &mut Window, cx: &mut App| {
+                if switch_performer.accepts_actions(cx) {
+                    ShortsInteractionsStore::shared(cx).update(cx, |store, cx| store.set_autoscroll(value, cx));
+                }
+            },
+        );
+        GroupedBtn::new("autoscroll", tr("shorts_autoscroll_title"))
+            .icon("arrow.down.circle")
+            .icon_background(Some(color(Self::AUTOSCROLL_ICON_BACKGROUND)))
+            .subtitle(tr_args("shorts_autoscroll_hint", &[FormatArg::Int(ShortsAutoscroll::photo_seconds())]))
+            .subtitle_line_limit(2)
+            .show_chevron(false)
+            .trailing_slot(SwitchUi::new("shorts_more_autoscroll_switch", value))
+            .callback(move |_, cx| {
+                if !row_performer.accepts_actions(cx) {
+                    return;
+                }
+                let _ = selection_changed();
+                ShortsInteractionsStore::shared(cx).update(cx, |store, cx| store.set_autoscroll(!is_on, cx));
+            })
     }
 
     fn counters_strip(&self, viewer: Option<&str>, cx: &mut App) -> AnyElement {
@@ -545,7 +586,7 @@ impl ShortsMoreSheetContent {
                     );
                 }
             }),
-            Self::row("edit", "pencil", Some(Self::neutral_icon_background()), tr("ctx_edit"), false, {
+            Self::row("edit", "pencil", Some(color(Self::EDIT_ICON_BACKGROUND)), tr("ctx_edit"), false, {
                 let performer = self.performer();
                 let nav_store = self.nav_store.clone();
                 move |window, cx| {
@@ -563,7 +604,7 @@ impl ShortsMoreSheetContent {
                     );
                 }
             }),
-            Self::row("delete", "trash", None, tr("ctx_delete"), true, {
+            Self::row("delete", "trash", Some(color(Self::DESTRUCTIVE_ICON_BACKGROUND)), tr("ctx_delete"), true, {
                 let performer = self.performer();
                 move |window, cx| {
                     performer.perform_with_live_post(
@@ -585,7 +626,7 @@ impl ShortsMoreSheetContent {
             Self::row(
                 "not_interested",
                 "hand.thumbsdown.fill",
-                Some(Self::neutral_icon_background()),
+                Some(color(Self::NOT_INTERESTED_ICON_BACKGROUND)),
                 tr("shorts_more_not_interested"),
                 false,
                 {
@@ -603,28 +644,31 @@ impl ShortsMoreSheetContent {
                     }
                 },
             ),
-            Self::row("report", "exclamationmark.bubble.fill", None, tr("shorts_more_report"), true, {
-                let performer = self.performer();
-                move |window, cx| {
-                    performer.perform_with_live_post(
-                        Some(NotificationKind::Warning),
-                        |post, _, cx| {
-                            let Some(post_id) = int_from_string(&post.rise_view_target_post_id()) else {
-                                return;
-                            };
-                            ReportSheetStore::shared(cx)
-                                .update(cx, |sheet, cx| sheet.present(ReportTarget::Post(post_id), None, None, cx));
-                        },
-                        window,
-                        cx,
-                    );
-                }
-            }),
+            Self::row(
+                "report",
+                "exclamationmark.bubble.fill",
+                Some(color(Self::DESTRUCTIVE_ICON_BACKGROUND)),
+                tr("shorts_more_report"),
+                true,
+                {
+                    let performer = self.performer();
+                    move |window, cx| {
+                        performer.perform_with_live_post(
+                            Some(NotificationKind::Warning),
+                            |post, _, cx| {
+                                let Some(post_id) = int_from_string(&post.rise_view_target_post_id()) else {
+                                    return;
+                                };
+                                ReportSheetStore::shared(cx)
+                                    .update(cx, |sheet, cx| sheet.present(ReportTarget::Post(post_id), None, None, cx));
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                },
+            ),
         ]
-    }
-
-    fn neutral_icon_background() -> Hsla {
-        hsla(0.0, 0.0, 0.42, 1.0)
     }
 
     fn system_orange(theme: &AppTheme) -> Hsla {
@@ -652,7 +696,9 @@ impl RenderOnce for ShortsMoreSheetContent {
         };
         let collaborators = self.collaborator_items(acts_as_author, cx);
         let counters = self.counters_strip(viewer.as_deref(), cx);
+        let autoscroll = self.autoscroll_item(cx);
         let on_measured_height = self.on_measured_height.clone();
+        let header_dismiss = self.dismiss.clone();
 
         let mut column = div()
             .relative()
@@ -662,7 +708,12 @@ impl RenderOnce for ShortsMoreSheetContent {
             .flex()
             .flex_col()
             .gap(px(12.0))
+            .child(
+                SheetFloatingHeader::new("shorts_more_header", tr("more"), move |window, cx| header_dismiss(window, cx))
+                    .shows_chrome(false),
+            )
             .child(counters)
+            .child(GroupedBtns::new("shorts_more_autoscroll", vec![autoscroll]))
             .child(GroupedBtns::new("shorts_more_primary", self.primary_items(cx)))
             .child(GroupedBtns::new("shorts_more_role", role_items));
         if !collaborators.is_empty() {

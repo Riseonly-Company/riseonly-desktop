@@ -443,44 +443,93 @@ impl RenderOnce for ProfilePostGridBody {
     }
 }
 
+/// private shelves of the owner, saved and liked posts on one grid
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ProfilePostShelf {
+    #[default]
+    Favorites,
+    Liked,
+}
+
+impl ProfilePostShelf {
+    pub fn kind(self) -> RisePostProfileKind {
+        match self {
+            Self::Favorites => RisePostProfileKind::Favorites,
+            Self::Liked => RisePostProfileKind::Liked,
+        }
+    }
+
+    pub fn empty_icon(self) -> &'static str {
+        match self {
+            Self::Favorites => "bookmark",
+            Self::Liked => "heart",
+        }
+    }
+
+    fn remove_action(self) -> HoldContextMenuAction {
+        match self {
+            Self::Favorites => HoldContextMenuAction::new("favorite_remove", tr("favourite_remove"))
+                .system_image("bookmark.slash")
+                .destructive(true),
+            Self::Liked => HoldContextMenuAction::new("like_remove", tr("ctx_unlike"))
+                .system_image("heart.slash")
+                .destructive(true),
+        }
+    }
+}
+
 #[derive(IntoElement)]
 pub struct GridFavorites {
     id: ElementId,
     pub profile_tag: String,
     pub profile_user_id: String,
+    pub shelf: ProfilePostShelf,
 }
 
 impl GridFavorites {
     pub fn new(id: impl Into<ElementId>, profile_tag: impl Into<String>, profile_user_id: impl Into<String>) -> Self {
-        Self { id: id.into(), profile_tag: profile_tag.into(), profile_user_id: profile_user_id.into() }
+        Self {
+            id: id.into(),
+            profile_tag: profile_tag.into(),
+            profile_user_id: profile_user_id.into(),
+            shelf: ProfilePostShelf::Favorites,
+        }
     }
 
-    fn favorite_actions() -> Vec<HoldContextMenuAction> {
+    pub fn shelf(mut self, shelf: ProfilePostShelf) -> Self {
+        self.shelf = shelf;
+        self
+    }
+
+    fn shelf_actions(shelf: ProfilePostShelf) -> Vec<HoldContextMenuAction> {
         vec![
             HoldContextMenuAction::new("open", tr("ctx_open")).system_image("arrow.up.right.square"),
             HoldContextMenuAction::new("copy", tr("ctx_copy")).system_image("doc.on.doc"),
             HoldContextMenuAction::new("share", tr("ctx_share")).system_image("square.and.arrow.up"),
-            HoldContextMenuAction::new("favorite_remove", tr("favourite_remove"))
-                .system_image("bookmark.slash")
-                .destructive(true),
+            shelf.remove_action(),
         ]
     }
 }
 
 impl RenderOnce for GridFavorites {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let shelf = self.shelf;
         ProfilePostGrid {
             id: self.id,
             profile_tag: self.profile_tag,
             profile_user_id: self.profile_user_id,
-            kind: RisePostProfileKind::Favorites,
-            empty_icon: "bookmark".to_owned(),
+            kind: shelf.kind(),
+            empty_icon: shelf.empty_icon().to_owned(),
             empty_text: tr("chat_empty_favourites_title"),
-            actions: Rc::new(|_: &GetPostFeedResponse| Self::favorite_actions()),
-            on_extra_action: Rc::new(|id: &str, post: &GetPostFeedResponse, cx: &mut App| {
-                if id == "favorite_remove" && post.is_favorited {
+            actions: Rc::new(move |_: &GetPostFeedResponse| Self::shelf_actions(shelf)),
+            on_extra_action: Rc::new(|id: &str, post: &GetPostFeedResponse, cx: &mut App| match id {
+                "favorite_remove" if post.is_favorited => {
                     PostInteractionsStore::shared(cx).update(cx, |store, cx| store.toggle_favorite(post, cx));
                 }
+                "like_remove" if post.is_liked => {
+                    PostInteractionsStore::shared(cx).update(cx, |store, cx| store.toggle_like(post, cx));
+                }
+                _ => {}
             }),
             cell_overlay: None,
         }

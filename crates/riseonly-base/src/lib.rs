@@ -47,10 +47,18 @@ pub mod core {
         pub mod rise_app_events;
         pub mod rise_app_lifecycle;
         pub mod rise_app_quit_drain;
+        pub mod rise_app_quit_drain_hooks;
         pub mod rise_energy_saving_activation;
+        pub mod tray_call_hooks;
         pub mod tray_controller;
         #[cfg(test)]
         mod tray_controller_tests;
+        pub mod window_scale;
+        #[cfg(test)]
+        mod window_scale_tests;
+        pub mod window_zoom_preferences;
+        #[cfg(test)]
+        mod window_zoom_preferences_tests;
     }
     pub mod diagnostics {
         pub mod rise_bug_report_envelope;
@@ -593,6 +601,8 @@ pub fn feature_hook_slots() -> Vec<(&'static str, bool)> {
     let mut slots: Vec<(&'static str, bool)> = Vec::new();
     slots.push(state(&crate::app::dev_drive::dev_drive_hooks::DEV_DRIVE_HOOKS));
     slots.push(state(&crate::app::shell::handover_hooks::HANDOVER_HOOKS));
+    slots.push(state(&crate::core::desktop_platform::rise_app_quit_drain_hooks::RISE_APP_QUIT_DRAIN_HOOKS));
+    slots.push(state(&crate::core::desktop_platform::tray_call_hooks::TRAY_CALL_HOOKS));
     slots.push(state(&crate::core::lib::sai::sai_auth_hooks::SAI_AUTH_HOOKS));
     slots.push(state(&crate::core::lib::sai::sai_conversation_hooks::SAI_CONVERSATION_HOOKS));
     slots.push(state(&crate::core::lib::sai::sai_guide_hooks::SAI_GUIDE_HOOKS));

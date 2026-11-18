@@ -1065,8 +1065,10 @@ impl ChatScreen {
             if voice_player.is_active_in_chat() { voice_player.active_chat_id().to_owned() } else { String::new() }
         };
         let shows_message_player = !uses_preview_layout && !message_player_chat_id.is_empty();
-        let shows_music_player =
-            !uses_preview_layout && !shows_message_player && ChatMusicHooks::current_track(cx).is_some();
+        let shows_music_player = !uses_preview_layout
+            && !shows_message_player
+            && ChatMusicHooks::current_track(cx).is_some()
+            && !ChatAudioNowPlayingBar::is_hidden(cx);
         let shows_any_player = shows_message_player || shows_music_player;
         let group_voice_state = RiseChatVoicePresentation::shared(cx).read(cx).group_state(&chat.id);
         let shows_group_voice = !uses_preview_layout
@@ -2279,10 +2281,12 @@ impl ChatScreen {
         }
     }
 
-    /// closes the search, the picker panel or the reply bar in that order
+    /// closes the selection, the search, the picker panel or the reply bar in that order
     /// returns whether one of them was up
     pub(super) fn handle_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.state.is_message_search_active {
+        if self.state.is_message_selection_active {
+            self.cancel_message_selection(window, cx);
+        } else if self.state.is_message_search_active {
             self.deactivate_message_search(window, cx);
         } else if !self.pasted_media.is_empty() {
             self.close_pasted_media(cx);

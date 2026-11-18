@@ -48,6 +48,7 @@ struct DirectWriteComponents {
     text_renderer: TextRendererWrapper,
     system_ui_font_name: SharedString,
     system_subpixel_rendering: bool,
+    ui_thread: std::thread::ThreadId,
 }
 
 impl Drop for DirectWriteComponents {
@@ -188,6 +189,7 @@ impl DirectWriteTextSystem {
             text_renderer,
             system_ui_font_name,
             system_subpixel_rendering,
+            ui_thread: std::thread::current().id(),
         };
 
         let system_font_collection = unsafe {
@@ -791,6 +793,9 @@ impl DirectWriteState {
     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
         if glyph_bounds.size.width.0 == 0 || glyph_bounds.size.height.0 == 0 {
             anyhow::bail!("glyph bounds are empty");
+        }
+        if params.is_emoji && std::thread::current().id() != components.ui_thread {
+            anyhow::bail!("color glyphs rasterize on the ui thread only");
         }
 
         let bitmap_data = if params.is_emoji {

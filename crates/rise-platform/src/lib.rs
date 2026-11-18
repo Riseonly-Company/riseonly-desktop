@@ -17,6 +17,8 @@ pub mod contacts;
 pub mod context_click;
 pub mod crash_diagnostics;
 pub mod credential_persistence;
+#[cfg(target_os = "linux")]
+pub(crate) mod dbus_block_on;
 pub mod deep_link;
 pub mod device_hour_cycle;
 #[cfg(feature = "gpui")]
@@ -34,6 +36,7 @@ pub mod file_dialog;
 pub mod file_manager;
 #[cfg(test)]
 mod file_manager_tests;
+pub mod font_fallback;
 #[cfg(feature = "gpui")]
 pub mod global_hotkey;
 #[cfg(feature = "gpui")]

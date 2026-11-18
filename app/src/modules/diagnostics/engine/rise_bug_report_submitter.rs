@@ -39,6 +39,7 @@ pub struct BugReportDraftPayload {
     pub message: String,
     pub pages: Vec<String>,
     pub component: Option<String>,
+    pub fix_platforms: Vec<String>,
     pub screenshots: Vec<BugReportAttachment>,
     pub video: Option<BugReportAttachment>,
 }
@@ -91,6 +92,7 @@ impl UpdateDiagnosticReportDraft for rise_request::report::UpdateDiagnosticRepor
             report_id,
             component: draft.component.clone(),
             feedback_kind: draft.feedback_kind.clone(),
+            fix_platforms: Some(draft.fix_platforms.clone()),
             pages: Some(draft.pages.iter().cloned().map(RiseRequestJSON::String).collect()),
             screenshot_file_ids: Some(
                 screenshots.iter().map(|uploaded| RiseRequestJSON::String(uploaded.file_id.clone())).collect(),
@@ -183,6 +185,7 @@ impl RiseBugReportSubmitter {
                     video_file_id: uploaded_video.as_ref().map(|item| item.file_id.clone()),
                     video_duration_ms: uploaded_video.as_ref().and_then(|item| item.duration_ms),
                     feedback_kind: draft.feedback_kind.clone(),
+                    fix_platforms: draft.fix_platforms.clone(),
                 }),
             );
             RiseDiagnosticsRPC::new(context.engine).submit_diagnostic_report(&request).await

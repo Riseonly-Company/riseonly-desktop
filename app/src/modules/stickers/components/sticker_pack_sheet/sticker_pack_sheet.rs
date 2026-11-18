@@ -216,6 +216,7 @@ pub struct StickerPackSheet {
     presents_in_side_panel: bool,
     width: f32,
     height: f32,
+    footer_height: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -265,6 +266,7 @@ impl StickerPackSheet {
             presents_in_side_panel: false,
             width: 0.0,
             height: 0.0,
+            footer_height: 0.0,
             _subscriptions: subscriptions,
         }
     }
@@ -354,6 +356,11 @@ impl StickerPackSheet {
 
     fn content(this: &Entity<Self>, cx: &mut App) -> AnyElement {
         let theme = rise_ui::theme(cx).clone();
+        let footer_reserve = {
+            let sheet = this.read(cx);
+            let overlaid = !sheet.presents_in_side_panel && Self::shows_footer(sheet.store.read(cx), cx);
+            if overlaid { sheet.footer_height } else { 0.0 }
+        };
         let (pack, stickers, is_unavailable, is_loading, kind, is_active, width, height, grid_scroll, in_side_panel) = {
             let sheet = this.read(cx);
             let store = sheet.store.read(cx);
@@ -384,7 +391,16 @@ impl StickerPackSheet {
         } else if stickers.is_empty() && !pack.as_ref().is_some_and(StickerPack::can_add_stickers) {
             Self::empty_state(&theme, "face.smiling", tr("sticker_pack_empty"))
         } else {
-            Self::grid(pack.as_ref(), stickers, kind, is_active, (width, height), &grid_scroll, in_side_panel)
+            Self::grid(
+                pack.as_ref(),
+                stickers,
+                kind,
+                is_active,
+                (width, height),
+                footer_reserve,
+                &grid_scroll,
+                in_side_panel,
+            )
         };
 
         let measuring = this.clone();
@@ -439,6 +455,7 @@ impl StickerPackSheet {
         kind: PackKind,
         is_active: bool,
         (width, height): (f32, f32),
+        footer_reserve: f32,
         grid_scroll: &UniformListScrollHandle,
         in_side_panel: bool,
     ) -> AnyElement {
@@ -466,7 +483,7 @@ impl StickerPackSheet {
         .h(px(height))
         .px(px(GRID_HORIZONTAL_INSET))
         .pt(px(HEADER_HEIGHT + GRID_TOP_INSET))
-        .pb(px(GRID_BOTTOM_SPACER))
+        .pb(px(GRID_BOTTOM_SPACER + footer_reserve))
         .track_scroll(grid_scroll)
         .when(is_active, |list| list.overflow_hidden())
         .sticker_hold_grid(
@@ -806,10 +823,21 @@ impl StickerPackSheet {
             label.bg(theme.primary._100).into_any_element()
         };
         let pressed = pack;
+        let measured = this.downgrade();
         div()
             .w_full()
+            .relative()
             .px(px(14.))
             .py(px(12.))
+            .child(measure("sticker-pack-sheet-footer-height", move |bounds, _, cx| {
+                let height = f32::from(bounds.size.height);
+                let _ = measured.update(cx, |sheet, cx| {
+                    if (sheet.footer_height - height).abs() > 0.5 {
+                        sheet.footer_height = height;
+                        cx.notify();
+                    }
+                });
+            }))
             .child(surface.liquid_press(
                 "sticker-pack-sheet-footer",
                 LiquidPressShape::Capsule,

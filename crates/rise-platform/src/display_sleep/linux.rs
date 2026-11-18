@@ -25,7 +25,7 @@ impl DisplaySleepInhibitor for NativeDisplaySleep {
         let reason = inhibit_reason(reason).to_owned();
         std::thread::Builder::new()
             .name("rise-display-sleep".to_owned())
-            .spawn(move || zbus::block_on(hold(reason, released)))
+            .spawn(move || crate::dbus_block_on::block_on(hold(reason, released)))
             .map_err(|error| DisplaySleepUnavailable::NoService(format!("no thread for the hold: {error}")))?;
         Ok(SystemInhibition::new(release))
     }

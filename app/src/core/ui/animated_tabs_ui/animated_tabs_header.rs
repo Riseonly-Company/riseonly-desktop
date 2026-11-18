@@ -5,7 +5,8 @@ use std::rc::Rc;
 use gpui::{
     App, Background, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Path,
     Pixels, Point, RenderOnce, ScrollHandle, ScrollWheelEvent, SharedString, StatefulInteractiveElement, TextRun,
-    TouchPhase, WeakEntity, Window, canvas, linear_color_stop, linear_gradient, point, white,
+    TouchPhase, WHEEL_LINE_HEIGHT, WeakEntity, Window, canvas, linear_color_stop, linear_gradient, point,
+    wheel_glides, white,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_theme::theme::theme_store::ThemeStore;
@@ -15,7 +16,7 @@ use rise_ui::animated_tabs_ui::animated_tabs_types::{AnimatedTabsMetrics, TabHea
 use rise_ui::guide_anchor_ui::guide_anchor_modifier::GuideAnchorModifierModifiers;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::liquid_chrome::{LiquidChrome, chrome_surface_depth};
-use rise_ui::swiftui::motion::MotionSpec;
+use rise_ui::swiftui::motion::{MotionSpec, ease_out};
 use rise_ui::swiftui::prelude::*;
 
 use super::animated_tabs_pager::AnimatedTabsPagerLiveState;
@@ -26,6 +27,7 @@ use crate::core::ui::formatted_text_ui::{FormattedTextOptions, FormattedTextStyl
 use crate::modules::chat::stores::message::message_actions::message_types::MessageCustomEmojiEntity;
 
 const NARROW_STRIP_WIDTH: f32 = 260.0;
+const STRIP_WHEEL_GLIDE_SECONDS: f64 = 0.18;
 const NARROW_STRIP_ARROW_WIDTH: f32 = 24.0;
 const NARROW_STRIP_FADE_SHARE: f32 = 0.12;
 const STEPPER_ARROW_WIDTH: f32 = 20.0;
@@ -479,7 +481,9 @@ impl RenderOnce for AnimatedTabsHeader {
                 .track_scroll(&scroll_handle)
                 .on_scroll_wheel(move |event: &ScrollWheelEvent, window, cx| {
                     if !event.delta.precise() {
-                        let delta = event.delta.pixel_delta(window.line_height());
+                        let glides = wheel_glides(&event.delta);
+                        let line = if glides { WHEEL_LINE_HEIGHT } else { window.line_height() };
+                        let delta = event.delta.pixel_delta(line);
                         let wheel = f32::from(delta.y);
                         if f32::from(delta.x) == 0.0 && wheel != 0.0 {
                             let handled = snap_state.update(cx, |state, cx| {
@@ -487,12 +491,24 @@ impl RenderOnce for AnimatedTabsHeader {
                                 if max_x <= 0.0 {
                                     return false;
                                 }
-                                let current = f32::from(state.scroll_handle.offset().x);
-                                let next = (current + wheel).clamp(-max_x, 0.0);
                                 state.user_scrolled = true;
                                 state.scroll_gesture_start = None;
-                                state.strip_scroll.jump(-next);
-                                state.scroll_handle.set_offset(point(px(next), px(0.0)));
+                                let now = RiseClock::monotonic();
+                                let shown = -f32::from(state.scroll_handle.offset().x);
+                                if !glides {
+                                    let next = (shown - wheel).clamp(0.0, max_x);
+                                    state.strip_scroll.jump(next);
+                                    state.scroll_handle.set_offset(point(px(-next), px(0.0)));
+                                    cx.notify();
+                                    return true;
+                                }
+                                let from =
+                                    if state.strip_scroll.is_running(now) { *state.strip_scroll.target() } else { shown };
+                                let next = (from - wheel).clamp(0.0, max_x);
+                                if !state.strip_scroll.is_running(now) {
+                                    state.strip_scroll.jump(shown);
+                                }
+                                state.strip_scroll.set_in(next, ease_out(STRIP_WHEEL_GLIDE_SECONDS), now, cx);
                                 cx.notify();
                                 true
                             });

@@ -171,8 +171,6 @@ static REQUIRED_SUFFIX: LazyLock<&'static str> =
     LazyLock::new(|| BotFieldRules::tag().schema.map(|schema| schema.required_suffix()).unwrap_or(""));
 
 impl BotTagRules {
-    pub const SYSTEM_TAGS: &'static [&'static str] = &["riseonly", "riseonlysupport"];
-
     pub fn minimum_length() -> usize {
         *MINIMUM_LENGTH
     }
@@ -230,6 +228,6 @@ impl BotTagRules {
     }
 
     pub fn is_valid(tag: &str) -> bool {
-        Self::SYSTEM_TAGS.contains(&Self::tag_normalized(tag).as_str()) || Self::validation_issue(tag).is_none()
+        rise_system_accounts::is_system_tag(&Self::tag_normalized(tag)) || Self::validation_issue(tag).is_none()
     }
 }

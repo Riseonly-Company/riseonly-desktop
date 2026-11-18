@@ -27,6 +27,7 @@ pub struct PostListRefreshControl {
     pub on_refresh_end_at_top: Option<PostListRefreshControlOnTopInsetChange>,
     base_top_inset: f32,
     is_enabled: bool,
+    pulls_refresh: bool,
     is_refreshing: bool,
     is_armed: bool,
     began_at_top: bool,
@@ -55,6 +56,7 @@ impl PostListRefreshControl {
             on_refresh_end_at_top: None,
             base_top_inset: 0.0,
             is_enabled: true,
+            pulls_refresh: true,
             is_refreshing: false,
             is_armed: false,
             began_at_top: false,
@@ -99,6 +101,15 @@ impl PostListRefreshControl {
         }
     }
 
+    pub fn set_pulls_refresh(&mut self, pulls_refresh: bool) {
+        self.pulls_refresh = pulls_refresh;
+        if !pulls_refresh {
+            self.is_armed = false;
+            self.wheel_push = 0.0;
+            self.wheel_push_at = None;
+        }
+    }
+
     pub fn begin_refresh_from_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_enabled || self.is_stopped {
             return;
@@ -132,7 +143,7 @@ impl PostListRefreshControl {
                 metrics.is_tracking
             );
         }
-        if self.is_enabled && !self.is_refreshing && self.on_refresh.is_some() {
+        if self.pulls_refresh && self.is_enabled && !self.is_refreshing && self.on_refresh.is_some() {
             let progress = ((-self.offset_from_top).max(0.0) / Self::TRIGGER_DISTANCE).min(1.0);
             if metrics.is_tracking {
                 if progress >= 1.0 && !self.is_armed {
@@ -188,7 +199,7 @@ impl PostListRefreshControl {
     }
 
     pub fn wheel_push_past_top(&mut self, push: f32, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_stopped || !self.is_enabled || self.is_refreshing || self.on_refresh.is_none() {
+        if self.is_stopped || !self.pulls_refresh || !self.is_enabled || self.is_refreshing || self.on_refresh.is_none() {
             self.wheel_push = 0.0;
             return;
         }

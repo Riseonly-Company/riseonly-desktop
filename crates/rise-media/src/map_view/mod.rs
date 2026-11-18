@@ -4,7 +4,6 @@
 pub(crate) mod linux;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
-#[cfg(not(target_os = "windows"))]
 pub mod map_app_file_source;
 pub mod map_http;
 pub mod map_http_hooks;
@@ -13,7 +12,6 @@ mod map_http_tests;
 pub mod map_view;
 #[cfg(test)]
 mod map_view_tests;
-#[cfg(not(target_os = "windows"))]
 pub mod maplibre_map;
 pub mod vulkan_icd;
 #[cfg(test)]

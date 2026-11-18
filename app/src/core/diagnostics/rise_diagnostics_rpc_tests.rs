@@ -15,6 +15,7 @@ fn bug() -> RiseBugReportFields {
         video_file_id: None,
         video_duration_ms: None,
         feedback_kind: None,
+        fix_platforms: Vec::new(),
     }
 }
 

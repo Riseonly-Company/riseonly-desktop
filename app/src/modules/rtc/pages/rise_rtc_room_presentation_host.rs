@@ -10,7 +10,10 @@ use gpui::{
 use rise_core::foundation::foundation_date::Date;
 use rise_core::foundation::foundation_uuid::Uuid;
 use rise_i18n::tr;
-use rise_platform::window_chrome::set_system_controls_appearance;
+use rise_platform::HostOs;
+use rise_platform::user_defaults::UserDefaults;
+use rise_platform::user_defaults_keys::DESKTOP_CALL_IN_SEPARATE_WINDOW;
+use rise_platform::window_chrome::{app_owns_titlebar_drag, set_system_controls_appearance};
 use rise_ui::swiftui::environment::{env, env_scope};
 use rise_ui::window_cover::WindowCoverFrame;
 use rise_ui::guide_overlay_ui::guide_overlay_window::GuideOverlayWindow;
@@ -24,10 +27,12 @@ use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::sai::Sai;
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_host::HoldContextMenuHost;
 use crate::core::widgets::notifier::notifier_host::NotifierHost;
+use crate::core::widgets::sheets::report_sheet::ReportSheetHost;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::modules::rtc::engine::rise_rtc_engine_models::{
     RiseRTCCallStateExt, RiseRTCDirectCall, RiseRTCEvictionReason, RiseRTCRoomEviction, RiseRTCRoomMode,
 };
+use crate::modules::rtc::media::rise_rtc_call_picture_in_picture::RiseRTCCallPictureInPictureController;
 use crate::modules::rtc::media::rise_rtc_end_tone_player::RiseRTCEndTonePlayer;
 use crate::modules::rtc::pages::rise_rtc_call_window_chrome_hooks::rise_rtc_call_window_chrome_hooks;
 use crate::modules::rtc::pages::rise_rtc_direct_call_screen::{RiseRTCDirectCallScreen, RiseRTCTerminalHold};
@@ -89,6 +94,11 @@ struct RiseRTCRoomPresentationHostHandle(WeakEntity<RiseRTCRoomPresentationHost>
 
 impl Global for RiseRTCRoomPresentationHostHandle {}
 
+/// whether a call opens a second window or fills the shell window like a voice channel, the shell is the default
+pub struct RiseRTCCallWindowMode(pub bool);
+
+impl Global for RiseRTCCallWindowMode {}
+
 impl RiseRTCRoomPresentationHost {
     pub(crate) fn bring_call_forward(cx: &mut App) -> bool {
         let Some(host) = cx.try_global::<RiseRTCRoomPresentationHostHandle>().and_then(|handle| handle.0.upgrade()) else {
@@ -120,6 +130,12 @@ impl RiseRTCRoomPresentationHost {
         }
     }
 
+    /// shell window first, then the call on top of it, a window call or one inside the shell
+    pub fn present_call(cx: &mut App) {
+        Self::activate_main_window(cx);
+        Self::bring_call_forward(cx);
+    }
+
     /// brings an open call window to the front
     /// opening the room it already shows changes no state
     /// so without this the window stays behind the main one
@@ -131,6 +147,48 @@ impl RiseRTCRoomPresentationHost {
         }
     }
 
+    pub fn uses_separate_window(cx: &App) -> bool {
+        cx.try_global::<RiseRTCCallWindowMode>()
+            .map_or_else(|| UserDefaults::standard().bool(DESKTOP_CALL_IN_SEPARATE_WINDOW), |mode| mode.0)
+    }
+
+    pub fn set_uses_separate_window(separate: bool, cx: &mut App) {
+        UserDefaults::standard().set(DESKTOP_CALL_IN_SEPARATE_WINDOW, separate);
+        cx.set_global(RiseRTCCallWindowMode(separate));
+        if !separate {
+            Self::activate_main_window(cx);
+        }
+    }
+
+    fn activate_main_window(cx: &mut App) {
+        if let Some(hooks) = rise_rtc_call_window_hooks()
+            && let Some(main) = cx.windows().into_iter().find(|window| (hooks.is_main_window)(*window))
+        {
+            let _ = main.update(cx, |_, window, _| window.activate_window());
+        }
+    }
+
+    /// what the shell draws in place of its columns, none while the call lives in its own window or is hidden
+    pub fn in_app_call_key(&self, cx: &App) -> Option<String> {
+        if Self::uses_separate_window(cx) || !self.is_presentation_shown(cx) {
+            return None;
+        }
+        if let Some(call) = self.displayed_system_call(cx) {
+            return Some(format!("system:{}", call.local_uuid.uuid_string()));
+        }
+        self.rtc.read(cx).room_presentation_target().map(|target| format!("room:{target:?}"))
+    }
+
+    pub fn in_app_call_content(&self, host: WeakEntity<Self>, cx: &App) -> AnyElement {
+        self.call_window_content(host, cx)
+    }
+
+    pub fn minimize_in_app_call(&mut self, cx: &mut Context<Self>) {
+        if self.in_app_call_key(cx).is_some() {
+            self.minimize_active_presentation(cx);
+        }
+    }
+
     pub fn new(cx: &mut Context<Self>) -> Self {
         let rtc = RTCServicesStore::shared(cx);
         let system_calls = RiseRTCSystemCallPresentationStore::shared(cx);
@@ -139,6 +197,7 @@ impl RiseRTCRoomPresentationHost {
         let subscriptions = vec![
             cx.observe(&rtc, |this, _, cx| this.synchronize(cx)),
             cx.observe(&system_calls, |this, _, cx| this.synchronize(cx)),
+            cx.observe_global::<RiseRTCCallWindowMode>(|this, cx| this.set_needs_synchronize(cx)),
         ];
 
         Sai::log("RTC", || "room presentation host mounted".to_owned(), SaiLogKind::Network, cx);
@@ -192,6 +251,13 @@ impl RiseRTCRoomPresentationHost {
         cx.emit(RiseRTCCallWindowContentChanged);
     }
 
+    fn end_stream_float(cx: &mut App) {
+        let controller = RiseRTCCallPictureInPictureController::shared(cx);
+        if controller.read(cx).is_floating_stream() {
+            controller.update(cx, |controller, cx| controller.end_stream_float(cx));
+        }
+    }
+
     fn set_needs_synchronize(&mut self, cx: &mut Context<Self>) {
         cx.notify();
         let this = cx.weak_entity();
@@ -208,6 +274,7 @@ impl RiseRTCRoomPresentationHost {
         let account_id = rtc.account_id(cx).map(str::to_owned);
         let active_room_id = rtc.active_room(cx).map(|room| room.config.room_id.clone());
         self.settle_switched_voice_seat(target.as_ref(), active_room_id, cx);
+        let target_gone = target.is_none();
 
         if target != self.last_target {
             let kind = target.as_ref().map_or("none", |target| target.safe_log_kind()).to_owned();
@@ -217,6 +284,12 @@ impl RiseRTCRoomPresentationHost {
         if is_visible != self.last_is_visible {
             Sai::log("RTC", move || format!("room presentation visible={is_visible}"), SaiLogKind::Network, cx);
             self.last_is_visible = is_visible;
+            if is_visible {
+                Self::end_stream_float(cx);
+            }
+        }
+        if target_gone {
+            Self::end_stream_float(cx);
         }
         if eviction != self.last_eviction {
             self.last_eviction = eviction.clone();
@@ -312,7 +385,7 @@ impl RiseRTCRoomPresentationHost {
         if !self.is_mounted_in_window {
             return;
         }
-        let should_be_open = self.is_presentation_shown(cx);
+        let should_be_open = Self::uses_separate_window(cx) && self.is_presentation_shown(cx);
         if should_be_open && self.call_window.is_none() && !self.call_window_opening {
             self.open_call_window(cx);
         } else if !should_be_open && let Some(handle) = self.call_window.take() {
@@ -335,6 +408,7 @@ impl RiseRTCRoomPresentationHost {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(CALL_WINDOW_MIN_SIZE.0), px(CALL_WINDOW_MIN_SIZE.1))),
                     app_id: rise_rtc_call_window_hooks().and_then(|hooks| (hooks.app_id)()),
+                    app_owns_titlebar_drag: app_owns_titlebar_drag(HostOs::current()),
                     titlebar: Some(TitlebarOptions {
                         title: Some(tr("rtc_voice_chat").into()),
                         appears_transparent: true,
@@ -692,6 +766,7 @@ pub struct RiseRTCCallWindow {
     title_bar: Option<AnyView>,
     hold_context_menu_host: Entity<HoldContextMenuHost>,
     notifier_host: Entity<NotifierHost>,
+    report_sheet_host: Entity<ReportSheetHost>,
     _host_changes: Vec<Subscription>,
 }
 
@@ -738,6 +813,7 @@ impl RiseRTCCallWindow {
             title_bar,
             hold_context_menu_host: cx.new(|cx| HoldContextMenuHost::new(window, cx)),
             notifier_host,
+            report_sheet_host: cx.new(|cx| ReportSheetHost::new(window, cx)),
             _host_changes: host_changes,
         }
     }
@@ -793,6 +869,10 @@ impl Render for RiseRTCCallWindow {
                     .child(env_scope::<RiseRTCScreenTopInsetKey>(top_inset).child(content)),
             )
             .children((band > px(0.0)).then(|| self.title_bar.clone()).flatten())
+            .child(
+                AnyView::from(self.report_sheet_host.clone())
+                    .cached(StyleRefinement::default().absolute().top_0().left_0().size_full()),
+            )
             .child(
                 deferred(
                     AnyView::from(self.hold_context_menu_host.clone())

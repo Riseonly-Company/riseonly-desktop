@@ -39,7 +39,7 @@ impl RenderOnce for FeedSoundButton {
         let label = tr(if is_muted { "feed_sound_unmute" } else { "feed_sound_mute" });
         div()
             .id("feed-sound-button-target")
-            .occlude()
+            .block_mouse_except_scroll()
             .tooltip_label(label)
             .child(
                 plain("feed-sound-button")

@@ -120,6 +120,22 @@ if [ -n "$(linked_ffmpeg "$EXE")" ]; then
     echo "ffmpeg: $(ls "$LIBS" | tr '\n' ' ')"
 fi
 
+case "$ARCH" in
+    arm64) LDCONFIG_TAG=AArch64 ;;
+    *) LDCONFIG_TAG=x86-64 ;;
+esac
+FALLBACK_LIBS=(libpipewire-0.3.so.0)
+if [ -n "$(linked_ffmpeg "$EXE")" ]; then
+    FALLBACK_LIBS+=(libva.so.2 libva-drm.so.2 libdrm.so.2)
+fi
+for soname in "${FALLBACK_LIBS[@]}"; do
+    lib=$(ldconfig -p | awk -v n="$soname" -v tag="(libc6,$LDCONFIG_TAG" '$1 == n && index($0, tag) { print $NF; exit }')
+    [ -n "$lib" ] || { echo "the bundle falls back to $soname and the build machine has none" >&2; exit 1; }
+    mkdir -p "$LIBS/fallback/$soname"
+    cp -L "$lib" "$LIBS/fallback/$soname/$soname"
+    echo "fallback $soname"
+done
+
 for soname in libuv.so.1; do
     readelf -d "$EXE" | grep -q "(NEEDED).*\[$soname\]" || continue
     lib=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }')
@@ -129,6 +145,25 @@ for soname in libuv.so.1; do
     readelf -d "$EXE" | grep -q 'ORIGIN/../lib/riseonly' || patchelf --add-rpath '$ORIGIN/../lib/riseonly' "$EXE"
     echo "bundled $soname"
 done
+
+NOTO_CJK="$ROOT/vendor/noto-cjk"
+[ -f "$NOTO_CJK/NotoSansCJK-Regular.ttc" ] && [ -f "$NOTO_CJK/OFL.txt" ] ||
+    { echo "missing $NOTO_CJK, run scripts/vendor-noto-cjk.sh" >&2; exit 1; }
+mkdir -p "$OUT/share/riseonly/assets/fonts" "$OUT/share/licenses/riseonly/noto-cjk"
+cp "$NOTO_CJK/NotoSansCJK-Regular.ttc" "$OUT/share/riseonly/assets/fonts/"
+cp "$NOTO_CJK/OFL.txt" "$OUT/share/licenses/riseonly/noto-cjk/OFL.txt"
+NOTO_FALLBACK="$ROOT/vendor/noto-fallback"
+NOTO_FALLBACK_FACES=(Thai Devanagari Bengali Tamil Georgian Hebrew Arabic)
+for script in "${NOTO_FALLBACK_FACES[@]}"; do
+    [ -f "$NOTO_FALLBACK/NotoSans$script-Regular.ttf" ] ||
+        { echo "missing $NOTO_FALLBACK/NotoSans$script-Regular.ttf, run scripts/vendor-noto-fallback.sh" >&2; exit 1; }
+done
+[ -f "$NOTO_FALLBACK/OFL.txt" ] || { echo "missing $NOTO_FALLBACK/OFL.txt, run scripts/vendor-noto-fallback.sh" >&2; exit 1; }
+mkdir -p "$OUT/share/licenses/riseonly/noto-fallback"
+for script in "${NOTO_FALLBACK_FACES[@]}"; do
+    cp "$NOTO_FALLBACK/NotoSans$script-Regular.ttf" "$OUT/share/riseonly/assets/fonts/"
+done
+cp "$NOTO_FALLBACK/OFL.txt" "$OUT/share/licenses/riseonly/noto-fallback/OFL.txt"
 
 for tree in "$ROOT"/vendor/rlottie/rlottie-*/; do
     [ -d "$tree" ] || continue

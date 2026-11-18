@@ -205,6 +205,32 @@ impl UserInteractionsStore {
         banner_url: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        self.save_profile_edits_reporting(
+            name,
+            tag,
+            description,
+            hb,
+            avatar_url,
+            avatar_asset_id,
+            banner_url,
+            None,
+            cx,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_profile_edits_reporting(
+        &mut self,
+        name: Option<String>,
+        tag: Option<String>,
+        description: Option<String>,
+        hb: Option<String>,
+        avatar_url: Option<String>,
+        avatar_asset_id: Option<String>,
+        banner_url: Option<String>,
+        on_done: Option<Rc<dyn Fn(bool, &mut App)>>,
+        cx: &mut Context<Self>,
+    ) {
         let auth = AuthServicesStore::shared(cx);
         let previous = auth.read(cx).profile().cloned();
         let mut optimistic: Option<ProfileModel> = None;
@@ -251,6 +277,7 @@ impl UserInteractionsStore {
         }
 
         let (error_name, error_tag) = (name.clone(), tag.clone());
+        let failed = on_done.clone();
         let on_error: Rc<dyn Fn(&anyhow::Error, &mut App)> = Rc::new(move |error: &anyhow::Error, cx: &mut App| {
             Self::revert_profile_edits(optimistic.as_ref(), previous.as_ref(), cx);
             if CanonErrors::is_connection_loss(error) {
@@ -262,10 +289,14 @@ impl UserInteractionsStore {
                     previous.as_ref(),
                     cx,
                 );
-                return;
+            } else {
+                Self::announce_profile_save_refusal(error, cx);
             }
-            Self::announce_profile_save_refusal(error, cx);
+            if let Some(failed) = &failed {
+                failed(false, cx);
+            }
         });
+        let on_success = on_done.map(|done| Rc::new(move |cx: &mut App| done(true, cx)) as Rc<dyn Fn(&mut App)>);
 
         Self::actions(cx).update(cx, |actions, cx| {
             actions.update_profile_action(
@@ -273,6 +304,7 @@ impl UserInteractionsStore {
                     name,
                     tag,
                     more,
+                    on_success,
                     on_error: Some(on_error),
                     ..UpdateProfileActionArgs::default()
                 },

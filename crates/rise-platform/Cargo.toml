@@ -80,3 +80,7 @@ wayland-protocols-wlr.workspace = true
 # already locks, see docs/DEPENDENCIES.md.
 cosmic-text = "=0.19.0"
 swash = "=0.2.10"
+
+# The zbus without tokio check (system_activity/linux/linux_tests.rs) opens a peer to peer connection.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { workspace = true, features = ["p2p"] }

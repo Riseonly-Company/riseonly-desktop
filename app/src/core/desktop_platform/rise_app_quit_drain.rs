@@ -15,6 +15,7 @@ use rise_platform::quit_request::on_quit_request;
 use crate::core::widgets::notifier::notifier_store::Notifier;
 
 use super::rise_app_lifecycle::{LifecycleSignal, RiseAppLifecycle};
+use super::rise_app_quit_drain_hooks::rise_app_quit_drain_hooks;
 
 #[derive(Default)]
 struct QuitLedger {
@@ -79,6 +80,11 @@ pub struct QuitDrain {
 impl Global for QuitDrain {}
 
 impl QuitDrain {
+    /// true once the app started to exit, windows are hidden and only the drain runs
+    pub fn is_quitting(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|drain| drain.requested)
+    }
+
     /// keep the lease while the work runs, name only labels the log at the limit
     pub fn lease(name: &'static str, cx: &mut App) -> QuitLease {
         let ledger = Arc::clone(&cx.default_global::<Self>().ledger);
@@ -124,6 +130,9 @@ fn run_request(cx: &mut App) {
 
     RiseAppLifecycle::apply(LifecycleSignal::Quit, cx);
     Notifier::commit_pending_undo_now(cx);
+    if let Some(hooks) = rise_app_quit_drain_hooks() {
+        (hooks.will_terminate)(cx);
+    }
 
     if ledger.lock().active.is_empty() {
         exit(cx);

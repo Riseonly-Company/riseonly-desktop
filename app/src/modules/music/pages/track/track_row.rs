@@ -541,6 +541,10 @@ impl RenderOnce for TrackRow {
         }
 
         let on_tap = self.on_tap.clone();
-        plain(self.id.clone()).w_full().on_press(move |window, cx| on_tap(window, cx)).child(row)
+        plain(self.id.clone())
+            .w_full()
+            .hover_fill(row_hover_fill(&theme))
+            .on_press(move |window, cx| on_tap(window, cx))
+            .child(row)
     }
 }

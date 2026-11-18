@@ -1,8 +1,9 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Bounds, Div, Entity, Hsla, InteractiveElement, IntoElement, List, ParentElement, Pixels,
+    AnyElement, App, Bounds, Div, Edges, Element, ElementId, Entity, EntityId, GlobalElementId, Hsla, InspectorElementId, LayoutId, Length, Position, Style, InteractiveElement, IntoElement, List, ParentElement, Pixels,
     RenderOnce, SharedString, Stateful, StyleRefinement, Styled, Window, div, px,
 };
 use rise_theme::{RiseThemeAppearance, ThemeStore};
@@ -162,8 +163,130 @@ impl EnvKey for ListShellContentCoordinateSpaceKey {
     }
 }
 
+/// room the shell content keeps under the floating chrome, reading it marks the content as keeping it
 pub fn list_shell_floating_top_inset(cx: &App) -> f32 {
+    if let Some(read) = env::<ListShellInsetReadKey>(cx) {
+        read.set(true);
+    }
     env::<ListShellFloatingTopInsetKey>(cx)
+}
+
+struct ListShellInsetReadKey;
+
+impl EnvKey for ListShellInsetReadKey {
+    type Value = Option<Rc<Cell<bool>>>;
+
+    fn default_value() -> Option<Rc<Cell<bool>>> {
+        None
+    }
+
+    fn fingerprint(_: &Self::Value) -> Option<u64> {
+        None
+    }
+}
+
+/// right panel strip over a page and the panel record of pages floating under it
+#[derive(Clone)]
+pub struct PanelStripInset {
+    height: f32,
+    page: EntityId,
+    floats: Rc<RefCell<HashMap<EntityId, bool>>>,
+}
+
+impl PanelStripInset {
+    pub fn new(height: f32, page: EntityId, floats: Rc<RefCell<HashMap<EntityId, bool>>>) -> Self {
+        Self { height, page, floats }
+    }
+}
+
+/// set by the right panel for each page it shows, none elsewhere
+pub struct PanelStripInsetKey;
+
+impl EnvKey for PanelStripInsetKey {
+    type Value = Option<PanelStripInset>;
+
+    fn default_value() -> Option<PanelStripInset> {
+        None
+    }
+
+    fn fingerprint(value: &Option<PanelStripInset>) -> Option<u64> {
+        value.as_ref().map(|inset| u64::from(inset.height.to_bits()))
+    }
+}
+
+struct ListShellInsetHonored(Rc<Cell<bool>>);
+
+struct PanelStripChrome {
+    strip: PanelStripInset,
+    honored: Rc<Cell<bool>>,
+    child: AnyElement,
+}
+
+impl IntoElement for PanelStripChrome {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for PanelStripChrome {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let child = self.child.request_layout(window, cx);
+        let floats = self.honored.get();
+        self.strip.floats.borrow_mut().insert(self.strip.page, floats);
+        let mut style = Style::default();
+        style.position = Position::Absolute;
+        style.inset = Edges {
+            top: px(if floats { self.strip.height } else { 0.0 }).into(),
+            right: px(0.0).into(),
+            bottom: Length::Auto,
+            left: px(0.0).into(),
+        };
+        (window.request_layout(style, [child], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
 }
 
 pub fn list_shell_safe_area_insets(cx: &App) -> EdgeInsets {
@@ -190,7 +313,7 @@ impl ListShellScrollUnderChromeModifiers for ScrollView {
 }
 
 fn pad_under_chrome<E: Styled>(element: E, cx: &App) -> E {
-    let inset = env::<ListShellFloatingTopInsetKey>(cx);
+    let inset = list_shell_floating_top_inset(cx);
     if inset > 0.0 { element.pt(px(inset)) } else { element }
 }
 
@@ -407,8 +530,12 @@ impl RenderOnce for ListShellUi {
         let header_body_height = header_body_height_state.read(cx).0;
 
         let safe_top = 0.0_f32;
-        let content_top_inset = if self.use_safe_zone { safe_top + header_body_height } else { 0.0 };
-        note_page_column_top_inset(content_top_inset, cx);
+        let strip = env::<PanelStripInsetKey>(cx).filter(|_| self.use_safe_zone);
+        let strip_height = strip.as_ref().map_or(0.0, |strip| strip.height);
+        let honored = window.use_state(cx, |_, _| ListShellInsetHonored(Rc::new(Cell::new(false)))).read(cx).0.clone();
+        let header_top_inset = if self.use_safe_zone { safe_top + header_body_height } else { 0.0 };
+        let content_top_inset = header_top_inset + strip_height;
+        note_page_column_top_inset(header_top_inset, cx);
         let geometry_bottom_inset = 0.0_f32;
         let safe_bottom_inset = if self.respects_keyboard_safe_area {
             self.container_bottom_inset(geometry_bottom_inset)
@@ -508,8 +635,12 @@ impl RenderOnce for ListShellUi {
                 .child(
                     env_scope::<ListShellSafeAreaInsetsKey>(shell_insets).child(
                         env_scope::<ListShellFloatingTopInsetKey>(content_top_inset).child(
-                            env_scope::<ListShellContentCoordinateSpaceKey>(Some(content_frame_state.clone()))
-                                .child(div().size_full().child(content)),
+                            env_scope::<ListShellInsetReadKey>(Some(honored.clone())).child(
+                                env_scope::<PanelStripInsetKey>(None).child(
+                                    env_scope::<ListShellContentCoordinateSpaceKey>(Some(content_frame_state.clone()))
+                                        .child(div().size_full().child(content)),
+                                ),
+                            ),
                         ),
                     ),
                 )
@@ -569,7 +700,11 @@ impl RenderOnce for ListShellUi {
         }));
 
         let header_body = header_body.guide_anchor_cover("list-shell-guide-chrome", GuideAnchorCoverKind::Chrome);
-        root.child(chrome.child(header_body))
+        let chrome = chrome.child(header_body);
+        match strip {
+            Some(strip) => root.child(PanelStripChrome { strip, honored, child: chrome.into_any_element() }),
+            None => root.child(chrome),
+        }
     }
 }
 

@@ -23,7 +23,9 @@ use crate::core::ui::hold_context_menu_ui::hold_context_menu_tap_presentation::{
 use crate::core::ui::bottom_sheet_ui::sheet_floating_header::{SheetFloatingHeader, SheetFloatingHeaderMetrics};
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_shared_ui::ChatProfileEmptyState;
 use crate::modules::gifts::components::gift_card_view::{GiftBackdropColors, GiftPatternLayer};
-use crate::modules::gifts::components::gift_cosmetic_playback::GiftCosmeticGeometry;
+use crate::modules::gifts::components::gift_cosmetic_playback::{
+    GiftCosmeticGeometry, GiftCosmeticPlaybackPool, GiftCosmeticPlaybackPoolKey,
+};
 use crate::modules::gifts::components::gift_cosmetic_preview::{
     GiftBackdropSurface, GiftCosmeticPreview, GiftEquippedBadge,
 };
@@ -51,6 +53,7 @@ struct GiftWardrobeSheetState {
     grid_bounds: Rc<Cell<Option<(Bounds<Pixels>, Pixels)>>>,
     revealed_cell: Rc<RefCell<Option<(String, Bounds<Pixels>, Pixels)>>>,
     scroll: ScrollHandle,
+    playbacks: Entity<GiftCosmeticPlaybackPool>,
 }
 
 /// customization picker of one slot, the viewer own cosmetics of that kind each drawn on the
@@ -328,7 +331,9 @@ impl RenderOnce for GiftWardrobeSheetContent {
             grid_bounds: Rc::new(Cell::new(None)),
             revealed_cell: Rc::new(RefCell::new(None)),
             scroll,
+            playbacks: cx.new(|_| GiftCosmeticPlaybackPool::default()),
         });
+        let playbacks = state.read(cx).playbacks.clone();
 
         let worn = kind.and_then(|kind| {
             GiftsServicesStore::shared(cx)
@@ -367,7 +372,7 @@ impl RenderOnce for GiftWardrobeSheetContent {
         div()
             .relative()
             .size_full()
-            .child(
+            .child(env_scope::<GiftCosmeticPlaybackPoolKey>(Some(playbacks)).child(
                 scroll_view("gift-wardrobe-scroll").shows_indicators(false).scroll_handle(handle).child(
                     vstack(0.0)
                         .w_full()
@@ -375,7 +380,7 @@ impl RenderOnce for GiftWardrobeSheetContent {
                         .child(div().w_full().flex_none().h(px(SheetFloatingHeaderMetrics::HEIGHT)))
                         .children(kind.map(|kind| Self::shelf(kind, &state, cx))),
                 ),
-            )
+            ))
             .child(div().absolute().top_0().left_0().right_0().child(header))
     }
 }

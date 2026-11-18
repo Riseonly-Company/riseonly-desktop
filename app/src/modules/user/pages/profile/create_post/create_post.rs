@@ -31,6 +31,7 @@ use rise_ui::hold_context_menu_ui::hold_context_menu_glass::HoldContextMenuGlass
 use rise_ui::input_ui::{Cancel, Paste};
 use rise_ui::keyboard_dismiss::{KeyboardDismiss, KeyboardDismissModifiers};
 use rise_ui::main_text::{MainText, TextAlignT};
+use rise_ui::page_header_toolbar_button::PageHeaderIconButton;
 use rise_ui::native_confirm_alert::NativeConfirmAlert;
 use rise_ui::settings_icon_palette::SettingsIconPalette;
 use rise_ui::skeleton_ui::SkeletonUi;
@@ -3543,6 +3544,18 @@ impl CreatePost {
         let emoji_overlay = self.emoji_presence.render_transitioned(RiseClock::monotonic(), window, move |_| {
             div().absolute().left_0().right_0().bottom_0().child(emoji_panel)
         });
+        let can_publish = !self.state.read(cx).disabled(cx) && !self.is_publishing();
+        let header_publish_page = cx.weak_entity();
+        let header_publish = div()
+            .id("create-post-header-publish")
+            .tooltip_label(self.publish_button_title(cx))
+            .when(!can_publish, |button| button.opacity(0.45))
+            .child(
+                PageHeaderIconButton::new("create-post-header-publish-button", "checkmark", move |_, cx| {
+                    let _ = header_publish_page.update(cx, |page, cx| page.publish_post(cx));
+                })
+                .disabled(!can_publish),
+            );
         let wrapper = SettingsWrapperUi::new(tr(self.screen_title_key(cx)), {
             let nav_store = self.nav_store.clone();
             move |_, cx| {
@@ -3551,6 +3564,7 @@ impl CreatePost {
                 }
             }
         })
+        .right_jsx(header_publish)
         .content({
             let form = div()
                 .relative()

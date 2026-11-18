@@ -43,7 +43,7 @@ use crate::core::lib::sai::core::websocket::sai_web_socket_manager::{SAI_WS_DID_
 use crate::core::lib::sai::modules::sai_ws::sai_ws::{SaiWs, SaiWsOnError, SaiWsOnSuccess};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_event_registry::SaiWsEventRegistry;
 use crate::core::push_notifications::desktop_notification_delivery::{
-    DesktopNotificationDelivery, conversation_tag,
+    DesktopNotificationDelivery, NotificationDeliveryOutcome, conversation_tag,
 };
 use crate::core::push_notifications::notification_service_extension::notification_service::{
     NotificationRequest, NotificationService,
@@ -1355,15 +1355,24 @@ impl SocketNotificationSource {
         if !PushNotificationManager::should_present_for_chat_notification_settings(&user_info, cx) {
             return;
         }
+        let fallback = (!stealth).then(|| (user_info.clone(), title.clone(), body.clone()));
         NotificationService::did_receive(
             NotificationRequest { tag, title, body, user_info },
-            |content, cx| {
-                let _ = DesktopNotificationDelivery::deliver(
+            move |content, cx| {
+                let outcome = DesktopNotificationDelivery::deliver(
                     content.notification,
                     content.category.as_deref(),
                     content.user_info,
                     cx,
                 );
+                if matches!(outcome, NotificationDeliveryOutcome::Blocked(_) | NotificationDeliveryOutcome::Failed)
+                    && let Some((user_info, title, body)) = fallback
+                {
+                    tracing::warn!(target: "riseonly::push", ?outcome, "system notification not shown, in app banner instead");
+                    PushNotificationManager::shared(cx).update(cx, |manager, cx| {
+                        manager.will_present(&user_info, &title, &body, cx);
+                    });
+                }
             },
             cx,
         );

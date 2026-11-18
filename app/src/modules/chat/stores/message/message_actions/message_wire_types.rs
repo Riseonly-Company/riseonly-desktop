@@ -3996,15 +3996,27 @@ pub struct TopicMentionEntityWire {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TextLinkEntityWire {
+    pub offset: i64,
+    pub length: i64,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MessageEntitiesCodecParsed {
     pub custom_emojis: Vec<CustomEmojiEntityWire>,
     pub role_mentions: Vec<RoleMentionEntityWire>,
     pub topic_mentions: Vec<TopicMentionEntityWire>,
+    pub text_links: Vec<TextLinkEntityWire>,
 }
 
 impl MessageEntitiesCodecParsed {
-    pub const EMPTY: MessageEntitiesCodecParsed =
-        MessageEntitiesCodecParsed { custom_emojis: Vec::new(), role_mentions: Vec::new(), topic_mentions: Vec::new() };
+    pub const EMPTY: MessageEntitiesCodecParsed = MessageEntitiesCodecParsed {
+        custom_emojis: Vec::new(),
+        role_mentions: Vec::new(),
+        topic_mentions: Vec::new(),
+        text_links: Vec::new(),
+    };
 }
 
 pub enum MessageEntitiesCodec {}
@@ -4020,6 +4032,7 @@ impl MessageEntitiesCodec {
         let mut custom_emojis: Vec<CustomEmojiEntityWire> = Vec::new();
         let mut role_mentions: Vec<RoleMentionEntityWire> = Vec::new();
         let mut topic_mentions: Vec<TopicMentionEntityWire> = Vec::new();
+        let mut text_links: Vec<TextLinkEntityWire> = Vec::new();
         for entry in &entries {
             let Some(entity_type) = entry.get(events_key::TYPE).and_then(Value::as_str) else {
                 continue;
@@ -4067,12 +4080,20 @@ impl MessageEntitiesCodec {
                 }
                 let chat_id = Self::string_value(entry, MessageEntityField::ChatId.wire());
                 topic_mentions.push(TopicMentionEntityWire { offset, length, topic_id, chat_id });
+            } else if entity_type == MessageEntityType::TextLink.wire() {
+                let url = Self::string_value(entry, MessageEntityField::Url.wire());
+                let url = url.trim();
+                if url.is_empty() {
+                    continue;
+                }
+                text_links.push(TextLinkEntityWire { offset, length, url: url.to_owned() });
             }
         }
         custom_emojis.sort_by_key(|entity| entity.offset);
         role_mentions.sort_by_key(|entity| entity.offset);
         topic_mentions.sort_by_key(|entity| entity.offset);
-        MessageEntitiesCodecParsed { custom_emojis, role_mentions, topic_mentions }
+        text_links.sort_by_key(|entity| entity.offset);
+        MessageEntitiesCodecParsed { custom_emojis, role_mentions, topic_mentions, text_links }
     }
 
     pub fn parse_custom_emojis(entities_json: Option<&str>) -> Vec<CustomEmojiEntityWire> {

@@ -1478,6 +1478,8 @@ impl<D: RiseMapViewDelegate> RiseMapSurface<D> {
         .absolute()
         .size_full();
         let color = UIColor::secondary_label().resolved_color(host.appearance());
+        let missing_gpu = host.0.borrow().unavailable.as_ref().is_some_and(MapUnavailable::is_missing_gpu);
+        let unavailable_key = if missing_gpu { "desktop_map_unavailable_gpu" } else { "map_view_unavailable" };
         div()
             .id(id)
             .relative()
@@ -1488,7 +1490,7 @@ impl<D: RiseMapViewDelegate> RiseMapSurface<D> {
             .justify_center()
             .px(px(24.0))
             .child(probe)
-            .child(div().text_center().text_color(color).child(SharedString::from(tr("map_view_unavailable"))))
+            .child(div().text_center().text_color(color).child(SharedString::from(tr(unavailable_key))))
             .into_any_element()
     }
 

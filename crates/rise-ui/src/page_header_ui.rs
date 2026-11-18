@@ -166,8 +166,8 @@ impl PageHeaderUi {
     }
 
     fn filled_bar(self, center: AnyElement) -> AnyElement {
-        let mut row = hstack(10.0)
-            .px(px(12.0))
+        let mut row = hstack(PageHeaderMetrics::BUTTON_GAP)
+            .px(px(PageHeaderMetrics::EDGE_INSET))
             .h(px(PageHeaderMetrics::BAR_HEIGHT));
         if self.shows_back_button {
             row = row.child(PageHeaderBackButton::from_action(BACK_BUTTON_ID, self.on_back));
@@ -271,7 +271,7 @@ pub struct PageHeaderBarLayout {
 impl Default for PageHeaderBarLayout {
     fn default() -> Self {
         Self {
-            edge_padding: 8.0,
+            edge_padding: PageHeaderMetrics::BAR_EDGE_INSET,
             center_gap: 4.0,
             height: None,
             children: SmallVec::new(),

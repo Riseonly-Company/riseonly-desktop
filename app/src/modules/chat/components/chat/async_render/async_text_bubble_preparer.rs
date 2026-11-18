@@ -8,7 +8,7 @@ use rise_ui::swiftui::font::Font as SwiftUiFontSpec;
 use crate::core::lib::canon_format::RiseFormat;
 use crate::modules::chat::components::chat::async_render::async_text_bubble_types::{
     AsyncTextBubbleLayoutSpec, AsyncTextBubbleLine, AsyncTextBubbleLinePlacement, AsyncTextBubblePreparedLayout,
-    AsyncTextBubbleSeed,
+    AsyncTextBubbleSeed, first_strong_is_rtl,
 };
 use crate::modules::chat::components::chat::bubble::message_meta::MessageDeliveryStatusGeometry;
 use crate::modules::chat::shared::chat_search_highlight::ChatSearchHighlightPalette;
@@ -293,7 +293,7 @@ impl AsyncTextBubblePreparer {
             };
         }
 
-        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let mut ranges: Vec<(usize, usize, Option<bool>)> = Vec::new();
         {
             let mut wrapper = text_system.line_wrapper(font.clone(), font_size);
             let mut paragraph_start = 0;
@@ -304,12 +304,13 @@ impl AsyncTextBubblePreparer {
                     break;
                 }
                 let fragments = [LineFragment::text(paragraph)];
+                let paragraph_is_rtl = first_strong_is_rtl(paragraph);
                 let mut line_start = 0;
                 for boundary in wrapper.wrap_line(&fragments, px(maximum_width)) {
-                    ranges.push((paragraph_start + line_start, paragraph_start + boundary.ix));
+                    ranges.push((paragraph_start + line_start, paragraph_start + boundary.ix, paragraph_is_rtl));
                     line_start = boundary.ix;
                 }
-                ranges.push((paragraph_start + line_start, paragraph_start + paragraph.len()));
+                ranges.push((paragraph_start + line_start, paragraph_start + paragraph.len(), paragraph_is_rtl));
                 paragraph_start += paragraph.len() + 1;
             }
         }
@@ -325,7 +326,7 @@ impl AsyncTextBubblePreparer {
         let mut maximum_line_width: f32 = 0.0;
         let mut measured_height: f32 = 0.0;
 
-        for (index, (start, end)) in ranges.into_iter().enumerate() {
+        for (index, (start, end, paragraph_is_rtl)) in ranges.into_iter().enumerate() {
             let line_text = text.get(start..end).unwrap_or_default();
             let line = AsyncTextBubbleLine::new(
                 line_text,
@@ -333,7 +334,8 @@ impl AsyncTextBubblePreparer {
                 font,
                 font_size,
                 text_system,
-            );
+            )
+            .in_paragraph(paragraph_is_rtl);
             let ascent = f32::from(line.ascent);
             let descent = f32::from(line.descent);
             let line_height = ascent + descent + f32::from(line.leading);

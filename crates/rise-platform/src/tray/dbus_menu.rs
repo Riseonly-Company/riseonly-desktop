@@ -13,12 +13,14 @@ const LABEL_PROPERTY: &str = "label";
 const TOGGLE_TYPE_PROPERTY: &str = "toggle-type";
 const TOGGLE_TYPE_CHECKMARK: &str = "checkmark";
 const TOGGLE_STATE_PROPERTY: &str = "toggle-state";
+const ENABLED_PROPERTY: &str = "enabled";
 
 /// one property value, the bus layer turns it into a dbus variant
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MenuProperty {
     Text(String),
     Number(i32),
+    Flag(bool),
 }
 
 pub type MenuProperties = Vec<(&'static str, MenuProperty)>;
@@ -42,6 +44,9 @@ fn item_properties(item: &TrayMenuItem) -> MenuProperties {
             MenuProperty::Text(TOGGLE_TYPE_CHECKMARK.to_owned()),
         ));
         properties.push((TOGGLE_STATE_PROPERTY, MenuProperty::Number(i32::from(checked))));
+    }
+    if !item.enabled {
+        properties.push((ENABLED_PROPERTY, MenuProperty::Flag(false)));
     }
     properties
 }

@@ -1,8 +1,10 @@
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
+    App, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString, Styled,
+    Window, div, prelude::FluentBuilder, px,
 };
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
-use rise_ui::main_text::MainText;
+use rise_ui::main_text::{MainText, TextAlignT};
+use rise_ui::official_badge::OfficialBadge;
 use rise_ui::swiftui::lifecycle::use_task;
 
 use crate::core::ui::custom_emoji_glyph::{CustomEmojiGlyph, CustomEmojiGlyphMetrics};
@@ -10,6 +12,7 @@ use crate::core::ui::custom_emoji_resource_warmup::CustomEmojiResourceWarmup;
 use crate::core::ui::custom_emoji_stickers_hooks::custom_emoji_stickers_hooks;
 use crate::core::ui::premium_auth_hooks::PremiumAuthHooks;
 use crate::core::ui::premium_diamond::PremiumDiamond;
+use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::modules::chat::stores::message::message_actions::message_types::MessageReaction;
 use crate::modules::stickers::stores::stickers::stickers_actions::stickers_types::StickerAssetType;
 
@@ -176,5 +179,97 @@ impl RenderOnce for PremiumBadge {
             .flex()
             .items_center()
             .child(content)
+    }
+}
+
+/// name in its premium color then the official and premium marks, one look in every people list
+#[derive(IntoElement)]
+pub struct UserNameWithBadges {
+    user_id: Option<SharedString>,
+    name: SharedString,
+    is_official: bool,
+    is_premium: bool,
+    emoji: Option<SharedString>,
+    name_color: Option<SharedString>,
+    font_size: f32,
+    font_weight: FontWeight,
+    badge_size: f32,
+}
+
+impl UserNameWithBadges {
+    pub fn new(user_id: Option<SharedString>, name: impl Into<SharedString>) -> Self {
+        Self {
+            user_id,
+            name: name.into(),
+            is_official: false,
+            is_premium: false,
+            emoji: None,
+            name_color: None,
+            font_size: 16.0,
+            font_weight: FontWeight::SEMIBOLD,
+            badge_size: 14.0,
+        }
+    }
+
+    pub fn official(mut self, is_official: bool) -> Self {
+        self.is_official = is_official;
+        self
+    }
+
+    pub fn premium(mut self, is_premium: bool, emoji: Option<String>, name_color: Option<String>) -> Self {
+        self.is_premium = is_premium;
+        self.emoji = emoji.map(SharedString::from);
+        self.name_color = name_color.map(SharedString::from);
+        self
+    }
+
+    pub fn font(mut self, size: f32, weight: FontWeight) -> Self {
+        self.font_size = size;
+        self.font_weight = weight;
+        self
+    }
+
+    pub fn badge_size(mut self, size: f32) -> Self {
+        self.badge_size = size;
+        self
+    }
+}
+
+impl RenderOnce for UserNameWithBadges {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let user_id = self.user_id.as_deref().filter(|user_id| !user_id.is_empty());
+        let is_premium = PremiumBadgeSource::is_premium(user_id, self.is_premium, cx);
+        let is_own = user_id.is_some_and(|user_id| PremiumAuthHooks::is_current_user(user_id, cx));
+        let color = if is_own {
+            PremiumNameColor::color_for_user(user_id, None, cx)
+        } else if is_premium {
+            PremiumNameColor::parse(self.name_color.as_deref())
+        } else {
+            None
+        };
+        let badge_size = self.badge_size;
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .min_w_0()
+            .max_w_full()
+            .child(
+                div().min_w_0().overflow_hidden().child(
+                    MainText::new(self.name)
+                        .px(self.font_size)
+                        .font_weight(self.font_weight)
+                        .tac(TextAlignT::Left)
+                        .number_of_lines(1)
+                        .color(color),
+                ),
+            )
+            .when(self.is_official, |line| {
+                line.child(div().flex_none().child(OfficialBadge::new().size(px(badge_size))))
+            })
+            .when(is_premium, |line| {
+                line.child(PremiumBadge::new().user_id(self.user_id.clone()).emoji(self.emoji.clone()).size(badge_size))
+            })
     }
 }

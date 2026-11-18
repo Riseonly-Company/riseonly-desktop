@@ -11,12 +11,14 @@ use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_ui::{IconUi, MainText};
 
 use crate::app::router::navigation_types::RiseRTCRoomTarget;
+use crate::core::desktop_platform::tray_call_hooks::TrayCallState;
 use crate::core::lib::sai::core::websocket::sai_web_socket_manager::SaiWebSocketManager;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
 use crate::modules::rtc::engine::rise_rtc_call_system_hooks::RiseRTCCallSystemHooks;
+use crate::modules::rtc::engine::rise_rtc_domain::RiseRTCDomain;
 use crate::modules::rtc::engine::rise_rtc_engine_models::{
-    RiseRTCCallStateExt, RiseRTCConnectionState, RiseRTCParticipantRole, RiseRTCRoomMode, RiseRTCScreenShareQuality,
+    RiseRTCCallStateExt, RiseRTCConnectionState, RiseRTCParticipantRole, RiseRTCRoomMode,
 };
 use crate::modules::rtc::media::rise_rtc_audio_settings::RiseMicrophoneTestHush;
 use crate::modules::rtc::media::rise_rtc_media_presentation::RiseRTCMediaPresentation;
@@ -61,13 +63,14 @@ struct RiseRTCRailCallState {
     screen_share_enabled: bool,
     can_publish: bool,
     video_enabled: bool,
+    server_silenced: bool,
+    server_deafened: bool,
+    camera_blocked: bool,
+    screen_share_blocked: bool,
 }
 
 pub struct RiseRTCRailCallCard {
-    rtc: gpui::Entity<RTCServicesStore>,
     interactions: gpui::Entity<RTCInteractionsStore>,
-    system_calls: gpui::Entity<RiseRTCSystemCallPresentationStore>,
-    socket: gpui::Entity<SaiWebSocketManager>,
     state: Option<RiseRTCRailCallState>,
     _subscriptions: Vec<gpui::Subscription>,
 }
@@ -84,24 +87,26 @@ impl RiseRTCRailCallCard {
             cx.observe(&socket, |this, _, cx| this.refresh(cx)),
             cx.observe_global::<RiseMicrophoneTestHush>(|_, cx| cx.notify()),
         ];
-        let mut card = Self { rtc, interactions, system_calls, socket, state: None, _subscriptions: subscriptions };
-        card.state = card.resolve(cx);
-        card
+        let state = Self::resolve(cx);
+        Self { interactions, state, _subscriptions: subscriptions }
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let state = self.resolve(cx);
+        let state = Self::resolve(cx);
         if state != self.state {
             self.state = state;
             cx.notify();
         }
     }
 
-    fn resolve(&self, cx: &mut App) -> Option<RiseRTCRailCallState> {
-        let rtc = self.rtc.read(cx);
+    fn resolve(cx: &mut App) -> Option<RiseRTCRailCallState> {
+        let rtc = RTCServicesStore::shared(cx);
+        let system_calls = RiseRTCSystemCallPresentationStore::shared(cx);
+        let socket_connected = SaiWebSocketManager::shared(cx).read(cx).is_connected();
+        let rtc = rtc.read(cx);
         let target = match rtc.room_presentation_target().cloned() {
             Some(target) => target,
-            None => self.active_direct_call_target(cx)?,
+            None => Self::active_direct_call_target(&system_calls, cx)?,
         };
         let direct = matches!(target, RiseRTCRoomTarget::DirectCall { .. });
         let room = rtc
@@ -113,7 +118,7 @@ impl RiseRTCRailCallCard {
         let room_id = room.map(|room| room.config.room_id.clone()).unwrap_or_default();
         let video_enabled = direct || room.is_some_and(|room| room.config.video_enabled);
         let participant = room.and_then(|room| room.self_participant.clone());
-        let has_video = direct && self.direct_call_has_video(&target, cx);
+        let has_video = direct && Self::direct_call_has_video(&system_calls, &target, cx);
         let silenced = participant.as_ref().is_some_and(|participant| participant.is_server_silenced());
         let server_deafened = participant.as_ref().is_some_and(|participant| participant.server_deafened);
         let can_publish = !silenced
@@ -126,7 +131,7 @@ impl RiseRTCRailCallCard {
         let deafened = server_deafened || participant.as_ref().is_some_and(|participant| participant.deafened);
         let camera_enabled = participant.as_ref().map_or(has_video, |participant| participant.camera_enabled);
         let screen_share_enabled = participant.as_ref().is_some_and(|participant| participant.screen_share_enabled);
-        let status = Self::status(room.is_some(), rtc.connection_state(cx), self.socket.read(cx).is_connected());
+        let status = Self::status(room.is_some(), rtc.connection_state(cx), socket_connected);
         let title = Self::title(&target, cx);
         Some(RiseRTCRailCallState {
             target,
@@ -139,6 +144,10 @@ impl RiseRTCRailCallCard {
             screen_share_enabled,
             can_publish,
             video_enabled,
+            server_silenced: silenced,
+            server_deafened,
+            camera_blocked: participant.as_ref().is_some_and(|participant| participant.server_camera_blocked),
+            screen_share_blocked: participant.as_ref().is_some_and(|participant| participant.server_screen_share_blocked),
         })
     }
 
@@ -171,8 +180,11 @@ impl RiseRTCRailCallCard {
         }
     }
 
-    fn active_direct_call_target(&self, cx: &App) -> Option<RiseRTCRoomTarget> {
-        let system_calls = self.system_calls.read(cx);
+    fn active_direct_call_target(
+        system_calls: &gpui::Entity<RiseRTCSystemCallPresentationStore>,
+        cx: &App,
+    ) -> Option<RiseRTCRoomTarget> {
+        let system_calls = system_calls.read(cx);
         system_calls
             .calls()
             .iter()
@@ -184,11 +196,15 @@ impl RiseRTCRailCallCard {
             .map(|call_id| RiseRTCRoomTarget::DirectCall { call_id })
     }
 
-    fn direct_call_has_video(&self, target: &RiseRTCRoomTarget, cx: &App) -> bool {
+    fn direct_call_has_video(
+        system_calls: &gpui::Entity<RiseRTCSystemCallPresentationStore>,
+        target: &RiseRTCRoomTarget,
+        cx: &App,
+    ) -> bool {
         let RiseRTCRoomTarget::DirectCall { call_id } = target else {
             return false;
         };
-        self.system_calls
+        system_calls
             .read(cx)
             .calls()
             .iter()
@@ -228,8 +244,66 @@ impl RiseRTCRailCallCard {
     }
 
     /// call id for the microphone, only a call the rtc list holds goes through the system call hooks
-    fn microphone_call_id(&self, target: &RiseRTCRoomTarget, cx: &App) -> Option<String> {
-        Self::direct_call_id(target).filter(|call_id| self.rtc.read(cx).call(call_id, cx).is_some())
+    fn microphone_call_id(target: &RiseRTCRoomTarget, cx: &mut App) -> Option<String> {
+        let rtc = RTCServicesStore::shared(cx);
+        Self::direct_call_id(target).filter(|call_id| rtc.read(cx).call(call_id, cx).is_some())
+    }
+
+    pub(crate) fn tray_state(cx: &mut App) -> Option<TrayCallState> {
+        let state = Self::resolve(cx)?;
+        Some(TrayCallState {
+            microphone_enabled: state.microphone_enabled,
+            can_use_microphone: state.can_publish,
+            deafened: state.deafened,
+        })
+    }
+
+    pub(crate) fn tray_toggle_microphone(cx: &mut App) {
+        if let Some(state) = Self::resolve(cx).filter(|state| state.can_publish) {
+            Self::flip_microphone(&state, cx);
+        }
+    }
+
+    pub(crate) fn tray_toggle_deafened(cx: &mut App) {
+        if let Some(state) = Self::resolve(cx) {
+            Self::flip_deafened(&state, cx);
+        }
+    }
+
+    pub(crate) fn tray_leave(cx: &mut App) {
+        if let Some(state) = Self::resolve(cx) {
+            Self::leave_call(state, cx);
+        }
+    }
+
+    fn flip_microphone(state: &RiseRTCRailCallState, cx: &mut App) {
+        RTCInteractionsStore::shared(cx).update(cx, |interactions, _| interactions.forget_microphone_before_deafen());
+        let call_id = Self::microphone_call_id(&state.target, cx);
+        let task = RiseRTCRoomScreenView::apply_microphone(!state.microphone_enabled, call_id, cx);
+        Self::settle(task, cx);
+    }
+
+    fn flip_deafened(state: &RiseRTCRailCallState, cx: &mut App) {
+        let interactions = RTCInteractionsStore::shared(cx);
+        let deafened = !state.deafened;
+        let restores_microphone = interactions.update(cx, |interactions, cx| {
+            if deafened {
+                interactions.remember_microphone_before_deafen(state.microphone_enabled, cx);
+                false
+            } else {
+                interactions.take_microphone_before_deafen(cx) == Some(true) && state.can_publish
+            }
+        });
+        let call_id = Self::microphone_call_id(&state.target, cx);
+        let set_deafened = interactions.update(cx, |interactions, cx| interactions.set_deafened(deafened, cx));
+        let task = cx.spawn(async move |cx| {
+            set_deafened.await?;
+            if restores_microphone {
+                cx.update(|cx| RiseRTCRoomScreenView::apply_microphone(true, call_id, cx)).await?;
+            }
+            Ok(())
+        });
+        Self::settle(task, cx);
     }
 
     fn open_call(target: RiseRTCRoomTarget, cx: &mut App) {
@@ -250,7 +324,7 @@ impl RiseRTCRailCallCard {
                 cx.update(|cx| {
                     if !RiseRTCDeviceRefusal::present_settings_alert(&error, cx) {
                         Notifier::send(
-                            tr("rtc_action_failed"),
+                            RiseRTCDomain::desktop_failure_text(&error).unwrap_or_else(|| tr("rtc_action_failed")),
                             NotifierSendOptions {
                                 r#type: NotifierType::Error,
                                 position: NotifierPosition::Top,
@@ -266,39 +340,15 @@ impl RiseRTCRailCallCard {
     }
 
     fn toggle_microphone(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
-            return;
-        };
-        let enabled = !state.microphone_enabled;
-        self.interactions.update(cx, |interactions, _| interactions.forget_microphone_before_deafen());
-        let call_id = self.microphone_call_id(&state.target, cx);
-        let task = RiseRTCRoomScreenView::apply_microphone(enabled, call_id, cx);
-        Self::settle(task, cx);
+        if let Some(state) = self.state.clone() {
+            Self::flip_microphone(&state, cx);
+        }
     }
 
     fn toggle_deafened(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
-            return;
-        };
-        let deafened = !state.deafened;
-        let restores_microphone = self.interactions.update(cx, |interactions, cx| {
-            if deafened {
-                interactions.remember_microphone_before_deafen(state.microphone_enabled, cx);
-                false
-            } else {
-                interactions.take_microphone_before_deafen(cx) == Some(true) && state.can_publish
-            }
-        });
-        let call_id = self.microphone_call_id(&state.target, cx);
-        let set_deafened = self.interactions.update(cx, |interactions, cx| interactions.set_deafened(deafened, cx));
-        let task = cx.spawn(async move |_, cx| {
-            set_deafened.await?;
-            if restores_microphone {
-                cx.update(|cx| RiseRTCRoomScreenView::apply_microphone(true, call_id, cx)).await?;
-            }
-            Ok(())
-        });
-        Self::settle(task, cx);
+        if let Some(state) = self.state.clone() {
+            Self::flip_deafened(&state, cx);
+        }
     }
 
     fn toggle_camera(&mut self, cx: &mut Context<Self>) {
@@ -317,23 +367,28 @@ impl RiseRTCRailCallCard {
             return;
         };
         let task = self.interactions.update(cx, |interactions, cx| {
-            interactions.set_screen_share(!state.screen_share_enabled, true, RiseRTCScreenShareQuality::Balanced, cx)
+            let quality = interactions.remembered_stream_quality(cx);
+            interactions.set_screen_share(!state.screen_share_enabled, true, quality, cx)
         });
         Self::settle(task, cx);
     }
 
-    /// close_room of the room screen, optimistic so the card and window go at once
     fn leave(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
-            return;
-        };
+        if let Some(state) = self.state.clone() {
+            Self::leave_call(state, cx);
+        }
+    }
+
+    /// close_room of the room screen, optimistic so the card and window go at once
+    fn leave_call(state: RiseRTCRailCallState, cx: &mut App) {
+        let interactions = RTCInteractionsStore::shared(cx);
         RiseRTCNavigationGate::mark_self_in_voice_channel(&state.target, false, cx);
-        self.interactions.update(cx, |interactions, cx| interactions.dismiss_room_presentation(cx));
+        interactions.update(cx, |interactions, cx| interactions.dismiss_room_presentation(cx));
+        let rtc = RTCServicesStore::shared(cx);
         let open_call = Self::direct_call_id(&state.target)
-            .filter(|call_id| self.rtc.read(cx).call(call_id, cx).is_none_or(|call| !call.state.is_terminal()));
-        let interactions = self.interactions.clone();
+            .filter(|call_id| rtc.read(cx).call(call_id, cx).is_none_or(|call| !call.state.is_terminal()));
         let room_id = state.room_id;
-        cx.spawn(async move |_, cx| match open_call {
+        cx.spawn(async move |cx| match open_call {
             Some(call_id) => {
                 let request = cx.update(|cx| RiseRTCCallSystemHooks::request_end_server_call_id(call_id.clone(), cx));
                 let handled_by_system = request.await.unwrap_or(false);
@@ -356,7 +411,8 @@ impl RiseRTCRailCallCard {
         .detach();
     }
 
-    /// dock inks, red for silenced or leaving and lit for a camera or share that is on
+    /// dock inks, primary for a moderator lock and red for silenced or leaving
+    /// lit for a camera or share that is on
     #[allow(clippy::too_many_arguments)]
     fn control(
         &self,
@@ -364,20 +420,23 @@ impl RiseRTCRailCallCard {
         system_image: &'static str,
         label: String,
         silenced: bool,
+        imposed: bool,
         lit: bool,
         enabled: bool,
         theme: &rise_theme::AppTheme,
         action: fn(&mut Self, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let tint: Option<Hsla> = if silenced {
+        let tint: Option<Hsla> = if imposed {
+            Some(theme.primary._100)
+        } else if silenced {
             Some(theme.semantic.error_100)
         } else if lit {
             Some(theme.text.primary)
         } else {
             None
         };
-        let glyph_color = if silenced {
+        let glyph_color = if silenced || imposed {
             white()
         } else if lit {
             theme.bg._000
@@ -449,6 +508,7 @@ impl Render for RiseRTCRailCallCard {
             if microphone_enabled { "mic.fill" } else { "mic.slash.fill" },
             tr("rtc_microphone"),
             !microphone_enabled,
+            !microphone_enabled && state.server_silenced,
             false,
             state.can_publish,
             &theme,
@@ -460,6 +520,7 @@ impl Render for RiseRTCRailCallCard {
             if deafened { RiseSymbol::DEAFENED } else { "headphones" },
             tr(if deafened { "rtc_undeafen" } else { "rtc_deafen" }),
             deafened,
+            deafened && state.server_deafened,
             false,
             true,
             &theme,
@@ -471,8 +532,9 @@ impl Render for RiseRTCRailCallCard {
             if state.screen_share_enabled { "rectangle.on.rectangle.slash" } else { "rectangle.on.rectangle" },
             tr("rtc_screen_share"),
             false,
+            false,
             state.screen_share_enabled,
-            state.can_publish,
+            state.can_publish && (state.screen_share_enabled || !state.screen_share_blocked),
             &theme,
             Self::toggle_screen_share,
             cx,
@@ -482,8 +544,9 @@ impl Render for RiseRTCRailCallCard {
             if state.camera_enabled { "video.fill" } else { "video.slash.fill" },
             tr("rtc_camera"),
             false,
+            !state.camera_enabled && state.camera_blocked,
             state.camera_enabled,
-            state.can_publish && state.video_enabled,
+            state.can_publish && state.video_enabled && (state.camera_enabled || !state.camera_blocked),
             &theme,
             Self::toggle_camera,
             cx,
@@ -493,6 +556,7 @@ impl Render for RiseRTCRailCallCard {
             "phone.down.fill",
             tr("rtc_leave"),
             true,
+            false,
             false,
             true,
             &theme,

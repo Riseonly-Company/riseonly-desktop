@@ -564,6 +564,24 @@ impl ListState {
         self.0.borrow_mut().scroll_handler = Some(Box::new(handler))
     }
 
+    pub(crate) fn glide_key(&self) -> usize {
+        Rc::as_ptr(&self.0) as *const () as usize
+    }
+
+    pub(crate) fn scroll_by_wheel(
+        &self,
+        height: Pixels,
+        delta: Point<Pixels>,
+        view: EntityId,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let scroll_top = self.logical_scroll_top();
+        self.0
+            .borrow_mut()
+            .scroll(&scroll_top, height, delta, view, window, cx);
+    }
+
     /// Get the current scroll offset, in terms of the list's items.
     pub fn logical_scroll_top(&self) -> ListOffset {
         self.0.borrow().logical_scroll_top()
@@ -1644,6 +1662,18 @@ impl Element for List {
         let mut accumulated_scroll_delta = ScrollDelta::default();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hitbox_id.should_handle_scroll(window) {
+                if crate::wheel_glides(&event.delta) {
+                    let delta = event.delta.pixel_delta(crate::WHEEL_LINE_HEIGHT);
+                    crate::wheel_glide::glide_list(
+                        list_state.clone(),
+                        height,
+                        delta,
+                        current_view,
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);
                 let pixel_delta = accumulated_scroll_delta.pixel_delta(px(20.));
                 list_state.0.borrow_mut().scroll(

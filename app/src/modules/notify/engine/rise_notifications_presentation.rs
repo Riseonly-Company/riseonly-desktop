@@ -14,6 +14,7 @@ use rise_notify::{NOTIFICATION_COPY, NOTIFICATION_TYPES, ROUTE_RULES, RouteKind}
 use crate::core::lib::canon_format::{CalendarBand, RiseFormat};
 use crate::core::push_notifications::admin_console_link::AdminConsoleLink;
 use crate::modules::notify::engine::core::rise_announcements_resource_repository::RiseAnnouncementsCacheSource;
+use crate::modules::user::stores::user_achievements::user_achievements_interactions::user_achievements_interactions::UserAchievementsInteractionsStore;
 use crate::modules::notify::stores::notify_actions::notify_types::{
     NotificationActorItem, NotificationItem, NotificationKind, NotifyCopyCanon,
 };
@@ -229,9 +230,20 @@ impl RiseNotificationsPresentation {
         if next == self.snapshot {
             return true;
         }
+        let had_achievements = Self::names_achievements(&self.snapshot);
         self.snapshot = next;
+        if !had_achievements && Self::names_achievements(&self.snapshot) {
+            cx.defer(|cx| {
+                UserAchievementsInteractionsStore::shared(cx)
+                    .update(cx, |store, cx| store.resolve_shared_achievement(None, cx));
+            });
+        }
         cx.notify();
         true
+    }
+
+    fn names_achievements(snapshot: &RiseNotificationsSnapshot) -> bool {
+        snapshot.sections.iter().flat_map(|section| section.rows.iter()).any(|row| row.item.achievement_id().is_some())
     }
 
     pub fn deactivate(&mut self, account_id: &str, session_id: Uuid, cx: &mut Context<Self>) {
@@ -436,9 +448,12 @@ impl RiseNotificationsSnapshotBuilder {
         };
         let is_moderation_verdict = item.kind == NotificationKind::Moderation
             && !trimming_whitespaces_and_newlines(&item.title).is_empty();
+        let is_named_achievement =
+            item.achievement_id().is_some() && !trimming_whitespaces_and_newlines(&item.title).is_empty();
         if item.kind == NotificationKind::Announcement
             || item.is_admin_alert()
             || is_moderation_verdict
+            || is_named_achievement
         {
             return RiseNotificationRow {
                 id: item.id.clone(),

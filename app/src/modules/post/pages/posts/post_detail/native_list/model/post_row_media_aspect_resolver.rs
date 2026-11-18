@@ -94,10 +94,11 @@ impl PostRowAspectMemo {
     }
 }
 
-/// nil bucket load shared with the list prefetch, only its aspect is kept
+/// slide bucket load shared with the row and the list prefetch, only its aspect is kept
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PostRowAspectProbeRequest {
     pub url: String,
+    pub pixel_dimension: Option<i64>,
     pub is_own: bool,
     pub account_user_id: Option<String>,
     pub account_epoch: Option<String>,
@@ -220,7 +221,13 @@ impl PostRowMediaAspectResolver {
                 None => {
                     natural.push(None);
                     if index == 0 {
-                        probe = Some(Self::probe_request(source, seed, account_user_id, account_epoch));
+                        probe = Some(Self::probe_request(
+                            source,
+                            PostFeedMediaPrefetchPolicy::slide_pixel_dimension(slide.is_video()),
+                            seed,
+                            account_user_id,
+                            account_epoch,
+                        ));
                     }
                 }
             }
@@ -271,18 +278,29 @@ impl PostRowMediaAspectResolver {
         match PostRowAspectMemo::shared().outcome(&source, account_user_id, account_epoch) {
             Some(PostRowAspectOutcome::Aspect(aspect)) => resolution(Some(aspect), None),
             Some(PostRowAspectOutcome::Failed) => resolution(server, None),
-            None => resolution(server, Some(Self::probe_request(source, seed, account_user_id, account_epoch))),
+            None => resolution(
+                server,
+                Some(Self::probe_request(
+                    source,
+                    Some(ShortsMediaPrefetchPolicy::POSTER_PIXEL_DIMENSION),
+                    seed,
+                    account_user_id,
+                    account_epoch,
+                )),
+            ),
         }
     }
 
     fn probe_request(
         url: String,
+        pixel_dimension: Option<i64>,
         seed: &PostRowSeed,
         account_user_id: Option<&str>,
         account_epoch: Option<&str>,
     ) -> PostRowAspectProbeRequest {
         PostRowAspectProbeRequest {
             url,
+            pixel_dimension,
             is_own: seed.is_own,
             account_user_id: account_user_id.map(str::to_owned),
             account_epoch: account_epoch.map(str::to_owned),
@@ -322,7 +340,7 @@ impl PostRowAspectProbe {
         PROBE_SHARED.with(Rc::clone)
     }
 
-    /// loads at the prefetch nil bucket so it joins the prefetch load instead of downloading twice
+    /// loads at the slide bucket so it joins the row and prefetch load instead of decoding twice
     pub async fn resolve(&self, request: PostRowAspectProbeRequest, cx: &AsyncApp) -> PostRowAspectOutcome {
         let account_user_id = request.account_user_id.as_deref();
         let account_epoch = request.account_epoch.as_deref();
@@ -342,7 +360,7 @@ impl PostRowAspectProbe {
                     true,
                     load.account_user_id.clone(),
                     load.account_epoch.clone(),
-                    None,
+                    load.pixel_dimension,
                     PostMediaCachePolicy::FEED_IMAGE_POLICY,
                     CleverImageWorkLane::Speculative,
                     cx,

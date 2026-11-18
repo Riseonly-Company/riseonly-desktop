@@ -107,8 +107,16 @@ impl ChatScreen {
         )
     }
 
+    pub(in super::super) fn can_load_bot_chat_metadata(&self, cx: &mut App) -> bool {
+        let chat = self.resolved_chat(cx);
+        chat.is_active_bot_chat() && BotTagRules::is_valid(&self.bot_chat_tag(cx)) && !chat.participant.id.is_empty()
+    }
+
     pub(in super::super) fn bot_chat_menu_status(&self, cx: &mut App) -> SaiWsSliceStatus {
         if !self.bot_public_commands(cx).is_empty() || !self.bot_public_mini_apps(cx).is_empty() {
+            return SaiWsSliceStatus::Fulfilled;
+        }
+        if !self.can_load_bot_chat_metadata(cx) {
             return SaiWsSliceStatus::Fulfilled;
         }
         let actions = BotActionsStore::shared(cx);
@@ -242,7 +250,7 @@ impl ChatScreen {
         self.bot_menu_starts_expanded = BotChatMenuPresentationContract::starts_expanded(0.0);
         self.close_picker(cx);
         resign_chat_keyboard(window, cx);
-        if self.bot_chat_menu_status(cx) == SaiWsSliceStatus::Rejected {
+        if matches!(self.bot_chat_menu_status(cx), SaiWsSliceStatus::Rejected | SaiWsSliceStatus::Idle) {
             self.load_bot_chat_metadata(cx);
         }
         self.show_bot_chat_menu = true;
@@ -503,11 +511,11 @@ impl ChatScreen {
     }
 
     pub(in super::super) fn load_bot_chat_metadata(&mut self, cx: &mut Context<Self>) {
-        let chat = self.resolved_chat(cx);
-        let tag = self.bot_chat_tag(cx);
-        if !chat.is_active_bot_chat() || !BotTagRules::is_valid(&tag) || chat.participant.id.is_empty() {
+        if !self.can_load_bot_chat_metadata(cx) {
             return;
         }
+        let chat = self.resolved_chat(cx);
+        let tag = self.bot_chat_tag(cx);
         let chat_id = self.resolved_chat_id(cx);
         let bot_user_id = chat.participant.id;
         bot_interactions(cx, |store, cx| {
