@@ -120,6 +120,7 @@ jobs:
           DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && format('{0}/desktop-ci', runner.temp) || '' }}
           DESKTOP_CI_MEMORY: 14g
           DESKTOP_CI_JOBS: 3
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
@@ -188,6 +189,7 @@ jobs:
           WIN_ARCH: ${{ matrix.arch }}
           DESKTOP_CI_MEMORY: 14g
           DESKTOP_CI_JOBS: 3
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
