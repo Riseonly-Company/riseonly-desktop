@@ -149,7 +149,7 @@ A failed hook is a warning, the feed is already out.
   msvc, mingw-w64 and llvm-mingw for the Windows FFmpeg dlls). Windows arm64 is cross compiled
   there too (`WIN_ARCH=aarch64`); the two Windows jobs run one after another. Linux arm64 builds
   on the GitHub hosted `ubuntu-24.04-arm` runner in the same image (override with the
-  `DESKTOP_LINUX_ARM_RUNNER` variable), with a 14 GB container cap. A release build there runs 3 rustc at a time (`DESKTOP_CI_JOBS`): the app crates with one codegen unit each take several GB, and 8 of them at once ran out of the 14 GB. One runner per platform so
+  `DESKTOP_LINUX_ARM_RUNNER` variable), with a 14 GB container cap. A release build there runs 3 rustc at a time (`DESKTOP_CI_JOBS`) and splits each crate into 16 codegen units (`CARGO_PROFILE_RELEASE_CODEGEN_UNITS`): with one unit `riseonly-data-mid` alone outgrew the 14 GB container, which has no swap. Thin LTO still optimizes across them; the Mac builds keep one unit. One runner per platform so
   both build at once:
 
   ```
