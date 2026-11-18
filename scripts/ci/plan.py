@@ -31,7 +31,7 @@ REBUILD_LABELS = (
 )
 FLOW = {"staging": "development", "main": "staging"}
 NOT_COMPILED = (".github/workflows/", "docs/", "scripts/ci/", "scripts/bundle-")
-COMPILE_SCRIPTS = ("scripts/ci/build-", "scripts/ci/in-toolchain.sh", "scripts/ci/toolchain/")
+COMPILE_SCRIPTS = ("scripts/ci/build-",)
 PAYLOAD_ASSET = re.compile(r"([a-z]+-[a-z0-9_]+)\.tar\.gz")
 
 

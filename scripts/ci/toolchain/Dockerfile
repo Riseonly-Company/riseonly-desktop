@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg git rsync python3 build-essential pkg-config cmake ninja-build \
         libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
         libfontconfig-dev libfreetype-dev libvulkan-dev libvulkan1 libasound2-dev libdbus-1-dev \
-        libssl-dev libgbm-dev libdrm-dev libegl-dev libgl-dev \
+        libssl-dev libgbm-dev libdrm-dev libva-dev libegl-dev libgl-dev \
         libwebkit2gtk-4.1-dev libgtk-3-dev libpipewire-0.3-dev libspa-0.2-dev \
         patchelf imagemagick file desktop-file-utils zip unzip xz-utils binutils squashfs-tools \
         mingw-w64 nasm \
