@@ -10,6 +10,12 @@ desktop="$(cd "$here/../.." && pwd)"
 workspace="$(cd "$desktop/.." && pwd)"
 [ -d "$workspace/riseonly-tools" ] || { echo "riseonly-tools is not checked out beside riseonly-desktop" >&2; exit 2; }
 
+dockerfile="$desktop/scripts/ci/toolchain/Dockerfile"
+rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$desktop/rust-toolchain.toml")
+toolchain=$( (cat "$dockerfile"; echo "$rust") | sha256sum | cut -c1-12)
+image="riseonly-desktop-toolchain:$toolchain"
+cache="$cache-$toolchain"
+
 root=${DESKTOP_CI_CACHE:-/srv/ci/desktop}
 mkdir -p "$root/$cache" "$root/cargo" "$root/xwin" "$root/home"
 
@@ -25,9 +31,6 @@ if [ "$(free_gb)" -lt "$min_free" ]; then
     done
 fi
 
-dockerfile="$desktop/scripts/ci/toolchain/Dockerfile"
-rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$desktop/rust-toolchain.toml")
-image="riseonly-desktop-toolchain:$( (cat "$dockerfile"; echo "$rust") | sha256sum | cut -c1-12)"
 if ! docker image inspect "$image" >/dev/null 2>&1; then
     docker build --quiet --build-arg "RUST_TOOLCHAIN=$rust" --tag "$image" "$(dirname "$dockerfile")" >/dev/null
 fi
