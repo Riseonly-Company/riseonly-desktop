@@ -56,7 +56,7 @@ exec docker run --rm --init \
     -e HOME=/home/ci \
     -e CARGO_HOME=/cargo \
     -e CARGO_TARGET_DIR=/target \
-    -e CARGO_BUILD_JOBS="$(nproc)" \
+    -e CARGO_BUILD_JOBS="${DESKTOP_CI_JOBS:-$(nproc)}" \
     "${forward[@]}" \
     -w /w/riseonly-desktop \
     "$image" "$@"
