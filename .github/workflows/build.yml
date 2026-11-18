@@ -2,13 +2,13 @@ name: build
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, labeled, ready_for_review]
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.event.pull_request.number }}
+  group: build-${{ github.event.pull_request.number }}-${{ ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || contains(fromJSON('["build","tests","release-profile","macos","macos-silicon","macos-intel","macos-local","linux","linux-x64","linux-arm64","win","win-x64","win-arm64","env-dev","env-staging","env-prod"]'), github.event.label.name)) && 'build' || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -62,6 +62,7 @@ jobs:
         name: Plan
         env:
           MACOS_RUNNER: ${{ vars.DESKTOP_MACOS_RUNNER }}
+          STAGING_RELEASES: ${{ vars.DESKTOP_STAGING_RELEASES }}
         run: python3 scripts/ci/plan.py build | tee -a "$GITHUB_STEP_SUMMARY"
 
   lint:

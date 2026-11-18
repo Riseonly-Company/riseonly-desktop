@@ -106,22 +106,22 @@ for pair in "${served[@]}"; do
     echo "the cdn serves $url"
 done
 
-notes="$work/notes.md"
-echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT" > "$notes"
 if [ "$ENVIRONMENT" = production ]; then
-    gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
-        --title "$SLUG $VERSION" --notes-file "$notes" "${files[@]}"
-else
-    gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
-    gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --draft --prerelease \
-        --title "$SLUG $VERSION ($BUILD_NUMBER)" --notes-file "$notes" "${files[@]}"
+    notes="$work/notes.md"
+    echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT" > "$notes"
+    if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+        gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+    else
+        gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+            --title "$SLUG $VERSION" --notes-file "$notes" "${files[@]}"
+    fi
+    {
+        echo
+        gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets | sort_by(.name) | .[] | "- [\(.name)](\(.url))"'
+    } >> "$notes"
+    gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes" >/dev/null
 fi
-{
-    echo
-    gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-        --jq '.assets | sort_by(.name) | .[] | "- [\(.name)](\(.url))"'
-} >> "$notes"
-gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes" >/dev/null
 
 if [ -n "${BACKEND_RELEASE_HOOK:-}" ]; then
     FEED_URL="$feed_url" python3 - "$work/feed.json" "$VERSION" > "$work/hook.json" <<'PY'
@@ -149,10 +149,11 @@ PY
     fi
 fi
 
-{
-    echo "### $SLUG $VERSION ($BUILD_NUMBER), $ENVIRONMENT"
-    echo
-    echo "all versions: $index_url"
-    echo "feed: $feed_url"
-    for file in "${files[@]}"; do echo "- $base_url/$(basename "$file")"; done
-} >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+if [ "$ENVIRONMENT" = production ]; then
+    {
+        echo "### $SLUG $VERSION ($BUILD_NUMBER), $ENVIRONMENT"
+        echo
+        echo "all versions: $index_url"
+        for file in "${files[@]}"; do echo "- $base_url/$(basename "$file")"; done
+    } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+fi
