@@ -65,6 +65,10 @@ def archs(platform, labels):
     return picked or DEFAULT_ARCHS[platform]
 
 
+def staging_ships():
+    return os.environ.get("STAGING_RELEASES", "").strip().lower() == "on"
+
+
 def environment_of(kind, base, labels):
     if kind == "build":
         picked = [env for label, env in ENV_LABELS if label in labels]
@@ -72,6 +76,8 @@ def environment_of(kind, base, labels):
             sys.exit(f"pick one environment label, not {', '.join(label for label, _ in ENV_LABELS if label in labels)}")
         if picked:
             return picked[0]
+        if not staging_ships():
+            return "production"
     return "production" if base == "main" else "staging"
 
 
@@ -123,7 +129,7 @@ def level_of(labels):
     return next((level for label, level in RELEASE_LEVELS if label in labels), "patch")
 
 
-def published(environment):
+def history_of(environment):
     base = (os.environ.get("DOWNLOADS_BASE") or "https://cdn.riseonly.net/desktop").rstrip("/")
     request = urllib.request.Request(
         f"{base}/{environment}/releases.json?run={os.environ.get('GITHUB_RUN_ID', '0')}",
@@ -131,13 +137,21 @@ def published(environment):
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            history = json.load(response)
+            return json.load(response).get("releases", [])
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return []
         sys.exit(f"reading the {environment} release history failed with http {error.code}")
-    versions = (parse_version(release.get("version")) for release in history.get("releases", []))
+
+
+def published(environment):
+    versions = (parse_version(release.get("version")) for release in history_of(environment))
     return [version for version in versions if version]
+
+
+def already_shipped(version, targets, history=history_of):
+    release = next((r for r in history("production") if r.get("version") == version), None)
+    return sorted(set(targets) & set((release or {}).get("downloads", {})))
 
 
 def release_version(manifest, labels, history=published):
@@ -200,6 +214,8 @@ def decide(mode, event):
         return None, "merged without the deploy label, nothing ships", labels
     if FLOW.get(base) != head:
         return None, f"{head} into {base} is not a release flow (development into staging, staging into main)", labels
+    if base == "staging" and not staging_ships():
+        return None, "staging releases are switched off, the merge into main ships", labels
     return "release", "", labels
 
 
@@ -255,6 +271,11 @@ def main():
                         payloads[target], payload_names[target] = run, name
             else:
                 version = release_version(manifest, labels)
+        if kind == "release" and environment == "production":
+            targets = [f"{p}-{arch}" for p in picked for arch in archs(p, labels)]
+            shipped = already_shipped(version, targets)
+            if shipped:
+                sys.exit(f"::error::{version} is already in production for {', '.join(shipped)}: pick other platforms or change the sources")
         out.update({
             "run": "true",
             "platforms": json.dumps(picked),

@@ -64,17 +64,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MACOS_RUNNER: ${{ vars.DESKTOP_MACOS_RUNNER }}
           DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STAGING_RELEASES: ${{ vars.DESKTOP_STAGING_RELEASES }}
         run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: The version is new
-        if: steps.plan.outputs.run == 'true' && steps.plan.outputs.environment == 'production'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.plan.outputs.tag }}
-        run: |
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::$TAG is already released, bump [workspace.package] version in Cargo.toml"
-            exit 1
-          fi
 
   linux:
     needs: plan
@@ -127,7 +118,7 @@ jobs:
       - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
         env:
           DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && format('{0}/desktop-ci', runner.temp) || '' }}
-          DESKTOP_CI_MEMORY: ${{ matrix.arch == 'aarch64' && '14g' || '' }}
+          DESKTOP_CI_MEMORY: 14g
           PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist
@@ -148,8 +139,8 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: plan
-    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
+    needs: [plan, linux]
+    if: always() && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true' && needs.linux.result != 'failure' && needs.linux.result != 'cancelled'
     runs-on: [self-hosted, linux, x64, riseonly-desktop-windows]
     strategy:
       fail-fast: false
@@ -194,6 +185,7 @@ jobs:
       - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
         env:
           WIN_ARCH: ${{ matrix.arch }}
+          DESKTOP_CI_MEMORY: 14g
           PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
         run: |
           rm -rf riseonly-desktop/dist

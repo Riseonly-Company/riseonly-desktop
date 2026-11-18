@@ -38,6 +38,15 @@ later pushes. The labels are created by ci on the first pull request.
 
 Any other merge into `staging` or `main` (another head branch, no `deploy`) releases nothing.
 
+Staging releases are switched off: a merge into `staging` publishes nothing, a pull request build
+is a production app, and no staging build, draft or link shows up in the repository. Production
+then compiles on the merge into `main`. The repository variable `DESKTOP_STAGING_RELEASES=on`
+brings the staging step back; it publishes to the cdn only, never as a GitHub release.
+
+A production version can gain platforms later: a release whose platforms are not yet in that
+version adds its files to the same GitHub release and feed entry. A platform that is already there
+is refused, the plan names it.
+
 ## Versions
 
 Nobody edits the version by hand. A release into staging whose sources have no kept binary gets the
