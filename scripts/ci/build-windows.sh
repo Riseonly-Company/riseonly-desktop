@@ -86,6 +86,19 @@ for dll in "$ffmpeg"/bin/*.dll; do
     esac
 done
 tarball=$(sed -n 's/^source_tarball=//p' "$ffmpeg/BUILD_INFO.txt")
+# why: a prefix restored from the cache comes without the source tarball, which the LGPL bundle must carry
+if [ -n "$tarball" ] && [ ! -f "vendor/ffmpeg/$tarball" ]; then
+    if [ -f "$ffmpeg_cache.source/$tarball" ]; then
+        cp "$ffmpeg_cache.source/$tarball" "vendor/ffmpeg/$tarball"
+    else
+        pinned=$(sed -n 's/^FFMPEG_SHA256="${FFMPEG_SHA256:-\([0-9a-f]*\)}"$/\1/p' scripts/build-ffmpeg-lgpl.sh)
+        curl -fsSL --retry 5 -o "vendor/ffmpeg/$tarball" "https://ffmpeg.org/releases/$tarball"
+        echo "$pinned  vendor/ffmpeg/$tarball" | sha256sum -c - >/dev/null || { rm -f "vendor/ffmpeg/$tarball"; echo "FFmpeg source tarball hash mismatch" >&2; exit 1; }
+    fi
+fi
+if [ -n "$tarball" ] && [ -f "vendor/ffmpeg/$tarball" ] && [ ! -f "$ffmpeg_cache.source/$tarball" ]; then
+    mkdir -p "$ffmpeg_cache.source" && cp "vendor/ffmpeg/$tarball" "$ffmpeg_cache.source/$tarball"
+fi
 [ -n "$tarball" ] && [ -f "vendor/ffmpeg/$tarball" ] || { echo "FFmpeg source tarball not found; LGPL needs it shipped" >&2; exit 1; }
 mkdir -p "$out_dir/licenses/ffmpeg"
 cp "vendor/ffmpeg/$tarball" "$ffmpeg/BUILD_INFO.txt" "$out_dir/licenses/ffmpeg/"
