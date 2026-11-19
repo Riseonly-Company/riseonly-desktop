@@ -71,6 +71,7 @@ else
         mkdir -p "$shim"
         cat > "$shim/clang" <<SHIM
 #!/usr/bin/env bash
+case "\${0##*/}" in clang-cl*) exec "$real_clang" --driver-mode=cl "\$@" ;; esac
 out=()
 while [ \$# -gt 0 ]; do
     case "\$1" in
