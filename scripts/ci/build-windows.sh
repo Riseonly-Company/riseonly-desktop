@@ -64,7 +64,10 @@ else
     case "$mln_lib" in /*) MLN_CORE_LIBRARY_PATH="$mln_lib" ;; *) MLN_CORE_LIBRARY_PATH="$PWD/$mln_lib" ;; esac
     export MLN_CORE_LIBRARY_PATH
     export MLN_CORE_LIBRARY_HEADERS_PATH="$(dirname "$MLN_CORE_LIBRARY_PATH")/maplibre-native-headers.tar.gz"
-    env -u RISE_ENV cargo xwin build --locked --profile "$profile" --target "$triple" -p riseonly
+    # why: ring builds its aarch64 sources with plain clang, which rejects the clang-cl style /imsvc flags of the default backend
+    xwin_cc=clang-cl
+    [ "$arch" = aarch64 ] && xwin_cc=clang
+    env -u RISE_ENV XWIN_CROSS_COMPILER="$xwin_cc" cargo xwin build --locked --profile "$profile" --target "$triple" -p riseonly
     rm -rf "payload/windows-$arch"
     mkdir -p "payload/windows-$arch"
     cp "$exe" "payload/windows-$arch/riseonly.exe"
