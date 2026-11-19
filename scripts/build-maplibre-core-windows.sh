@@ -91,7 +91,10 @@ dep jpeg libjpeg-turbo-3.0.4 -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBO
 # tables are not, and lld-link stops on the duplicates.
 llvm-objcopy --redefine-sym jpeg_natural_order=rise_jpeg_natural_order \
   --redefine-sym jpeg_nbits_table=rise_jpeg_nbits_table "$P/lib/jpeg-static.lib"
-dep webp libwebp-1.4.0 -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF \
+# why: libwebp probes neon with -mfpu=neon, which clang-cl rejects for aarch64-pc-windows-msvc; arm64 has neon anyway
+webp_simd=()
+[ "$LIB_ARCH" = arm64 ] && webp_simd=(-DWEBP_ENABLE_SIMD=OFF)
+dep webp libwebp-1.4.0 ${webp_simd[@]+"${webp_simd[@]}"} -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF \
   -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF -DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_WEBPMUX=OFF -DWEBP_BUILD_EXTRAS=OFF
 dep uv libuv-1.49.2 -DLIBUV_BUILD_SHARED=OFF -DLIBUV_BUILD_TESTS=OFF -DLIBUV_BUILD_BENCH=OFF
 dep curl curl-8.10.1 -DCURL_USE_SCHANNEL=ON -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF -DCURL_ZLIB=ON -DBUILD_CURL_EXE=OFF \
