@@ -217,3 +217,13 @@ platform and a valid signature it shows the "Update: N" pill at the bottom of th
 the number of newer versions. A press downloads the file, checks its size and sha256, swaps it in
 (the bundle on macOS, the AppImage on Linux, the folder on Windows with the running exe renamed
 aside) and restarts. Installs it cannot replace (a deb, a read only volume) get no pill.
+
+## Known gaps
+
+- Windows arm64: the static MapLibre core does not build for `aarch64-pc-windows-msvc` yet (the
+  core build stops inside the libpng step). Release `win-x64` until it does; Windows on Arm runs the
+  x64 build under emulation.
+- Windows FFmpeg cache: a prefix restored from `$target/ffmpeg-windows-*` comes without
+  `vendor/ffmpeg/ffmpeg-<version>.tar.xz`, which the LGPL bundle must carry, so packaging stops
+  after a full compile. `scripts/ci/build-windows.sh` has to keep the tarball next to the cached
+  prefix and fetch it again (pinned sha256) when it is missing.
