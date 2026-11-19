@@ -220,7 +220,7 @@ aside) and restarts. Installs it cannot replace (a deb, a read only volume) get 
 
 ## Known gaps
 
-- 1.1.5 shipped for macOS and Linux first; Windows x64 joins 1.1.5 from the same sources, Windows arm64 waits for the MapLibre core.
+- 1.1.5 shipped for macOS and Linux first; Windows x64 shipped as 1.1.6 from the same sources (the FFmpeg tarball fix changed a build script), Windows arm64 joins 1.1.6 once the MapLibre core builds.
 - Windows arm64: the static MapLibre core does not build for `aarch64-pc-windows-msvc` yet (the
   core build stops inside the libpng step). Release `win-x64` until it does; Windows on Arm runs the
   x64 build under emulation.
