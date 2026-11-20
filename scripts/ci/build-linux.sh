@@ -71,7 +71,7 @@ esac
 cache=$({ ldconfig -p || /sbin/ldconfig -p || /usr/sbin/ldconfig -p; } 2>/dev/null)
 for soname in libpipewire-0.3.so.0 libva.so.2 libva-drm.so.2 libdrm.so.2; do
     [ -d "$fallback/$soname" ] || continue
-    printf '%s\n' "$cache" | grep -q "$soname (libc6,$tag" && continue
+    [[ "$cache" == *"$soname (libc6,$tag"* ]] && continue
     libs="$libs:$fallback/$soname"
     if [ "$soname" = libva.so.2 ] && [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
         drivers=""
