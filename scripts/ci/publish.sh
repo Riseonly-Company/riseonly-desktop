@@ -8,12 +8,6 @@ dist=${1:?usage: publish.sh <dist dir>}
 host=${BUNNY_STORAGE_HOST:-storage.bunnycdn.com}
 prefix=${STORAGE_PREFIX:-desktop}
 folder="$ENVIRONMENT/$VERSION-$BUILD_NUMBER"
-kept=$(curl -fsS -H "AccessKey: $BUNNY_STORAGE_KEY" "https://$host/$BUNNY_STORAGE_ZONE/$prefix/$folder/" || true)
-case "$kept" in
-    '' | '[]') ;;
-    *) folder="$folder.${GITHUB_RUN_NUMBER:-0}-${GITHUB_RUN_ATTEMPT:-1}" ;;
-esac
-base_url="${DOWNLOADS_BASE%/}/$folder"
 feed_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/feed.json"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work=$(mktemp -d)
@@ -21,6 +15,18 @@ trap 'rm -rf "$work"' EXIT
 
 mapfile -t files < <(find "$dist" -type f \( -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' \) | sort)
 [ "${#files[@]}" -gt 0 ] || { echo "nothing to publish under $dist" >&2; exit 1; }
+# why: platforms of one version publish one by one into the same folder; only a file name taken already moves us aside
+kept=$(curl -fsS -H "AccessKey: $BUNNY_STORAGE_KEY" "https://$host/$BUNNY_STORAGE_ZONE/$prefix/$folder/" || true)
+if printf '%s' "$kept" | python3 -c '
+import json, os, sys
+try:
+    taken = {entry.get("ObjectName") for entry in json.load(sys.stdin)}
+except ValueError:
+    taken = set()
+sys.exit(0 if taken & {os.path.basename(f) for f in sys.argv[1:]} else 1)
+' "${files[@]}"; then
+    folder="$folder.${GITHUB_RUN_NUMBER:-0}-${GITHUB_RUN_ATTEMPT:-1}"
+fi
 
 upload() {
     local file=$1 path=$2 type=$3 checksum
@@ -31,16 +37,35 @@ upload() {
     echo "uploaded $prefix/$path"
 }
 
+base_url="${DOWNLOADS_BASE%/}/$folder"
 for file in "${files[@]}"; do
     upload "$file" "$folder/$(basename "$file")" application/octet-stream
 done
 
-if curl -fsS --retry 2 "$feed_url?build=$BUILD_NUMBER" -o "$work/current.json"; then
-    echo "merging into the current feed"
-else
-    echo "no feed yet at $feed_url, starting one"
-    : > "$work/current.json"
-fi
+stored() {
+    curl -sS --retry 2 -o "$2" -w '%{http_code}' -H "AccessKey: $BUNNY_STORAGE_KEY" \
+        "https://$host/$BUNNY_STORAGE_ZONE/$prefix/$1"
+}
+mine() {
+    VERSION="$VERSION" python3 - "$1" "${files[@]}" <<'PY'
+import json, os, sys
+feed = json.load(open(sys.argv[1]))
+release = next((r for r in feed.get("releases", []) if r.get("version") == os.environ["VERSION"]), {})
+urls = {entry["url"].rsplit("/", 1)[-1] for kinds in release.get("downloads", {}).values() for entry in kinds.values()}
+sys.exit(0 if {os.path.basename(f) for f in sys.argv[2:]} <= urls else 1)
+PY
+}
+
+# why: other platforms of this version publish at the same time; storage has no compare-and-swap,
+# so read the stored feed (not the cdn copy), write, then check our files survived and merge again if not
+round=1
+while :; do
+code=$(stored "$ENVIRONMENT/feed.json" "$work/current.json")
+case "$code" in
+    200) echo "merging into the current feed" ;;
+    404) : > "$work/current.json"; echo "no feed yet, starting one" ;;
+    *) echo "reading $ENVIRONMENT/feed.json failed with http $code" >&2; exit 1 ;;
+esac
 VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" DOWNLOADS_URL="$base_url" \
     python3 "$here/feed.py" "$dist" "$work/current.json" "$work/feed.json"
 
@@ -54,6 +79,12 @@ else
     echo "::warning::FEED_SIGNING_KEY is not set, production builds of the app refuse an unsigned feed"
 fi
 upload "$work/feed.json" "$ENVIRONMENT/feed.json" application/json
+sleep $((5 + RANDOM % 10))
+[ "$(stored "$ENVIRONMENT/feed.json" "$work/check.json")" = 200 ] && mine "$work/check.json" && break
+[ "$round" -lt 6 ] || { echo "::error::another publish keeps overwriting $ENVIRONMENT/feed.json" >&2; exit 1; }
+echo "::warning::another platform wrote the feed at the same time, merging again"
+round=$((round + 1))
+done
 
 latest_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/latest"
 index_url="${DOWNLOADS_BASE%/}/$ENVIRONMENT/index.html"
@@ -65,7 +96,7 @@ case "$code" in
     *) echo "reading $ENVIRONMENT/releases.json failed with http $code" >&2; exit 1 ;;
 esac
 ENVIRONMENT="$ENVIRONMENT" SLUG="$SLUG" VERSION="$VERSION" LATEST_URL="$latest_url" \
-    python3 "$here/releases.py" "$work/feed.json" "$work/releases-current.json" \
+    python3 "$here/releases.py" "$work/check.json" "$work/releases-current.json" \
     "$work/releases.json" "$work/index.html" "$work/latest-copies.tsv"
 purge() {
     [ -n "${BUNNY_API_KEY:-}" ] || return 0
@@ -109,12 +140,11 @@ done
 if [ "$ENVIRONMENT" = production ]; then
     notes="$work/notes.md"
     echo "$SLUG $VERSION, build $BUILD_NUMBER, $ENVIRONMENT" > "$notes"
-    if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-        gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
-    else
+    gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
         gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
-            --title "$SLUG $VERSION" --notes-file "$notes" "${files[@]}"
-    fi
+            --title "$SLUG $VERSION" --notes-file "$notes" ||
+        gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+    gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
     {
         echo
         gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \

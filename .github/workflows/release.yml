@@ -160,7 +160,8 @@ jobs:
 
   windows:
     needs: [plan, linux]
-    if: always() && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true' && needs.linux.result != 'failure' && needs.linux.result != 'cancelled'
+    # why: windows only queues behind linux for the shared builder, a failed linux build must not hold windows back
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
     runs-on: ${{ fromJSON(needs.plan.outputs.windows_runner) }}
     strategy:
       fail-fast: false
@@ -355,11 +356,11 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-  publish:
-    needs: [plan, linux, windows, macos]
+  # why: each platform ships as soon as it is built; later ones join the same version in the feed
+  publish-macos:
+    needs: [plan, macos]
     if: >-
-      always() && needs.plan.outputs.run == 'true'
-      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+      always() && needs.plan.outputs.run == 'true' && needs.macos.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: ${{ needs.plan.outputs.environment }}
@@ -375,8 +376,88 @@ jobs:
       - name: Collect the builds
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'desktop-*' --dir dist
-      - name: Publish ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'desktop-macos-*' --dir dist
+      - name: Publish macos ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-linux:
+    needs: [plan, linux]
+    if: >-
+      always() && needs.plan.outputs.run == 'true' && needs.linux.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Collect the builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'desktop-linux-*' --dir dist
+      - name: Publish linux ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-windows:
+    needs: [plan, windows]
+    if: >-
+      always() && needs.plan.outputs.run == 'true' && needs.windows.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Collect the builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'desktop-windows-*' --dir dist
+      - name: Publish windows ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
         env:
           GH_TOKEN: ${{ github.token }}
           ENVIRONMENT: ${{ needs.plan.outputs.environment }}
