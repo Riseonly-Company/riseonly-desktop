@@ -197,6 +197,11 @@ def production_targets(labels, manifest, history, respin=True):
     # (ONLY_LABELLED targets aside)
     history = [r for r in history if parse_version(r.get("version"))]
     every = {f"{p}-{arch}" for p in PLATFORMS for arch in archs(p, labels)} | shipped_targets(history)
+    # why: an arch label without the os label is the owner naming the archs of that os, so shipped others stay out
+    for p in PLATFORMS:
+        named = {arch for label, arch in ARCH_LABELS[p] if label in labels}
+        if named and OS_LABEL[p] not in labels:
+            every -= {f"{p}-{arch}" for _, arch in ARCH_LABELS[p] if arch not in named}
     narrowed = [p for p in PLATFORMS if (LABELS_OF[p] - {LOCAL_LABELS[p]}) & labels]
     wanted = {f"{p}-{arch}" for p in narrowed for arch in archs(p, labels)}
     newest = max(history, key=lambda r: parse_version(r.get("version")), default=None)
