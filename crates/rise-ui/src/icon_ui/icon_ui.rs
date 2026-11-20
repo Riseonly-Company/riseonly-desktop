@@ -113,6 +113,7 @@ const COMPOSITE_FILLS: &[(&str, &[FillRole])] = &[
     ("gift", &[K, B, B, B]),
     ("graduation-cap", &[B, L, B]),
     ("grid-3x3", &[B, K, K, K, K]),
+    ("hand", &[L, L, L, L]),
     ("hard-drive", &[K, B, K, K]),
     ("house", &[H, B]),
     ("image", &[B, H, K]),
@@ -142,6 +143,8 @@ const COMPOSITE_FILLS: &[(&str, &[FillRole])] = &[
     ("phone-off", &[B, S, B]),
     ("pill", &[B, K]),
     ("pin-off", &[L, B, S, B]),
+    ("pointer", &[L, L, L, L, L]),
+    ("repeat", &[B, L, B, L]),
     ("reply", &[L, B]),
     ("rotate-ccw", &[L, L]),
     ("route", &[B, L, B]),
@@ -151,6 +154,7 @@ const COMPOSITE_FILLS: &[(&str, &[FillRole])] = &[
     ("shield-check", &[B, K]),
     ("shield-half", &[L, L]),
     ("shield-user", &[B, H, H]),
+    ("shopping-cart", &[B, B, L]),
     ("smile", &[B, K, K, K]),
     ("square-arrow-out-up-right", &[B, L, L]),
     ("square-check", &[B, K]),
@@ -169,6 +173,7 @@ const COMPOSITE_FILLS: &[(&str, &[FillRole])] = &[
     ("video-off", &[B, B, S]),
     ("volume-2", &[B, L, L]),
     ("volume-off", &[L, L, S, B, B]),
+    ("zap-off", &[B, B, S, B]),
 ];
 
 const DISC_GLYPHS: &[(&str, &[FillRole])] = &[
@@ -580,7 +585,7 @@ mod tests {
         assert!(assets().join("icons/lucide/heart.svg").is_file());
     }
 
-    const ALL_BODY_FILLS: &[&str] = &["bell", "bell-dot", "crown", "hammer", "hand", "layout-grid", "lightbulb", "messages-square", "pause", "pin", "pointer", "shopping-cart", "skip-back", "skip-forward", "thumbs-down", "thumbs-up", "user-round", "user-round-plus", "users-round", "users-round-three", "video"];
+    const ALL_BODY_FILLS: &[&str] = &["bell", "bell-dot", "crown", "hammer", "layout-grid", "lightbulb", "messages-square", "pause", "pin", "skip-back", "skip-forward", "thumbs-down", "thumbs-up", "user-round", "user-round-plus", "users-round", "users-round-three", "video"];
 
     #[test]
     fn every_fill_table_is_sorted_and_names_each_element_of_a_real_document() {

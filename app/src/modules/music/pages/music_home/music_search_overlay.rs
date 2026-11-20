@@ -710,7 +710,7 @@ impl Render for MusicSearchOverlayView {
                 }
             }))
             .child(
-                div().size_full().flex().justify_center().child(
+                div().size_full().flex().justify_center().wheel_into_children().child(
                     vstack(0.0).h_full().w_full().max_w(theme.shell.music_max_width).child(header).child(
                         div()
                             .flex_1()

@@ -43,9 +43,16 @@ is a production app, and no staging build, draft or link shows up in the reposit
 then compiles on the merge into `main`. The repository variable `DESKTOP_STAGING_RELEASES=on`
 brings the staging step back; it publishes to the cdn only, never as a GitHub release.
 
-A production version can gain platforms later: a release whose platforms are not yet in that
-version adds its files to the same GitHub release and feed entry. A platform that is already there
-is refused, the plan names it.
+A production version is one number for every platform. A production release ships every target
+ever published to production (and the labelled ones), so no platform falls behind the number.
+Windows arm64 is left out unless `win-arm64` (or `win`) is on: it is rare and runs the x64 build. A
+`macos-local`, `win-local` or `linux-local` label only moves a job to the Mac, it never narrows the
+release. The one exception is a respin: when the newest production version shipped without some
+platforms (their job failed and needed a fix), a release labelled with only those platforms (`win`,
+`win-x64`, `linux`, ...) gets that same version and a new build number, and adds its files to the same
+GitHub release and feed entry. If any labelled target is already in the newest version, the release
+ships everything under the next number. Re-running only the failed jobs of a release run keeps its
+version too. A target already in a version is refused, the plan names it.
 
 ## Versions
 
@@ -90,6 +97,18 @@ packages, signs and notarizes with the repository secrets. There the checkout ke
 build waits for `/tmp/riseonly-desktop-build.lock`. The label alone picks both Mac builds; a pull
 request from a fork never reaches that runner. The Mac has to be on and logged in, else the job
 waits in the queue.
+
+The labels `win-local` and `linux-local` send the Windows and Linux jobs to the same Mac runner
+(`scripts/ci/run-build.sh` picks the route). Windows cross compiles natively with cargo-xwin
+(`scripts/ci/mac-cross.sh`: Homebrew llvm, Xcode libclang, the xwin SDK in
+`~/.cache/riseonly-ci/xwin`): a cold x86_64 release took 17.5 min there against 42-48 on the
+server. Linux runs the toolchain image in the Mac's Docker natively for arm64 only; x86_64 stays
+on the server even with the label, because under Rosetta it took 54 min against 46. Their target dirs live in
+`~/.cache/riseonly-ci/desktop`, both wait for the same build lock, and one runner runs one job at a
+time, so a release of every platform on the Mac goes one build after another. A repository variable
+`DESKTOP_MACOS_LOCAL`, `DESKTOP_WINDOWS_LOCAL` or `DESKTOP_LINUX_LOCAL` set to `on` makes the Mac
+the default for that platform without a label. Every compile also leaves a `cargo --timings` report
+in the run's artifacts (`timings-<platform>-<arch>`): open it to see which crate takes the time.
 
 ## Where the files go
 

@@ -114,7 +114,8 @@ impl RenderOnce for MapInviteLinkCard {
                                             .px(15.0)
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .color(white())
-                                            .number_of_lines(1),
+                                            .number_of_lines(1)
+                                            .minimum_scale_factor(0.6),
                                     )
                                     .guide_anchor(RiseGuideAnchor::MapInviteShare),
                             ),
@@ -136,7 +137,8 @@ impl RenderOnce for MapInviteLinkCard {
                                             .px(15.0)
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .color(theme.text.primary)
-                                            .number_of_lines(1),
+                                            .number_of_lines(1)
+                                            .minimum_scale_factor(0.6),
                                     ),
                             ),
                         )

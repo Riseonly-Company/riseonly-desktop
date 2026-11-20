@@ -140,3 +140,17 @@ async fn repeated_leaves_do_not_drift_the_head_count() {
     assert_eq!(roster(&repository), vec![OTHER_ID]);
     assert_eq!(state(&repository).map(|state| state.participant_count), Some(1));
 }
+
+#[tokio::test]
+async fn focusing_the_room_again_keeps_the_seated_mute() {
+    let repository = RiseForumVoicePresenceRepository::new();
+    repository.activate(ACCOUNT_ID).await;
+    let mut muted = participant(ACCOUNT_ID, 3);
+    muted.microphone_enabled = false;
+    repository.adopt(CHAT_ID, &[listing(TOPIC_ID, vec![participant(OTHER_ID, 1), muted], 10_000)]).await;
+
+    repository.apply_optimistic_self(CHAT_ID, TOPIC_ID, true, Some(participant(ACCOUNT_ID, i64::MAX))).await;
+    let mine = state(&repository).and_then(|state| state.participants.into_iter().find(|row| row.user_id == ACCOUNT_ID));
+    assert_eq!(mine.map(|row| row.is_microphone_muted()), Some(true));
+    assert_eq!(roster(&repository), vec![OTHER_ID, ACCOUNT_ID]);
+}

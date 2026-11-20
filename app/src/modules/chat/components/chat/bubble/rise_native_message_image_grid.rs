@@ -622,6 +622,7 @@ struct RiseNativeMessageImageCellView {
     view_badge_symbol: &'static str,
     view_badge_text: String,
     keeps_replaced_crop: bool,
+    stale_decode: bool,
     transfer_chip_was_drawn: bool,
     _transfer_chip_observer: gpui::Subscription,
 }
@@ -742,6 +743,7 @@ impl RiseNativeMessageImageCellView {
             view_badge_symbol: "1.circle",
             view_badge_text: String::new(),
             keeps_replaced_crop: false,
+            stale_decode: false,
             transfer_chip_was_drawn: false,
             _transfer_chip_observer: transfer_chip_observer,
         }
@@ -933,7 +935,9 @@ impl RiseNativeMessageImageCellView {
         }
         if (presentation_changed || decode_geometry_changed) && (self.image.is_some() || self.load_task.is_some()) {
             self.did_fail_load = false;
-            self.cancel_load(!keeps_replaced_image, cx);
+            let keeps_drawn = self.image.is_some() && !primary_source_changed && !account_scope_changed;
+            self.cancel_load(!keeps_replaced_image && !keeps_drawn, cx);
+            self.stale_decode = keeps_drawn;
         }
         if keeps_replaced_image && (source_aspect_changed || presentation_changed) {
             self.keeps_replaced_crop = true;
@@ -947,7 +951,7 @@ impl RiseNativeMessageImageCellView {
         self.configure_spoiler(model, cx);
         self.configure_upload_overlay_from_current_state(cx);
         self.configure_transfer_chip(cx);
-        if self.image.is_none() || self.displayed_source != self.source {
+        if self.image.is_none() || self.stale_decode || self.displayed_source != self.source {
             if let Some(cached) = RiseNativeMediaThumbnailPipeline::cached_thumbnail(
                 &self.source,
                 &self.fallback_video_source,
@@ -1564,6 +1568,7 @@ impl RiseNativeMessageImageCellView {
 
     fn begin_load_if_needed(&mut self, cx: &mut Context<Self>) {
         let needs_picture = self.image.is_none()
+            || self.stale_decode
             || self.displayed_source != self.source
             || (self.needs_tail_colors && !self.media_tail_colors_resolved);
         if !self.is_in_window
@@ -1686,6 +1691,7 @@ impl RiseNativeMessageImageCellView {
             self.spoiler_view.update(cx, |spoiler, cx| spoiler.set_source(spoiler_image, &key, cx));
         }
         self.keeps_replaced_crop = false;
+        self.stale_decode = false;
         let has_backdrop = backdrop.is_some();
         self.backdrop_image = if self.is_single { backdrop.or_else(|| image.clone()) } else { None };
         self.image = image;

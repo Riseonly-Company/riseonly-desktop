@@ -23,7 +23,6 @@ use rise_ui::swiftui::prelude::*;
 use crate::core::ui::clever_image_ui::CleverImageCachePolicy;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::desktop_platform::rise_app_events::{RiseAppEvents, RiseSubscription, UIApplication};
-use crate::modules::rtc::media::rise_rtc_live_kit_media_controller::RiseRTCLiveKitMediaController;
 use crate::modules::rtc::system::rise_rtc_call_window_hooks::rise_rtc_call_window_hooks;
 
 const CONTROLS_VISIBLE_FOR: Duration = Duration::from_secs(3);
@@ -38,7 +37,6 @@ pub enum RiseRTCCallPictureInPictureControllerOwner {
     DirectCall,
     DirectCallWidget,
     VoiceRoom,
-    StreamMiniPlayer,
 }
 
 impl RiseRTCCallPictureInPictureControllerOwner {
@@ -47,15 +45,13 @@ impl RiseRTCCallPictureInPictureControllerOwner {
             Self::DirectCall => "directCall",
             Self::DirectCallWidget => "directCallWidget",
             Self::VoiceRoom => "voiceRoom",
-            Self::StreamMiniPlayer => "streamMiniPlayer",
         }
     }
 
     /// one on one outranks a room, with both open the window belongs to the call
-    /// the open call screen outranks its own widget, a mini player the person asked for outranks all
+    /// the open call screen outranks its own widget
     pub const fn rank(self) -> i32 {
         match self {
-            Self::StreamMiniPlayer => 3,
             Self::DirectCall => 2,
             Self::DirectCallWidget => 1,
             Self::VoiceRoom => 0,
@@ -78,7 +74,6 @@ pub struct RiseRTCCallPictureInPictureController {
     main_window: Option<AnyWindowHandle>,
     widget_standby: Option<RiseRTCPictureInPictureStandby>,
     held_face: Option<RiseRTCPictureInPictureFace>,
-    stream_user_id: Option<String>,
     _lifecycle_observers: Vec<RiseSubscription>,
     _lifecycle_pump: Task<()>,
 }
@@ -141,7 +136,6 @@ impl RiseRTCCallPictureInPictureController {
             main_window: None,
             widget_standby: None,
             held_face: None,
-            stream_user_id: None,
             _lifecycle_observers: lifecycle_observers,
             _lifecycle_pump: lifecycle_pump,
         }
@@ -155,40 +149,6 @@ impl RiseRTCCallPictureInPictureController {
 
     pub fn is_active(&self) -> bool {
         self.is_active
-    }
-
-    /// floats the watched stream because the person asked, it stays above every window until closed
-    /// or the call opens again, focus changes do not touch it
-    pub fn float_stream(&mut self, track: String, source_id: String, user_id: String, cx: &mut Context<Self>) {
-        let owner = RiseRTCCallPictureInPictureControllerOwner::StreamMiniPlayer;
-        if let Some(stale) = self.owner.filter(|current| *current != owner) {
-            self.disable(stale, cx);
-        }
-        self.enable(owner, cx);
-        self.present(Some(track), Some(source_id), owner, cx);
-        self.stream_user_id = Some(user_id);
-        if self.controller.is_some() {
-            return;
-        }
-        let main_window = rise_rtc_call_window_hooks()
-            .and_then(|hooks| cx.windows().into_iter().find(|window| (hooks.is_main_window)(*window)));
-        self.main_window = main_window;
-        let display = main_window
-            .and_then(|window| window.update(cx, |_, window, cx| window.display(cx)).ok().flatten())
-            .or_else(|| cx.primary_display());
-        let Some(display) = display else {
-            return;
-        };
-        self.start_picture_in_picture(display.visible_bounds(), Some(display.id()), cx);
-    }
-
-    pub fn is_floating_stream(&self) -> bool {
-        self.owner == Some(RiseRTCCallPictureInPictureControllerOwner::StreamMiniPlayer)
-    }
-
-    pub fn end_stream_float(&mut self, cx: &mut Context<Self>) {
-        self.stream_user_id = None;
-        self.disable(RiseRTCCallPictureInPictureControllerOwner::StreamMiniPlayer, cx);
     }
 
     pub fn enable(&mut self, requested_owner: RiseRTCCallPictureInPictureControllerOwner, cx: &mut Context<Self>) {
@@ -369,7 +329,7 @@ impl RiseRTCCallPictureInPictureController {
         }
     }
 
-    /// only a direct call floats by itself, a room stream floats when the person asks for the mini player
+    /// only a direct call floats by itself
     pub fn main_window_activation_changed(&mut self, is_main_active: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.owner != Some(RiseRTCCallPictureInPictureControllerOwner::DirectCall) {
             return;
@@ -465,20 +425,10 @@ impl RiseRTCCallPictureInPictureController {
         }
         self.controller = None;
         self.picture_in_picture_controller_did_stop_picture_in_picture(generation, cx);
-        if self.is_floating_stream() {
-            self.end_stream_float(cx);
-        }
     }
 
     /// the second click on the floating window or its open button, back to the call itself
     fn open_call(controller: &Entity<Self>, cx: &mut App) {
-        if controller.read(cx).is_floating_stream() {
-            controller.update(cx, |controller, cx| controller.end_stream_float(cx));
-            if let Some(hooks) = rise_rtc_call_window_hooks() {
-                (hooks.present_call)(cx);
-            }
-            return;
-        }
         let main_window = controller.read(cx).main_window;
         Self::restore_main_window(main_window, cx);
         let controller = controller.clone();
@@ -489,21 +439,10 @@ impl RiseRTCCallPictureInPictureController {
 
     fn close_floating(controller: &Entity<Self>, cx: &mut App) {
         controller.update(cx, |controller, cx| {
-            if controller.is_floating_stream() {
-                controller.end_stream_float(cx);
-            } else if let Some(owner) = controller.owner {
+            if let Some(owner) = controller.owner {
                 controller.disable(owner, cx);
             }
         });
-    }
-
-    fn toggle_stream_sound(&self) {
-        let Some(user_id) = self.stream_user_id.as_deref() else {
-            return;
-        };
-        let media = RiseRTCLiveKitMediaController::shared();
-        let muted = media.stream_volume(user_id) <= f64::EPSILON;
-        media.set_stream_volume(user_id, if muted { 1.0 } else { 0.0 });
     }
 
     fn restore_main_window(main_window: Option<AnyWindowHandle>, cx: &mut App) {
@@ -667,23 +606,9 @@ impl RiseRTCPictureInPictureWindow {
             .children(IconUi::sized(symbol, px(15.0), white(), true))
     }
 
-    fn controls(&self, cx: &App) -> impl IntoElement + use<> {
-        let controller = self.controller.read(cx);
+    fn controls(&self) -> impl IntoElement + use<> {
         let open = self.controller.clone();
         let close = self.controller.clone();
-        let sound = controller.stream_user_id.as_deref().map(|user_id| {
-            let muted = RiseRTCLiveKitMediaController::shared().stream_volume(user_id) <= f64::EPSILON;
-            let toggled = self.controller.clone();
-            Self::control(
-                "rtc-picture-in-picture-sound",
-                if muted { "speaker.slash.fill" } else { "speaker.wave.2.fill" },
-                tr(if muted { "feed_sound_unmute" } else { "feed_sound_mute" }),
-                move |cx| {
-                    toggled.read(cx).toggle_stream_sound();
-                    toggled.update(cx, |_, cx| cx.notify());
-                },
-            )
-        });
         div()
             .absolute()
             .inset_0()
@@ -698,7 +623,6 @@ impl RiseRTCPictureInPictureWindow {
                 tr("desktop_rtc_mini_player_open_call"),
                 move |cx| RiseRTCCallPictureInPictureController::open_call(&open, cx),
             ))
-            .children(sound)
             .child(Self::control("rtc-picture-in-picture-close", "xmark", tr("close"), move |cx| {
                 RiseRTCCallPictureInPictureController::close_floating(&close, cx)
             }))
@@ -798,7 +722,7 @@ impl Render for RiseRTCPictureInPictureWindow {
                         .number_of_lines(1),
                 )
         });
-        let controls = self.controls_visible.then(|| self.controls(cx));
+        let controls = self.controls_visible.then(|| self.controls());
         let grips: Vec<_> = FloatingResizeCorner::ALL.into_iter().map(|corner| self.corner_grip(corner, cx)).collect();
         let resize_driver = self.resize_driver(cx);
 

@@ -205,6 +205,10 @@ impl RTCActionsStore {
         Self::with_domain(cx, move |domain| async move { domain.set_camera(enabled, position).await })
     }
 
+    pub fn set_stream_watch(&mut self, target_user_id: String, watching: bool, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
+        Self::with_domain(cx, move |domain| async move { domain.set_stream_watch(&target_user_id, watching).await })
+    }
+
     pub fn set_screen_share(
         &mut self,
         enabled: bool,

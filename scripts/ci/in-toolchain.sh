@@ -17,6 +17,11 @@ esac
 rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$desktop/rust-toolchain.toml")
 toolchain=$( (cat "$dockerfile"; echo "$rust") | sha256sum | cut -c1-12)
 image="riseonly-desktop-toolchain:$toolchain"
+platform=()
+if [ -n "${DESKTOP_CI_PLATFORM:-}" ]; then
+    platform=(--platform "$DESKTOP_CI_PLATFORM")
+    image="$image-${DESKTOP_CI_PLATFORM##*/}"
+fi
 cache="$cache-$toolchain"
 
 root=${DESKTOP_CI_CACHE:-/srv/ci/desktop}
@@ -35,7 +40,7 @@ if [ "$(free_gb)" -lt "$min_free" ]; then
 fi
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
-    docker build --quiet --build-arg "RUST_TOOLCHAIN=$rust" --tag "$image" --file "$dockerfile" "$(dirname "$dockerfile")" >/dev/null
+    docker build --quiet ${platform[@]+"${platform[@]}"} --build-arg "RUST_TOOLCHAIN=$rust" --tag "$image" --file "$dockerfile" "$(dirname "$dockerfile")" >/dev/null
 fi
 
 forward=()
@@ -46,11 +51,11 @@ for name in RISE_ENV RISE_BUILD_NUMBER RISE_UPDATE_FEED_PUBLIC_KEY PROFILE VERSI
     fi
 done
 
-exec docker run --rm --init \
+exec docker run --rm --init ${platform[@]+"${platform[@]}"} \
     --name "desktop-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$cache" \
     --user "$(id -u):$(id -g)" \
     --cpu-shares "${DESKTOP_CI_CPU_SHARES:-512}" \
-    --memory "${DESKTOP_CI_MEMORY:-9g}" --memory-swap "${DESKTOP_CI_MEMORY:-9g}" \
+    --memory "${DESKTOP_CI_MEMORY:-9g}" --memory-swap "${DESKTOP_CI_MEMORY_SWAP:-${DESKTOP_CI_MEMORY:-9g}}" \
     -v "$workspace/riseonly-desktop:/w/riseonly-desktop" \
     -v "$workspace/riseonly-tools:/w/riseonly-tools" \
     -v "$root/$cache:/target" \
@@ -60,7 +65,7 @@ exec docker run --rm --init \
     -e HOME=/home/ci \
     -e CARGO_HOME=/cargo \
     -e CARGO_TARGET_DIR=/target \
-    -e CARGO_BUILD_JOBS="${DESKTOP_CI_JOBS:-$(nproc)}" \
+    -e CARGO_BUILD_JOBS="${DESKTOP_CI_JOBS:-$(getconf _NPROCESSORS_ONLN)}" \
     "${forward[@]}" \
     -w /w/riseonly-desktop \
     "$image" sh -c 'PATH="$PATH:/usr/sbin:/sbin" exec "$@"' sh "$@"

@@ -4,8 +4,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, App, Axis, Bounds, Context, ElementId, Empty, Entity, FontWeight, Hsla, Pixels, ScrollHandle,
-    SharedString, Size, StyleRefinement, Subscription, Task, Window, black, canvas, point, white,
+    AnyElement, AnyView, App, AsyncApp, Axis, Bounds, Context, ElementId, Empty, Entity, FontWeight, Hsla, Pixels,
+    ScrollHandle, SharedString, Size, StyleRefinement, Subscription, Task, Window, black, canvas, point, white,
 };
 use rise_canon::rise_key::gift_colors;
 use rise_core::foundation::foundation_date::RiseClock;
@@ -35,6 +35,9 @@ use crate::app::router::navigation_store::{NavigationStoreKey, NavigationStoreSe
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::canon_field_rule::{RiseFocusedTextInput, RiseFocusedTextInputOutcome};
 use crate::core::lib::canon_format::RiseFormat;
+use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
+use crate::core::ui::clever_image_disk_cache::{CleverImageBitmapLoader, CleverImageWorkLane};
+use crate::core::ui::clever_image_ui::CleverImageCachePolicy;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiSliceState;
 use crate::core::ui::animated_tabs_ui::animated_tabs::AnimatedTabs;
 use crate::core::ui::bottom_sheet_ui::sheet_floating_header::{SheetFloatingHeader, SheetFloatingHeaderMetrics};
@@ -61,7 +64,8 @@ use crate::modules::gifts::components::gift_shop_shelf_grid::{
 use crate::modules::gifts::components::gift_shop_sparkle_field::GiftShopSparkleField;
 use crate::modules::gifts::engine::rise_gifts_engine_models::{
     RiseGiftAttributeDTO, RiseGiftAttributeExt, RiseGiftAttributeKind, RiseGiftCatalogItemDTO, RiseGiftCatalogItemExt,
-    RiseGiftCatalogItemResponseExt, RiseGiftInstanceDTO, RiseGiftInstanceExt, RiseGiftItemKind, RiseGiftRarityClass,
+    RiseGiftCatalogItemResponseExt, RiseGiftInstanceDTO, RiseGiftInstanceExt, RiseGiftItemKind, RiseGiftMediaExt,
+    RiseGiftRarityClass,
 };
 use crate::modules::gifts::shared::gift_market_kinds::GiftMarketKinds;
 use crate::modules::gifts::stores::gifts::gifts_interactions::gift_shop_footer_hooks::{
@@ -703,6 +707,8 @@ struct GiftShopShelfPageView {
     renders_cached: Rc<Cell<bool>>,
     warm: bool,
     warm_task: Option<Task<()>>,
+    warmed_posters: Vec<(String, i64)>,
+    poster_warm_task: Option<Task<()>>,
     _observations: [Subscription; 3],
 }
 
@@ -718,6 +724,8 @@ impl GiftShopShelfPageView {
             renders_cached: Rc::new(Cell::new(false)),
             warm: false,
             warm_task: None,
+            warmed_posters: Vec::new(),
+            poster_warm_task: None,
             _observations: [
                 cx.observe(&services, |page: &mut Self, _, cx| page.refresh_inputs(cx)),
                 cx.observe(&interactions, |page: &mut Self, _, cx| page.refresh_inputs(cx)),
@@ -733,8 +741,55 @@ impl GiftShopShelfPageView {
         let next = GiftShopShelfInputs::read(props.kind, cx);
         if self.inputs.as_ref() != Some(&next) {
             self.inputs = Some(next);
+            self.warm_posters(cx);
             cx.notify();
         }
+    }
+
+    fn tile_poster(kind: RiseGiftItemKind, gift: &RiseGiftCatalogItemDTO) -> Option<(String, i64)> {
+        let media = gift.preview_model.as_ref()?.media.as_ref()?;
+        let poster = match kind {
+            RiseGiftItemKind::Item => media.poster(false).map(|url| (url, 512)),
+            RiseGiftItemKind::AvatarFrame => media.cosmetic_poster(true).map(|url| (url, 360)),
+            RiseGiftItemKind::Nameplate => media.cosmetic_poster(false).map(|url| (url, 784)),
+            _ => None,
+        };
+        poster.filter(|(url, _)| !url.is_empty())
+    }
+
+    fn warm_posters(&mut self, cx: &mut Context<Self>) {
+        let (Some(props), Some(inputs)) = (self.props, self.inputs.as_ref()) else {
+            return;
+        };
+        let posters: Vec<(String, i64)> =
+            inputs.catalog.items.iter().filter_map(|gift| Self::tile_poster(props.kind, gift)).collect();
+        if posters.is_empty() || posters == self.warmed_posters {
+            return;
+        }
+        self.warmed_posters = posters.clone();
+        let user_id = SaiAccountCacheScope::active_user_id();
+        let epoch = SaiAccountCacheScope::active_epoch();
+        self.poster_warm_task = Some(cx.spawn(async move |_, cx| {
+            let cx: &AsyncApp = cx;
+            let loads = posters.into_iter().map(|(url, pixels)| {
+                let (user_id, epoch) = (user_id.clone(), epoch.clone());
+                async move {
+                    CleverImageBitmapLoader::load(
+                        &url,
+                        true,
+                        true,
+                        user_id,
+                        epoch,
+                        Some(pixels),
+                        CleverImageCachePolicy::Standard,
+                        CleverImageWorkLane::Speculative,
+                        cx,
+                    )
+                    .await;
+                }
+            });
+            futures::future::join_all(loads).await;
+        }));
     }
 
     const WARM_DELAY: Duration = Duration::from_millis(450);
@@ -792,6 +847,7 @@ impl GiftShopShelfPageView {
             let stale = view.set_props(GiftShopShelfPageProps { kind, viewport });
             if view.inputs.is_none() {
                 view.inputs = Some(GiftShopShelfInputs::read(kind, cx));
+                view.warm_posters(cx);
             }
             (stale, view.natural_height.get())
         });

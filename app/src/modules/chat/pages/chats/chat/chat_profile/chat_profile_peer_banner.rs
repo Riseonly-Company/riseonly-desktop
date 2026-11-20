@@ -88,14 +88,12 @@ impl RenderOnce for ChatProfilePeerBanner {
             .rounded_bl(px(Self::CORNER_RADIUS))
             .rounded_br(px(Self::CORNER_RADIUS))
             .overflow_hidden()
-            .when_some(self.cover, |banner, cover| {
-                banner.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .child(ChatBackdropLayers::new(ChatBackdropLayout::ProfileBanner).banner_url(Some(cover))),
-                )
-            })
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(ChatBackdropLayers::new(ChatBackdropLayout::ProfileBanner).banner_url(self.cover)),
+            )
             .when(self.user_id.is_some(), |banner| {
                 banner.child(div().absolute().inset_0().child(GiftWornProfileEffect::new(effect_id, self.user_id)))
             })

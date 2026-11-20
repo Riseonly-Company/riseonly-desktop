@@ -58,7 +58,9 @@ impl RootRoute {
                 RiseBugReportSurface::Forum
             }
             RootRoute::GroupVoiceSettings { .. } => RiseBugReportSurface::VoiceChannel,
-            RootRoute::RtcRoom { .. } | RootRoute::RtcAudioSettings => RiseBugReportSurface::Call,
+            RootRoute::RtcRoom { .. } | RootRoute::RtcAudioSettings | RootRoute::RtcStreamSettings => {
+                RiseBugReportSurface::Call
+            }
 
             RootRoute::Notifications
             | RootRoute::NotificationSettings

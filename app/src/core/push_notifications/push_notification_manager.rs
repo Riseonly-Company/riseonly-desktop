@@ -647,6 +647,7 @@ impl PushNotificationManager {
             content_is_markup: true,
             author: presentation.author,
             replace_key,
+            is_notification: true,
             ..NotifierSendOptions::default()
         };
         ModerationServicesStore::send_after_sanction_toast(title, options, cx);

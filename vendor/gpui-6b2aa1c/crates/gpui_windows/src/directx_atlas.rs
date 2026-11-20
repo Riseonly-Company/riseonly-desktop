@@ -53,13 +53,19 @@ impl DirectXAtlas {
         })))
     }
 
+    /// None once the texture was freed while a frame drawn before still names it (Riseonly 0128).
     pub(crate) fn get_texture_view(
         &self,
         id: AtlasTextureId,
-    ) -> [Option<ID3D11ShaderResourceView>; 1] {
+    ) -> Option<[Option<ID3D11ShaderResourceView>; 1]> {
         let lock = self.0.lock();
-        let tex = lock.texture(id);
-        tex.view.clone()
+        let textures = match id.kind {
+            AtlasTextureKind::Monochrome => &lock.monochrome_textures,
+            AtlasTextureKind::Polychrome => &lock.polychrome_textures,
+            AtlasTextureKind::Subpixel => &lock.subpixel_textures,
+        };
+        let tex = textures.textures.get(id.index as usize)?.as_ref()?;
+        Some(tex.view.clone())
     }
 
     pub(crate) fn handle_device_lost(

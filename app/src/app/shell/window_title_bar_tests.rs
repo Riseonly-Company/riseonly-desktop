@@ -1,18 +1,15 @@
 use rise_platform::HostOs;
-use rise_platform::materials::WindowsBuild;
 use rise_platform::window_chrome::{
-    AvailableControls, CaptionButton, ChromeStyle, ControlLayout, ControlSide, DecorationMode,
-    caption_buttons,
+    AvailableControls, CaptionButton, ChromeStyle, ControlSide, DecorationMode, caption_buttons,
 };
 use rise_theme::ShellMetrics;
 
 use crate::app::router::navigation_types::{MainTab, RootRoute};
 
-use super::window_title_bar::{controls_dock_in_rail, drag_segments, draws_under_window_controls};
+use super::window_title_bar::{controls_dock_in_rail, drag_segments, draws_under_window_controls, lights_in_corner};
 use super::window_title_bar::{
-    WINDOWS_MENU_BAR_KEYSTROKES, drag_moves_window, granted_chrome,
-    linux_caption_icon, menu_bar_keystrokes, rail_control_layout, shell_chrome,
-    strip_handles_double_click, windows_caption_font, windows_caption_glyph,
+    TRAFFIC_LIGHT_ORDER, WINDOWS_MENU_BAR_KEYSTROKES, drag_moves_window, granted_chrome, linux_caption_icon,
+    menu_bar_keystrokes, shell_chrome, strip_handles_double_click, traffic_light_fill,
 };
 
 const ALL_HOSTS: [HostOs; 3] = [HostOs::MacOs, HostOs::Windows, HostOs::Linux];
@@ -186,8 +183,8 @@ fn the_strip_moves_the_window_where_the_app_owns_the_titlebar() {
         "the shell strip owns the macOS titlebar drag"
     );
     assert!(
-        !drag_moves_window(HostOs::Windows, DecorationMode::ServerSide),
-        "Windows moves the window from HTCAPTION before gpui sees the press"
+        drag_moves_window(HostOs::Windows, DecorationMode::ServerSide),
+        "the Windows strip lies over the columns, so the app starts the move"
     );
     assert!(drag_moves_window(HostOs::Linux, DecorationMode::ClientSide));
     assert!(
@@ -223,24 +220,20 @@ fn only_windows_opens_the_menu_on_a_lone_alt() {
 }
 
 #[test]
-fn windows_10_draws_the_glyphs_from_the_older_icon_font() {
-    assert_eq!(windows_caption_font(Some(WindowsBuild(22_621))), "Segoe Fluent Icons");
-    assert_eq!(windows_caption_font(Some(WindowsBuild(19_045))), "Segoe MDL2 Assets");
-    assert_eq!(windows_caption_font(None), "Segoe MDL2 Assets");
+fn a_maximized_window_offers_restore_instead_of_maximize() {
+    assert_eq!(linux_caption_icon(CaptionButton::Maximize, false), "square");
+    assert_eq!(linux_caption_icon(CaptionButton::Maximize, true), "copy");
 }
 
 #[test]
-fn a_maximized_window_offers_restore_instead_of_maximize() {
+fn the_windows_lights_read_close_minimize_maximize_in_the_macos_colours() {
     assert_eq!(
-        windows_caption_glyph(CaptionButton::Maximize, false),
-        "\u{e922}"
+        TRAFFIC_LIGHT_ORDER,
+        [CaptionButton::Close, CaptionButton::Minimize, CaptionButton::Maximize]
     );
-    assert_eq!(
-        windows_caption_glyph(CaptionButton::Maximize, true),
-        "\u{e923}"
-    );
-    assert_eq!(linux_caption_icon(CaptionButton::Maximize, false), "square");
-    assert_eq!(linux_caption_icon(CaptionButton::Maximize, true), "copy");
+    assert_eq!(traffic_light_fill(CaptionButton::Close), 0xFF5F57);
+    assert_eq!(traffic_light_fill(CaptionButton::Minimize), 0xFEBC2E);
+    assert_eq!(traffic_light_fill(CaptionButton::Maximize), 0x28C840);
 }
 
 #[test]
@@ -261,52 +254,14 @@ fn the_linux_button_drawings_ship_with_the_app() {
     }
 }
 
-fn caption_span(layout: &ControlLayout, buttons: usize) -> f32 {
-    let count = buttons as f32;
-    count * layout.button_width + (count - 1.0) * layout.gap + 2.0 * layout.edge_padding
-}
-
 #[test]
-fn the_window_buttons_fit_inside_the_rail_pane_on_every_desktop() {
-    let rail = f32::from(ShellMetrics::default().rail_width);
-    for host in ALL_HOSTS {
-        let desktop = ControlLayout::for_host(host);
-        let fitted = rail_control_layout(desktop, 3, rail);
-        assert!(
-            caption_span(&fitted, 3) <= rail + f32::EPSILON,
-            "{host:?}: the buttons spill out of the rail pane"
-        );
-        assert_eq!(fitted.button_height, desktop.button_height);
-        assert!(fitted.button_width > 0.0);
-    }
-}
-
-#[test]
-fn buttons_that_already_fit_keep_the_desktop_sizes() {
-    let desktop = ControlLayout::for_host(HostOs::Linux);
-    let wide = caption_span(&desktop, 3) + 10.0;
-    assert_eq!(rail_control_layout(desktop, 3, wide), desktop);
-    assert_eq!(rail_control_layout(desktop, 0, 1.0), desktop);
-}
-
-#[test]
-fn the_gaps_give_way_before_the_buttons_shrink() {
-    let desktop = ControlLayout::for_host(HostOs::Linux);
-    let tight = 3.0 * desktop.button_width + 8.0;
-    let fitted = rail_control_layout(desktop, 3, tight);
-    assert_eq!(fitted.button_width, desktop.button_width);
-    assert!(fitted.gap < desktop.gap);
-
-    let windows = rail_control_layout(ControlLayout::for_host(HostOs::Windows), 3, 90.0);
-    assert_eq!(windows.button_width, 30.0);
-    assert_eq!(windows.gap, 0.0);
-}
-
-#[test]
-fn only_macos_keeps_its_window_buttons_in_the_rail() {
+fn macos_and_windows_keep_their_window_buttons_in_the_rail() {
     assert!(controls_dock_in_rail(HostOs::MacOs));
-    assert!(!controls_dock_in_rail(HostOs::Windows));
+    assert!(controls_dock_in_rail(HostOs::Windows));
     assert!(!controls_dock_in_rail(HostOs::Linux));
+    assert!(lights_in_corner(HostOs::Windows));
+    assert!(!lights_in_corner(HostOs::MacOs));
+    assert!(!lights_in_corner(HostOs::Linux));
 }
 
 #[test]

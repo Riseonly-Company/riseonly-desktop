@@ -426,6 +426,7 @@ impl ChatScreen {
             .min_w(px(18.0))
             .min_h(px(18.0))
             .px(px(5.0))
+            .overflow_hidden()
             .rounded_full()
             .bg(theme.primary._100)
             .border(px(1.5))
@@ -602,8 +603,11 @@ impl ChatScreen {
         if outcome != RiseMessageJumpOutcome::Installed {
             return;
         }
-        self.message_list_scroll_request =
-            Some(RiseMessageScrollRequest::new(RiseMessageScrollDestination::Message(message_id.to_owned()), true));
+        let focus = self.message_search_focus(message_id, cx);
+        self.message_list_scroll_request = Some(
+            RiseMessageScrollRequest::new(RiseMessageScrollDestination::Message(message_id.to_owned()), true)
+                .focusing(focus),
+        );
         let _ = selection_changed();
     }
 

@@ -6,6 +6,9 @@ use gpui::{
     div, px, relative, white,
 };
 
+use crate::scroll_chrome_shadow_ui::{
+    ScrollChromeShadowStyle, ScrollChromeShadowStyleAnchor, ScrollChromeShadowStyleColorRole, ScrollChromeShadowUi,
+};
 use crate::swiftui::environment_values::accessibility_reduce_transparency;
 use crate::swiftui::linear_gradient::{GradientStop, LinearGradient};
 use crate::swiftui::shapes::pass_through;
@@ -221,5 +224,69 @@ impl ScrollEdgeBlurFalloff {
         } else {
             Self::mask_image(white(), solid_end)
         }
+    }
+}
+
+/// header band of every page and panel, the one the chat has: blur strongest at the top that fades out
+/// a little below the chrome, with a soft shade over it
+#[derive(IntoElement)]
+pub struct HeaderEdgeBlur {
+    chrome_bottom: f32,
+}
+
+impl HeaderEdgeBlur {
+    pub const BLUR_FADE: f32 = 20.0;
+    pub const SHADOW_EXTENT: f32 = 66.0;
+    pub const SHADOW_SCALE: f32 = 0.5;
+    pub const SHADOW_PEAK_OPACITY: f64 = 0.5;
+
+    pub fn new(chrome_bottom: f32) -> Self {
+        Self { chrome_bottom: chrome_bottom.max(0.0) }
+    }
+
+    pub fn blur_height(chrome_bottom: f32) -> f32 {
+        chrome_bottom.max(0.0) + Self::BLUR_FADE
+    }
+
+    pub fn shadow_height(chrome_bottom: f32, scale: f32) -> f32 {
+        (chrome_bottom.max(0.0) + Self::SHADOW_EXTENT) * scale
+    }
+
+    pub fn height(chrome_bottom: f32) -> f32 {
+        Self::blur_height(chrome_bottom).max(Self::shadow_height(chrome_bottom, Self::SHADOW_SCALE))
+    }
+
+    pub fn shadow_style(anchor: ScrollChromeShadowStyleAnchor) -> ScrollChromeShadowStyle {
+        ScrollChromeShadowStyle {
+            anchor,
+            peak_opacity: Self::SHADOW_PEAK_OPACITY,
+            color_role: ScrollChromeShadowStyleColorRole::Appearance,
+            mid_location: 0.58,
+            mid_opacity_factor: 0.68,
+            top_plateau_end: 0.16,
+            top_plateau_opacity_factor: 0.97,
+            ..ScrollChromeShadowStyle::default()
+        }
+    }
+}
+
+impl RenderOnce for HeaderEdgeBlur {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let blur_height = Self::blur_height(self.chrome_bottom);
+        let shadow_height = Self::shadow_height(self.chrome_bottom, Self::SHADOW_SCALE);
+        let layer = || pass_through().absolute().top_0().left_0().right_0().max_h_full();
+        pass_through()
+            .relative()
+            .size_full()
+            .child(
+                layer().h(px(blur_height)).child(
+                    ScrollEdgeBlurUi::new().solid_end(ScrollEdgeBlurFalloff::DEFAULT_SOLID_END).fit_height(blur_height),
+                ),
+            )
+            .child(
+                layer()
+                    .h(px(shadow_height))
+                    .child(ScrollChromeShadowUi::new(Self::shadow_style(ScrollChromeShadowStyleAnchor::FromTop))),
+            )
     }
 }

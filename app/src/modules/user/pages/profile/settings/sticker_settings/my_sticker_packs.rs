@@ -538,10 +538,11 @@ impl MyStickerPacksSnapshot {
         match row {
             MyStickerPacksRow::Create => "create".to_owned(),
             MyStickerPacksRow::Title(section) => format!("title-{}", section.key()),
-            MyStickerPacksRow::Pack { section, index, is_last, .. } => format!(
-                "{}-{}-{}",
+            MyStickerPacksRow::Pack { section, index, is_first, is_last } => format!(
+                "{}-{}-{}-{}",
                 section.key(),
                 self.packs(*section).get(*index).map(|pack| pack.id.as_str()).unwrap_or_default(),
+                if *is_first { "first" } else { "row" },
                 if *is_last { "last" } else { "row" }
             ),
             MyStickerPacksRow::FirstLoad => "first-load".to_owned(),

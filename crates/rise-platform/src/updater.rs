@@ -936,8 +936,10 @@ pub fn unpack(host: HostOs, archive: &Path, dest: &Path) -> Result<PathBuf, Upda
     std::fs::create_dir_all(dest).map_err(|error| io(dest, error.to_string()))?;
 
     let run = |program: &str, args: &[&std::ffi::OsStr]| -> Result<(), UpdateError> {
-        let status = std::process::Command::new(program)
-            .args(args)
+        let mut command = std::process::Command::new(program);
+        command.args(args);
+        crate::host_os::hide_console(&mut command);
+        let status = command
             .status()
             .map_err(|error| io(archive, format!("{program}: {error}")))?;
         if status.success() {
@@ -954,7 +956,8 @@ pub fn unpack(host: HostOs, archive: &Path, dest: &Path) -> Result<PathBuf, Upda
                 .ok_or_else(|| io(archive, "no app bundle in the archive".to_owned()))
         }
         HostOs::Windows => {
-            run("tar", &["-xf".as_ref(), archive.as_os_str(), "-C".as_ref(), dest.as_os_str()])?;
+            let tar = windows_tar();
+            run(&tar, &["-xf".as_ref(), archive.as_os_str(), "-C".as_ref(), dest.as_os_str()])?;
             first_entry(dest, |path| path.join("riseonly.exe").is_file())
                 .ok_or_else(|| io(archive, "no riseonly.exe in the archive".to_owned()))
         }
@@ -968,25 +971,103 @@ pub fn unpack(host: HostOs, archive: &Path, dest: &Path) -> Result<PathBuf, Upda
     }
 }
 
+fn windows_tar() -> String {
+    std::env::var_os("SystemRoot")
+        .map(|root| std::path::PathBuf::from(root).join("System32").join("tar.exe"))
+        .filter(|path| path.is_file())
+        .map_or_else(|| "tar".to_owned(), |path| path.to_string_lossy().into_owned())
+}
+
+
 fn first_entry(dir: &Path, wanted: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir).ok()?.filter_map(|entry| entry.ok().map(|entry| entry.path())).collect();
     entries.sort();
     entries.into_iter().find(|path| wanted(path))
 }
 
-pub fn replace_running_tree(new_root: &Path, install_dir: &Path, running: &Path) -> Result<(), UpdateError> {
-    let io = |path: &Path, error: std::io::Error| UpdateError::Io { path: path.to_path_buf(), reason: error.to_string() };
-    let aside = running.with_extension("exe.old");
+const LEFTOVER_SUFFIX: &str = ".old";
 
-    remove_any(&aside).map_err(|error| io(&aside, error))?;
-    std::fs::rename(running, &aside).map_err(|error| io(running, error))?;
-    if let Err(error) = copy_tree(new_root, install_dir) {
-        if !running.exists() {
-            let _ = std::fs::rename(&aside, running);
-        }
-        return Err(io(install_dir, error));
+/// puts the new tree over the running one, replaced files go aside into the manifest and come back on failure
+pub fn replace_running_tree(new_root: &Path, install_dir: &Path, manifest: &Path) -> Result<(), UpdateError> {
+    let mut journal = TreeSwap::default();
+    if let Err((path, error)) = journal.copy(new_root, install_dir) {
+        journal.roll_back();
+        return Err(UpdateError::Io { path, reason: error.to_string() });
+    }
+    let listed: String = journal.displaced.iter().map(|(_, aside)| format!("{}\n", aside.to_string_lossy())).collect();
+    if let Some(parent) = manifest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(error) = std::fs::write(manifest, listed) {
+        tracing::warn!(target: "riseonly", %error, "update leftovers manifest not written, the old files stay");
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct TreeSwap {
+    displaced: Vec<(PathBuf, PathBuf)>,
+    created_files: Vec<PathBuf>,
+    created_dirs: Vec<PathBuf>,
+}
+
+impl TreeSwap {
+    fn copy(&mut self, from: &Path, to: &Path) -> Result<(), (PathBuf, std::io::Error)> {
+        if !to.is_dir() {
+            std::fs::create_dir_all(to).map_err(|error| (to.to_path_buf(), error))?;
+            self.created_dirs.push(to.to_path_buf());
+        }
+        let entries = std::fs::read_dir(from).map_err(|error| (from.to_path_buf(), error))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| (from.to_path_buf(), error))?;
+            let source = entry.path();
+            let target = to.join(entry.file_name());
+            let kind = entry.file_type().map_err(|error| (source.clone(), error))?;
+            if kind.is_dir() {
+                self.copy(&source, &target)?;
+                continue;
+            }
+            if target.exists() {
+                let aside = Self::aside_path(&target);
+                std::fs::rename(&target, &aside).map_err(|error| (target.clone(), error))?;
+                self.displaced.push((target.clone(), aside));
+            } else {
+                self.created_files.push(target.clone());
+            }
+            std::fs::copy(&source, &target).map_err(|error| (target.clone(), error))?;
+        }
+        Ok(())
+    }
+
+    fn aside_path(target: &Path) -> PathBuf {
+        let mut name = target.file_name().map(|name| name.to_os_string()).unwrap_or_default();
+        name.push(LEFTOVER_SUFFIX);
+        let aside = target.with_file_name(&name);
+        if remove_any(&aside).is_ok() {
+            return aside;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let mut name = target.file_name().map(|name| name.to_os_string()).unwrap_or_default();
+        name.push(format!(".{stamp}{LEFTOVER_SUFFIX}"));
+        target.with_file_name(name)
+    }
+
+    fn roll_back(self) {
+        for file in self.created_files.iter().rev() {
+            let _ = std::fs::remove_file(file);
+        }
+        for (target, aside) in self.displaced.iter().rev() {
+            let _ = std::fs::remove_file(target);
+            if let Err(error) = std::fs::rename(aside, target) {
+                tracing::error!(target: "riseonly", %error, file = %target.display(), "update rollback could not restore a file");
+            }
+        }
+        for dir in self.created_dirs.iter().rev() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -1003,15 +1084,15 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn remove_leftovers(install_dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(install_dir) else {
+/// deletes exactly the files the manifest of the last update lists, then the manifest
+pub fn remove_leftovers(manifest: &Path) {
+    let Ok(listed) = std::fs::read_to_string(manifest) else {
         return;
     };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().ends_with(".exe.old") {
-            let _ = std::fs::remove_file(entry.path());
-        }
+    for line in listed.lines().filter(|line| line.ends_with(LEFTOVER_SUFFIX)) {
+        let _ = std::fs::remove_file(line);
     }
+    let _ = std::fs::remove_file(manifest);
 }
 
 #[cfg(test)]
@@ -2111,23 +2192,59 @@ mod tests {
     }
 
     #[test]
-    fn replace_running_tree_steps_the_exe_aside_and_copies_the_rest() {
+    fn replace_running_tree_steps_every_replaced_file_aside_and_copies_the_rest() {
         let dir = scratch("replace-tree");
         let install = dir.join("install");
         let fresh = dir.join("fresh");
         std::fs::create_dir_all(install.join("assets")).unwrap();
-        std::fs::create_dir_all(fresh.join("assets")).unwrap();
+        std::fs::create_dir_all(fresh.join("assets/new")).unwrap();
         std::fs::write(install.join("riseonly.exe"), "old exe").unwrap();
+        std::fs::write(install.join("avfilter-10.dll"), "old dll").unwrap();
         std::fs::write(install.join("assets/a.json"), "old").unwrap();
         std::fs::write(fresh.join("riseonly.exe"), "new exe").unwrap();
+        std::fs::write(fresh.join("avfilter-10.dll"), "new dll").unwrap();
         std::fs::write(fresh.join("assets/a.json"), "new").unwrap();
+        std::fs::write(fresh.join("assets/new/b.json"), "b").unwrap();
 
-        replace_running_tree(&fresh, &install, &install.join("riseonly.exe")).unwrap();
+        let manifest = dir.join("cache/update-leftovers");
+        std::fs::write(install.join("notes.old"), "a file of the person").unwrap();
+        replace_running_tree(&fresh, &install, &manifest).unwrap();
         assert_eq!(std::fs::read_to_string(install.join("riseonly.exe")).unwrap(), "new exe");
+        assert_eq!(std::fs::read_to_string(install.join("avfilter-10.dll")).unwrap(), "new dll");
         assert_eq!(std::fs::read_to_string(install.join("assets/a.json")).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(install.join("assets/new/b.json")).unwrap(), "b");
         assert_eq!(std::fs::read_to_string(install.join("riseonly.exe.old")).unwrap(), "old exe");
+        assert_eq!(std::fs::read_to_string(install.join("avfilter-10.dll.old")).unwrap(), "old dll");
+        assert_eq!(std::fs::read_to_string(install.join("assets/a.json.old")).unwrap(), "old");
 
-        remove_leftovers(&install);
+        remove_leftovers(&manifest);
+        assert!(!install.join("riseonly.exe.old").exists());
+        assert!(!install.join("avfilter-10.dll.old").exists());
+        assert!(!install.join("assets/a.json.old").exists());
+        assert!(install.join("avfilter-10.dll").exists());
+        assert!(install.join("notes.old").exists(), "only the listed asides go");
+        assert!(!manifest.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_failed_copy_puts_every_old_file_back() {
+        let dir = scratch("replace-tree-rollback");
+        let install = dir.join("install");
+        let fresh = dir.join("fresh");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(fresh.join("zz")).unwrap();
+        std::fs::write(install.join("riseonly.exe"), "old exe").unwrap();
+        std::fs::write(install.join("zz"), "a file where the new tree has a folder").unwrap();
+        std::fs::write(fresh.join("riseonly.exe"), "new exe").unwrap();
+        std::fs::write(fresh.join("added.dll"), "added").unwrap();
+        std::fs::write(fresh.join("zz/c.json"), "c").unwrap();
+
+        let manifest = dir.join("cache/update-leftovers");
+        assert!(replace_running_tree(&fresh, &install, &manifest).is_err());
+        assert!(!manifest.exists());
+        assert_eq!(std::fs::read_to_string(install.join("riseonly.exe")).unwrap(), "old exe");
+        assert!(!install.join("added.dll").exists());
         assert!(!install.join("riseonly.exe.old").exists());
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -16,7 +16,9 @@ use rise_ui::swiftui::environment::{EnvKey, env};
 use rise_ui::swiftui::motion::{interactive_spring, spring};
 use rise_ui::swiftui::prelude::*;
 
-use rise_ui::swiftui::text_selection::selectable_text_took_press;
+use rise_ui::swiftui::text_selection::{
+    TextDragAxis, mark_text_press_swiped, selectable_text_took_press, text_drag_axis,
+};
 use crate::core::ui::clever_image_ui::CleverImageCachePolicy;
 use crate::core::ui::formatted_text_ui::FormattedTextInlinePreparation;
 use crate::core::ui::user_logo_ui::UserLogoUi;
@@ -58,6 +60,8 @@ struct MessageRowSwipe {
     reply_armed: bool,
     began: bool,
     mouse_start: Option<Point<Pixels>>,
+    mouse_text_axis: Option<Option<TextDragAxis>>,
+    mouse_on_text: bool,
     trackpad_start: Option<Point<Pixels>>,
     trackpad_translation: Point<Pixels>,
 }
@@ -69,12 +73,14 @@ impl MessageRowSwipe {
             reply_armed: false,
             began: false,
             mouse_start: None,
+            mouse_text_axis: None,
+            mouse_on_text: false,
             trackpad_start: None,
             trackpad_translation: Point::default(),
         }
     }
 
-    fn on_changed(&mut self, start: Point<Pixels>, translation: Point<Pixels>, cx: &mut Context<Self>) {
+    fn on_changed(&mut self, start: Point<Pixels>, translation: Point<Pixels>, both_ways: bool, cx: &mut Context<Self>) {
         let dx = f32::from(translation.x);
         let dy = f32::from(translation.y);
         if !self.began {
@@ -86,10 +92,10 @@ impl MessageRowSwipe {
         if BubbleScrollPassthrough::with_shared(|passthrough| passthrough.contains(start)) {
             return;
         }
-        if dx.abs() <= dy.abs() {
+        if !both_ways && dx.abs() <= dy.abs() {
             return;
         }
-        if dx >= 0.0 {
+        if dx >= 0.0 && !both_ways {
             if *self.drag_offset.target() != 0.0 {
                 let spec = interactive_spring(0.15, 0.86, 0.25);
                 self.drag_offset.set_in(0.0, spec, RiseClock::monotonic(), cx);
@@ -97,13 +103,13 @@ impl MessageRowSwipe {
             }
             return;
         }
-        let pull = (-dx).min(REPLY_MAX_PULL);
+        let pull = dx.abs().min(REPLY_MAX_PULL);
         let damped = if pull <= REPLY_TRIGGER_DISTANCE {
             pull
         } else {
             REPLY_TRIGGER_DISTANCE + (pull - REPLY_TRIGGER_DISTANCE) * 0.35
         };
-        self.drag_offset.jump(-damped);
+        self.drag_offset.jump(if dx > 0.0 { damped } else { -damped });
         let armed = pull >= REPLY_TRIGGER_DISTANCE;
         if armed != self.reply_armed {
             self.reply_armed = armed;
@@ -123,6 +129,7 @@ impl MessageRowSwipe {
         self.reply_armed = false;
         self.began = false;
         self.mouse_start = None;
+        self.mouse_text_axis = None;
         self.trackpad_start = None;
         cx.notify();
         fire
@@ -336,15 +343,15 @@ impl MessageRow {
 }
 
 fn reply_hint(drag_offset: f32, reply_armed: bool, tint: Hsla) -> impl IntoElement {
-    let progress = (-drag_offset / REPLY_TRIGGER_DISTANCE).min(1.0);
+    let progress = (drag_offset.abs() / REPLY_TRIGGER_DISTANCE).min(1.0);
     let scale = 0.6 + 0.4 * progress + if reply_armed { 0.12 } else { 0.0 };
     let side = 15.0;
     div()
         .absolute()
         .top_0()
         .bottom_0()
-        .right_0()
-        .pr(px(6.0))
+        .when(drag_offset < 0.0, |hint| hint.right_0().pr(px(6.0)))
+        .when(drag_offset > 0.0, |hint| hint.left_0().pl(px(6.0)))
         .flex()
         .items_center()
         .opacity(progress)
@@ -395,12 +402,12 @@ impl RenderOnce for MessageRow {
             })
             .when(allows_reply, |row| {
                 row.on_mouse_down(MouseButton::Left, move |event, _, cx| {
-                    if selectable_text_took_press(event.position, cx) {
-                        return;
-                    }
                     let position = event.position;
+                    let on_text = selectable_text_took_press(position, cx);
                     mouse_swipe.update(cx, |state, cx| {
                         state.mouse_start = Some(position);
+                        state.mouse_on_text = on_text;
+                        state.mouse_text_axis = Some(None);
                         cx.notify();
                     });
                 })
@@ -427,7 +434,7 @@ impl RenderOnce for MessageRow {
                                     state.trackpad_translation.y + delta.y,
                                 );
                                 let translation = state.trackpad_translation;
-                                state.on_changed(start, translation, cx);
+                                state.on_changed(start, translation, false, cx);
                                 *state.drag_offset.target() != 0.0
                             });
                             if swallowed {
@@ -456,7 +463,7 @@ impl RenderOnce for MessageRow {
                 div()
                     .relative()
                     .w_full()
-                    .when(drag_offset < 0.0, |stack| stack.child(reply_hint(drag_offset, reply_armed, tint)))
+                    .when(drag_offset != 0.0, |stack| stack.child(reply_hint(drag_offset, reply_armed, tint)))
                     .child(div().relative().left(px(drag_offset)).w_full().child(self.row_content(cx))),
             )
             .when(allows_reply && tracks_mouse, |row| {
@@ -471,9 +478,26 @@ impl RenderOnce for MessageRow {
                                 }
                                 let position = event.position;
                                 move_swipe.update(cx, |state, cx| {
-                                    if let Some(start) = state.mouse_start {
-                                        state.on_changed(start, position - start, cx);
+                                    let Some(start) = state.mouse_start else {
+                                        return;
+                                    };
+                                    if state.mouse_text_axis == Some(None) {
+                                        match text_drag_axis(start, position) {
+                                            None => return,
+                                            Some(TextDragAxis::Swipe) => {
+                                                state.mouse_text_axis = Some(Some(TextDragAxis::Swipe));
+                                                if state.mouse_on_text {
+                                                    mark_text_press_swiped(start, cx);
+                                                }
+                                            }
+                                            Some(_) => {
+                                                state.mouse_start = None;
+                                                state.mouse_text_axis = None;
+                                                return;
+                                            }
+                                        }
                                     }
+                                    state.on_changed(start, position - start, true, cx);
                                 });
                             });
                             let up_swipe = tracker_swipe.clone();

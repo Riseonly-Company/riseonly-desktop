@@ -29,7 +29,7 @@ use rise_ui::loader_ui::{LoaderUi, LoaderUiSize};
 use rise_ui::main_text::MainText;
 use rise_ui::native_confirm_alert::NativeConfirmAlert;
 use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics, PageHeaderToolbarSlot};
-use rise_ui::page_header_ui::{PageHeaderUi, PanelToggleHeaderReserveKey};
+use rise_ui::page_header_ui::{PageHeaderUi, PanelChrome, PanelToggleHeaderReserveKey};
 use rise_ui::swiftui::motion::ease_out;
 use rise_ui::swiftui::page_refresh::PageRefreshKeys;
 use rise_ui::swiftui::prelude::*;
@@ -1083,6 +1083,7 @@ impl ProfileBody {
         let mut header = PageHeaderUi::new()
             .shows_back_button(self.shows_back_button)
             .on_back(move |_, cx| back.pop(cx))
+            .panel_chrome_in_menu(!own && !is_selecting_stories)
             .right_jsx(right);
         if own || !tag.is_empty() {
             header = header.center_slot(self.account_menu(&tag, own, theme, window, cx)).center_slot_self_styled(true);
@@ -1094,6 +1095,10 @@ impl ProfileBody {
     fn foreign_profile_menu(self: &Rc<Self>, profile: &ProfileModel, theme: &AppTheme, cx: &mut App) -> impl IntoElement + use<> {
         let mut actions = Self::foreign_profile_actions(profile, cx);
         actions.extend(Self::admin_ban_actions(profile, cx));
+        let panel_chrome = PanelChrome::current(cx);
+        actions.extend(panel_chrome.iter().flat_map(PanelChrome::menu_actions).map(|action| {
+            HoldContextMenuAction::new(action.id, action.label.to_string()).system_image(action.system_image)
+        }));
         let profile = profile.clone();
         let handler = self.clone();
         let opener = self.state.clone();
@@ -1124,7 +1129,10 @@ impl ProfileBody {
                 false,
                 None,
                 Rc::new(move |_: &App| actions.clone()),
-                Rc::new(move |id: String, _: &mut Window, cx: &mut App| {
+                Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
+                    if panel_chrome.as_ref().is_some_and(|chrome| chrome.run_menu_action(&id, window, cx)) {
+                        return;
+                    }
                     handler.handle_foreign_profile_action(&id, &profile, cx);
                 }),
                 source,

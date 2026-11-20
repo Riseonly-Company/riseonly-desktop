@@ -6,6 +6,7 @@ use gpui::{
     AnyView, App, Bounds, ElementId, Empty, Entity, ListAlignment, Pixels, Point, SharedString,
     StyleRefinement, Subscription, Task, WeakEntity, Window, canvas,
 };
+use rise_canon::RisePrivacyRule;
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_i18n::tr;
@@ -28,6 +29,7 @@ use rise_ui::swiftui::transition::{Presence, Transition};
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
+use crate::modules::rtc::media::rise_rtc_audio_settings::RiseRTCStreamerMode;
 use crate::core::lib::sai::core::utilities::sai_ws_slice_binding::SaiWsSliceStatus;
 use crate::core::lib::sai::modules::sai_data_render::sai_data_render::SaiDataRender;
 use crate::core::lib::sai::modules::sai_ws::sai_cache_revision_tracker::SaiCacheRevisionTracker;
@@ -387,6 +389,17 @@ impl RenderOnce for UserRelationshipList {
         } else {
             self.collapsed_search(&state)
         });
+        let veil_rule = match kind {
+            UserListKind::Friends => Some(RisePrivacyRule::Friend),
+            UserListKind::Subscriptions => Some(RisePrivacyRule::Subs),
+            UserListKind::Subscribers => None,
+        }
+        .filter(|_| owner == current_user_id(cx));
+        let results = UserRelationshipResultsHost { results: full_results }.into_any_element();
+        let results = match veil_rule {
+            Some(rule) => RiseRTCStreamerMode::veil(self.element_id("streamer-veil"), rule, results, cx),
+            None => results,
+        };
         let shell = ListShellUi::new()
             .title(SharedString::from(self.title.clone()))
             .on_back({
@@ -399,7 +412,7 @@ impl RenderOnce for UserRelationshipList {
             })
             .below_header(below_header)
             .header_chrome_shadow(Some(ScrollChromeShadowStyle::list_shell_tall_header()))
-            .content(UserRelationshipResultsHost { results: full_results });
+            .content(results);
 
         let shared_cx: &App = cx;
         let overlay = state.read(shared_cx).search_presence.render_transitioned(now, window, |_| {

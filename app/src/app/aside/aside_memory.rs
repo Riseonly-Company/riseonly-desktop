@@ -70,43 +70,8 @@ impl AsideMemory {
             .collect()
     }
 
-    /// true if the route can survive a relaunch so the panel may pin it
-    pub fn keeps(route: &RootRoute) -> bool {
-        Self::encode(route).is_some()
-    }
-
-    pub fn remember_pinned(account: Option<&str>, pinned: &[(AsideSection, RootRoute)]) {
-        let defaults = UserDefaults::standard();
-        let Some(account) = account else {
-            return;
-        };
-        let sections: BTreeMap<String, DefaultsValue> = pinned
-            .iter()
-            .filter_map(|(section, route)| Some((section.context_key().to_owned(), Self::encode(route)?)))
-            .collect();
-        let mut fields = BTreeMap::new();
-        fields.insert(ACCOUNT_FIELD.to_owned(), DefaultsValue::from(account));
-        fields.insert(SECTIONS_FIELD.to_owned(), DefaultsValue::from(sections));
-        defaults.set(user_defaults_keys::DESKTOP_ASIDE_PINNED, DefaultsValue::from(fields));
-    }
-
-    pub fn recall_pinned(account: Option<&str>) -> Vec<(AsideSection, RootRoute)> {
-        let Some(account) = account else {
-            return Vec::new();
-        };
-        let Some(fields) = UserDefaults::standard().dictionary(user_defaults_keys::DESKTOP_ASIDE_PINNED) else {
-            return Vec::new();
-        };
-        if fields.get(ACCOUNT_FIELD).and_then(DefaultsValue::as_str) != Some(account) {
-            return Vec::new();
-        }
-        let Some(sections) = fields.get(SECTIONS_FIELD).and_then(DefaultsValue::as_dictionary) else {
-            return Vec::new();
-        };
-        sections
-            .iter()
-            .filter_map(|(key, route)| Some((AsideSection::from_context_key(key)?, Self::decode(route)?)))
-            .collect()
+    pub fn forget_pinned() {
+        UserDefaults::standard().remove_object(user_defaults_keys::DESKTOP_ASIDE_PINNED);
     }
 
     fn encode(route: &RootRoute) -> Option<DefaultsValue> {

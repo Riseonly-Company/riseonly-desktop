@@ -10,7 +10,6 @@ pub fn install_rise_rtc_call_window_hooks() {
         app_id: WindowPresenter::app_id,
         is_main_window: |window| window.downcast::<RootView>().is_some(),
         activate_call_window: RiseRTCRoomPresentationHost::activate_call_window,
-        present_call: RiseRTCRoomPresentationHost::present_call,
         uses_separate_window: RiseRTCRoomPresentationHost::uses_separate_window,
     });
 }

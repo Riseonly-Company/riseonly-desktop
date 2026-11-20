@@ -167,10 +167,10 @@ impl NotifierUndoPolicy {
 }
 
 impl NotifierConfig {
-    /// a notification about someone or something, it opens a place when tapped
+    /// a notification about someone or something, from the notification feed or opening a place when tapped
     /// it shows where the person put banners, feedback toasts stay at the top centre
     pub fn is_in_app_notification(&self) -> bool {
-        self.action.is_some()
+        self.is_notification || self.action.is_some()
     }
 }
 
@@ -189,6 +189,7 @@ pub struct NotifierConfig {
     pub content_is_markup: bool,
     pub author: Option<NotifierAuthor>,
     pub replace_key: Option<String>,
+    pub is_notification: bool,
 }
 
 /// default params of the notifier send call
@@ -204,6 +205,7 @@ pub struct NotifierSendOptions {
     pub content_is_markup: bool,
     pub author: Option<NotifierAuthor>,
     pub replace_key: Option<String>,
+    pub is_notification: bool,
 }
 
 impl Default for NotifierSendOptions {
@@ -219,6 +221,7 @@ impl Default for NotifierSendOptions {
             content_is_markup: false,
             author: None,
             replace_key: None,
+            is_notification: false,
         }
     }
 }
@@ -358,6 +361,7 @@ impl NotifierStore {
                 content_is_markup: options.content_is_markup,
                 author: options.author,
                 replace_key: options.replace_key,
+                is_notification: options.is_notification,
             }];
             self.restart_timer(current_id, duration, cx);
             cx.notify();
@@ -377,6 +381,7 @@ impl NotifierStore {
             content_is_markup: options.content_is_markup,
             author: options.author,
             replace_key: options.replace_key,
+            is_notification: options.is_notification,
         };
         let id = config.id;
         tracing::warn!(target: "riseonly::X1428", ?id, items = self.items.len(), replacing = self.is_replacing, "toast queued");
@@ -419,6 +424,7 @@ impl NotifierStore {
             content_is_markup: false,
             author: None,
             replace_key: None,
+            is_notification: false,
         };
         let id = config.id;
 

@@ -11,7 +11,7 @@ impl RiseRTCListenerVolume {
     pub const MINIMUM_PERCENT: f64 = 0.0;
     pub const MAXIMUM_PERCENT: f64 = 200.0;
     pub const DEFAULT_PERCENT: f64 = 100.0;
-    pub const STEP_PERCENT: f64 = 5.0;
+    pub const STEP_PERCENT: f64 = 1.0;
     pub const BREAKPOINTS: [f64; 3] = [0.0, 100.0, 200.0];
 
     /// explicit choice or else 0 if totally blocked and 100 if not

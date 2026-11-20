@@ -1,5 +1,5 @@
 use std::any::TypeId;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -204,6 +204,68 @@ pub fn selectable_text_took_press(position: Point<Pixels>, cx: &App) -> bool {
     cx.try_global::<SelectableTextPressMark>().is_some_and(|mark| mark.0 == position)
 }
 
+struct TextGlyphPressMark(Point<Pixels>);
+
+impl Global for TextGlyphPressMark {}
+
+/// the press landed on the letters themselves, a second click there selects a word
+pub fn mark_text_glyph_press(position: Point<Pixels>, cx: &mut App) {
+    cx.set_global(TextGlyphPressMark(position));
+}
+
+/// true if the press at position landed on the letters, the empty part of a bubble answers false
+pub fn text_glyph_took_press(position: Point<Pixels>, cx: &App) -> bool {
+    cx.try_global::<TextGlyphPressMark>().is_some_and(|mark| mark.0 == position)
+}
+
+struct GesturePlatePressMark(Point<Pixels>);
+
+impl Global for GesturePlatePressMark {}
+
+/// a bubble gesture plate took the press, its own double tap answers it
+pub fn mark_gesture_plate_press(position: Point<Pixels>, cx: &mut App) {
+    cx.set_global(GesturePlatePressMark(position));
+}
+
+/// true if a bubble gesture plate took the press at position, a row around it must not answer too
+pub fn gesture_plate_took_press(position: Point<Pixels>, cx: &App) -> bool {
+    cx.try_global::<GesturePlatePressMark>().is_some_and(|mark| mark.0 == position)
+}
+
+const MOUSE_DRAG_DECISION_DISTANCE: f32 = 12.0;
+const MOUSE_DRAG_SELECT_MAX_DX_PER_DY: f32 = 0.45;
+
+/// where a mouse drag over a message goes, decided once
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextDragAxis {
+    Select,
+    Swipe,
+    Neither,
+}
+
+/// none until the drag is 12 pt long, then select only within about 24 degrees of vertical,
+/// every other direction is a swipe
+pub fn text_drag_axis(press: Point<Pixels>, position: Point<Pixels>) -> Option<TextDragAxis> {
+    let dx = f32::from(position.x - press.x).abs();
+    let dy = f32::from(position.y - press.y).abs();
+    if dx.hypot(dy) < MOUSE_DRAG_DECISION_DISTANCE {
+        return None;
+    }
+    Some(if dx <= dy * MOUSE_DRAG_SELECT_MAX_DX_PER_DY { TextDragAxis::Select } else { TextDragAxis::Swipe })
+}
+
+struct SwipedTextPress(Point<Pixels>);
+
+impl Global for SwipedTextPress {}
+
+pub fn mark_text_press_swiped(position: Point<Pixels>, cx: &mut App) {
+    cx.set_global(SwipedTextPress(position));
+}
+
+pub fn text_press_swiped(position: Point<Pixels>, cx: &App) -> bool {
+    cx.try_global::<SwipedTextPress>().is_some_and(|mark| mark.0 == position)
+}
+
 type ContextMenuHandler = Rc<dyn Fn(&SelectableTextMenuRequest, &mut Window, &mut App)>;
 type PressPredicate = Rc<dyn Fn(&mut App) -> bool>;
 
@@ -395,6 +457,7 @@ impl SelectableText {
 pub struct SelectableTextState {
     selection: Rc<RefCell<TextSelection>>,
     focus: FocusHandle,
+    drag: Rc<Cell<(Option<Point<Pixels>>, Option<TextDragAxis>)>>,
 }
 
 #[doc(hidden)]
@@ -450,10 +513,11 @@ impl Element for SelectableText {
                 let state = state.unwrap_or_else(|| SelectableTextState {
                     selection: Rc::default(),
                     focus: cx.focus_handle(),
+                    drag: Rc::default(),
                 });
                 (state.clone(), state)
             }),
-            None => SelectableTextState { selection: Rc::default(), focus: cx.focus_handle() },
+            None => SelectableTextState { selection: Rc::default(), focus: cx.focus_handle(), drag: Rc::default() },
         };
         window.set_focus_handle(&state.focus, cx);
         SelectableTextPrepaint { hitbox, state }
@@ -500,6 +564,7 @@ impl Element for SelectableText {
             let on_context_menu = self.on_context_menu.clone();
             let press_gate = self.press_gate.clone();
             let single_click_when = self.single_click_when.clone();
+            let drag = state.drag.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble {
                     return;
@@ -515,11 +580,17 @@ impl Element for SelectableText {
                         if press_gate.as_ref().is_some_and(|gate| gate(cx)) {
                             return;
                         }
+                        let on_glyph = layout.index_for_position(event.position).is_ok();
                         if hosted {
                             mark_selectable_text_press(event.position, cx);
+                            if on_glyph {
+                                mark_text_glyph_press(event.position, cx);
+                            }
+                            drag.set((Some(event.position), None));
                         }
-                        let click_count =
-                            if single_click_when.as_ref().is_some_and(|single| single(cx)) { 1 } else { event.click_count };
+                        let single_click = (hosted && !on_glyph)
+                            || single_click_when.as_ref().is_some_and(|single| single(cx));
+                        let click_count = if single_click { 1 } else { event.click_count };
                         let index = index_at(&layout, event.position);
                         selection.borrow_mut().press(&text, index, click_count, event.modifiers.shift);
                         if !hosted || !selection.borrow().is_empty() {
@@ -549,6 +620,7 @@ impl Element for SelectableText {
             let text = self.text.clone();
             let focus = state.focus.clone();
             let press_gate = self.press_gate.clone();
+            let drag = state.drag.clone();
             move |event: &MouseMoveEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !selection.borrow().is_dragging() {
                     return;
@@ -556,6 +628,26 @@ impl Element for SelectableText {
                 if event.pressed_button != Some(MouseButton::Left) {
                     selection.borrow_mut().release();
                     return;
+                }
+                if hosted && let (Some(press), axis) = drag.get() {
+                    let axis = match axis {
+                        Some(axis) => axis,
+                        None => {
+                            let Some(axis) = text_drag_axis(press, event.position) else {
+                                return;
+                            };
+                            drag.set((Some(press), Some(axis)));
+                            axis
+                        }
+                    };
+                    if axis != TextDragAxis::Select || text_press_swiped(press, cx) {
+                        let mut selection = selection.borrow_mut();
+                        selection.release();
+                        selection.clear();
+                        drop(selection);
+                        cx.notify(view);
+                        return;
+                    }
                 }
                 if press_gate.as_ref().is_some_and(|gate| gate(cx)) {
                     selection.borrow_mut().release();
@@ -575,9 +667,11 @@ impl Element for SelectableText {
 
         window.on_mouse_event({
             let selection = state.selection.clone();
+            let drag = state.drag.clone();
             move |event: &MouseUpEvent, phase, _window, _cx| {
                 if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
                     selection.borrow_mut().release();
+                    drag.set((None, None));
                 }
             }
         });

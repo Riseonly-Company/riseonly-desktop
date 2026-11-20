@@ -1,18 +1,17 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Bounds, Div, Edges, Element, ElementId, Entity, EntityId, GlobalElementId, Hsla, InspectorElementId, LayoutId, Length, Position, Style, InteractiveElement, IntoElement, List, ParentElement, Pixels,
-    RenderOnce, SharedString, Stateful, StyleRefinement, Styled, Window, div, px,
+    AnyElement, App, BACKDROP_BLUR_SUPPORTED, Bounds, Div, Entity, Hsla, InteractiveElement, IntoElement, List,
+    ParentElement, Pixels, RenderOnce, SharedString, Stateful, StyleRefinement, Styled, Window, div, px,
 };
-use rise_theme::{RiseThemeAppearance, ThemeStore};
+use rise_theme::ThemeStore;
 use rise_ui::expandable_text_ui::EdgeInsets;
 use rise_ui::guide_anchor_ui::guide_anchor_registry::{GuideAnchorCoverKind, GuideAnchorCoverModifiers};
 use rise_ui::page_header_toolbar_button::PageHeaderMetrics;
-use rise_ui::page_header_ui::PageHeaderUi;
-use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyle, ScrollChromeShadowStyleColorRole, ScrollChromeShadowUi};
-use rise_ui::scroll_edge_blur_ui::{ScrollEdgeBlurFalloff, ScrollEdgeBlurUi};
+use rise_ui::page_header_ui::{PageHeaderUi, PanelChromeKey};
+use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyle, ScrollChromeShadowStyleAnchor, ScrollChromeShadowUi};
+use rise_ui::scroll_edge_blur_ui::{HeaderEdgeBlur, ScrollEdgeBlurFalloff};
 use rise_ui::swiftui::environment::{EnvKey, env, env_scope};
 use rise_ui::swiftui::environment_values::accessibility_reduce_transparency;
 use rise_ui::swiftui::linear_gradient::GradientStop;
@@ -77,6 +76,7 @@ pub struct PageColumnBlurredHeader {
     pub background: Hsla,
     pub height: f32,
     pub tint: Vec<GradientStop>,
+    pub shadow_height: f32,
     pub shadow: Vec<GradientStop>,
 }
 
@@ -163,130 +163,9 @@ impl EnvKey for ListShellContentCoordinateSpaceKey {
     }
 }
 
-/// room the shell content keeps under the floating chrome, reading it marks the content as keeping it
+/// room the shell content keeps under the floating chrome
 pub fn list_shell_floating_top_inset(cx: &App) -> f32 {
-    if let Some(read) = env::<ListShellInsetReadKey>(cx) {
-        read.set(true);
-    }
     env::<ListShellFloatingTopInsetKey>(cx)
-}
-
-struct ListShellInsetReadKey;
-
-impl EnvKey for ListShellInsetReadKey {
-    type Value = Option<Rc<Cell<bool>>>;
-
-    fn default_value() -> Option<Rc<Cell<bool>>> {
-        None
-    }
-
-    fn fingerprint(_: &Self::Value) -> Option<u64> {
-        None
-    }
-}
-
-/// right panel strip over a page and the panel record of pages floating under it
-#[derive(Clone)]
-pub struct PanelStripInset {
-    height: f32,
-    page: EntityId,
-    floats: Rc<RefCell<HashMap<EntityId, bool>>>,
-}
-
-impl PanelStripInset {
-    pub fn new(height: f32, page: EntityId, floats: Rc<RefCell<HashMap<EntityId, bool>>>) -> Self {
-        Self { height, page, floats }
-    }
-}
-
-/// set by the right panel for each page it shows, none elsewhere
-pub struct PanelStripInsetKey;
-
-impl EnvKey for PanelStripInsetKey {
-    type Value = Option<PanelStripInset>;
-
-    fn default_value() -> Option<PanelStripInset> {
-        None
-    }
-
-    fn fingerprint(value: &Option<PanelStripInset>) -> Option<u64> {
-        value.as_ref().map(|inset| u64::from(inset.height.to_bits()))
-    }
-}
-
-struct ListShellInsetHonored(Rc<Cell<bool>>);
-
-struct PanelStripChrome {
-    strip: PanelStripInset,
-    honored: Rc<Cell<bool>>,
-    child: AnyElement,
-}
-
-impl IntoElement for PanelStripChrome {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
-impl Element for PanelStripChrome {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        let child = self.child.request_layout(window, cx);
-        let floats = self.honored.get();
-        self.strip.floats.borrow_mut().insert(self.strip.page, floats);
-        let mut style = Style::default();
-        style.position = Position::Absolute;
-        style.inset = Edges {
-            top: px(if floats { self.strip.height } else { 0.0 }).into(),
-            right: px(0.0).into(),
-            bottom: Length::Auto,
-            left: px(0.0).into(),
-        };
-        (window.request_layout(style, [child], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.child.prepaint(window, cx);
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
-        _prepaint: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.child.paint(window, cx);
-    }
 }
 
 pub fn list_shell_safe_area_insets(cx: &App) -> EdgeInsets {
@@ -530,11 +409,8 @@ impl RenderOnce for ListShellUi {
         let header_body_height = header_body_height_state.read(cx).0;
 
         let safe_top = 0.0_f32;
-        let strip = env::<PanelStripInsetKey>(cx).filter(|_| self.use_safe_zone);
-        let strip_height = strip.as_ref().map_or(0.0, |strip| strip.height);
-        let honored = window.use_state(cx, |_, _| ListShellInsetHonored(Rc::new(Cell::new(false)))).read(cx).0.clone();
         let header_top_inset = if self.use_safe_zone { safe_top + header_body_height } else { 0.0 };
-        let content_top_inset = header_top_inset + strip_height;
+        let content_top_inset = header_top_inset;
         note_page_column_top_inset(header_top_inset, cx);
         let geometry_bottom_inset = 0.0_f32;
         let safe_bottom_inset = if self.respects_keyboard_safe_area {
@@ -549,55 +425,25 @@ impl RenderOnce for ListShellUi {
             0.0,
         );
         let shadow_height = self.header_chrome_shadow_height(header_body_height, if self.use_safe_zone { safe_top } else { 0.0 });
-        let header_fade = self
-            .header_chrome_shadow
-            .map(ScrollChromeShadowStyle::over_backdrop_blur)
-            .filter(|style| {
-                style.opaque_through_header
-                    && style.color_role == ScrollChromeShadowStyleColorRole::Surface
-                    && self.header_collapse.is_none()
-            })
-            .filter(|_| shadow_height > 0.0)
-            .map(|style| PageColumnHeaderFade {
-                color: theme_bg.opacity(style.peak_opacity.clamp(0.0, 1.0) as f32),
-                solid_end: (shadow_height - style.overflow_below_header).max(0.0),
-                end: shadow_height,
-            });
+        let chrome_bottom = header_body_height + if self.use_safe_zone { safe_top } else { 0.0 };
         let blurred_header = self
             .header_chrome_shadow
-            .filter(|_| {
-                header_fade.is_none()
-                    && self.fills_viewport_background
-                    && self.header_collapse.is_none()
-                    && shadow_height > 0.0
-            })
-            .map(ScrollChromeShadowStyle::over_backdrop_blur)
-            .filter(|style| style.blurs_backdrop)
-            .map(|style| {
-                let shadow = ListShellHeaderShadow {
-                    style,
-                    full_height: shadow_height,
-                    collapse: None,
-                };
-                let blur_solid_end = (shadow_height - style.overflow_below_header).max(0.0) / shadow_height;
-                let tint_peak = ScrollEdgeBlurFalloff::header_tint_peak(
-                    ThemeStore::shared(cx).read(cx).resolved_appearance() == RiseThemeAppearance::Dark,
-                );
-                PageColumnBlurredHeader {
-                    background: theme_bg,
-                    height: shadow_height,
-                    tint: ScrollEdgeBlurFalloff::tint_stops_with_peak(
-                        rise_ui::theme(cx).bg._100,
-                        blur_solid_end,
-                        tint_peak,
-                        accessibility_reduce_transparency(cx),
-                    ),
-                    shadow: ScrollChromeShadowUi::new(style)
-                        .solid_fraction(shadow.solid_fraction(shadow_height))
-                        .stops(cx),
-                }
+            .filter(|_| self.fills_viewport_background && self.header_collapse.is_none() && shadow_height > 0.0)
+            .map(|_| PageColumnBlurredHeader {
+                background: theme_bg,
+                height: HeaderEdgeBlur::blur_height(chrome_bottom),
+                tint: ScrollEdgeBlurFalloff::paint_stops(
+                    rise_ui::theme(cx).bg._100,
+                    ScrollEdgeBlurFalloff::DEFAULT_SOLID_END,
+                    ScrollEdgeBlurFalloff::TINT_PEAK,
+                    accessibility_reduce_transparency(cx),
+                    BACKDROP_BLUR_SUPPORTED,
+                ),
+                shadow_height: HeaderEdgeBlur::shadow_height(chrome_bottom, HeaderEdgeBlur::SHADOW_SCALE),
+                shadow: ScrollChromeShadowUi::new(HeaderEdgeBlur::shadow_style(ScrollChromeShadowStyleAnchor::FromTop))
+                    .stops(cx),
             });
-        note_page_column_header_fade(header_fade, cx);
+        note_page_column_header_fade(None, cx);
         note_page_column_blurred_header(blurred_header, cx);
         let blocks_touches = self.use_safe_zone || self.header_collapse.is_some();
 
@@ -635,11 +481,9 @@ impl RenderOnce for ListShellUi {
                 .child(
                     env_scope::<ListShellSafeAreaInsetsKey>(shell_insets).child(
                         env_scope::<ListShellFloatingTopInsetKey>(content_top_inset).child(
-                            env_scope::<ListShellInsetReadKey>(Some(honored.clone())).child(
-                                env_scope::<PanelStripInsetKey>(None).child(
-                                    env_scope::<ListShellContentCoordinateSpaceKey>(Some(content_frame_state.clone()))
-                                        .child(div().size_full().child(content)),
-                                ),
+                            env_scope::<PanelChromeKey>(None).child(
+                                env_scope::<ListShellContentCoordinateSpaceKey>(Some(content_frame_state.clone()))
+                                    .child(div().size_full().child(content)),
                             ),
                         ),
                     ),
@@ -658,19 +502,11 @@ impl RenderOnce for ListShellUi {
         );
 
         let mut chrome = div().absolute().top_0().left_0().right_0();
-        if let Some(style) = self.header_chrome_shadow {
-            chrome = chrome.child(
-                pass_through()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .child(ListShellHeaderShadow {
-                        style: style.over_backdrop_blur(),
-                        full_height: shadow_height,
-                        collapse: self.header_collapse.clone(),
-                    }),
-            );
+        if self.header_chrome_shadow.is_some() {
+            chrome = chrome.child(pass_through().absolute().top_0().left_0().right_0().child(ListShellHeaderShadow {
+                chrome_bottom,
+                collapse: self.header_collapse.clone(),
+            }));
         }
 
         let title_bar = div().w_full().child(page_header);
@@ -700,11 +536,7 @@ impl RenderOnce for ListShellUi {
         }));
 
         let header_body = header_body.guide_anchor_cover("list-shell-guide-chrome", GuideAnchorCoverKind::Chrome);
-        let chrome = chrome.child(header_body);
-        match strip {
-            Some(strip) => root.child(PanelStripChrome { strip, honored, child: chrome.into_any_element() }),
-            None => root.child(chrome),
-        }
+        root.child(chrome.child(header_body))
     }
 }
 
@@ -725,22 +557,12 @@ impl RenderOnce for ListShellBelowHeaderBlocker {
     }
 }
 
-/// scrim under the chrome, shortened by the folded away amount
-/// reads the collapse here so a scroll frame redraws one gradient and not the whole shell
+/// the shared header blur under the chrome, shortened by the folded away amount
+/// reads the collapse here so a scroll frame redraws one band and not the whole shell
 #[derive(IntoElement)]
 struct ListShellHeaderShadow {
-    style: ScrollChromeShadowStyle,
-    full_height: f32,
+    chrome_bottom: f32,
     collapse: Option<Entity<ListShellHeaderCollapse>>,
-}
-
-impl ListShellHeaderShadow {
-    fn solid_fraction(&self, height: f32) -> Option<f32> {
-        if !self.style.opaque_through_header || height <= 0.0 {
-            return None;
-        }
-        Some((height - self.style.overflow_below_header).max(0.0) / height)
-    }
 }
 
 impl RenderOnce for ListShellHeaderShadow {
@@ -749,27 +571,8 @@ impl RenderOnce for ListShellHeaderShadow {
             .collapse
             .as_ref()
             .map_or(0.0, |collapse| collapse.read(cx).presented_offset(window));
-        let height = (self.full_height - folded).max(0.0);
-        let solid_fraction = self.solid_fraction(height);
-        let blur_solid_end = if height > 0.0 {
-            (height - self.style.overflow_below_header).max(0.0) / height
-        } else {
-            0.0
-        };
-        let tint_peak = ScrollEdgeBlurFalloff::header_tint_peak(
-            ThemeStore::shared(cx).read(cx).resolved_appearance() == RiseThemeAppearance::Dark,
-        );
-        let blur = self.style.blurs_backdrop.then(|| {
-            div().absolute().top_0().left_0().size_full().child(
-                ScrollEdgeBlurUi::new().solid_end(blur_solid_end).tint_peak(tint_peak),
-            )
-        });
-        div()
-            .relative()
-            .w_full()
-            .h(px(height))
-            .children(blur)
-            .child(ScrollChromeShadowUi::new(self.style).solid_fraction(solid_fraction))
+        let chrome_bottom = (self.chrome_bottom - folded).max(0.0);
+        div().relative().w_full().h(px(HeaderEdgeBlur::height(chrome_bottom))).child(HeaderEdgeBlur::new(chrome_bottom))
     }
 }
 

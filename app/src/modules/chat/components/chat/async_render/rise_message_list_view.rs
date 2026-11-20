@@ -391,6 +391,7 @@ pub struct RiseMessageScrollRequest {
     pub id: Uuid,
     pub destination: RiseMessageScrollDestination,
     pub animated: bool,
+    pub focus_permille: Option<u16>,
 }
 
 impl RiseMessageScrollRequest {
@@ -399,7 +400,18 @@ impl RiseMessageScrollRequest {
             id: Uuid::new_v4(),
             destination,
             animated,
+            focus_permille: None,
         }
+    }
+
+    /// share of the row height where the thing to show sits, 0 top and 1 bottom
+    pub fn focusing(mut self, focus: Option<f32>) -> Self {
+        self.focus_permille = focus.filter(|focus| focus.is_finite()).map(|focus| (focus.clamp(0.0, 1.0) * 1000.0).round() as u16);
+        self
+    }
+
+    pub fn focus(&self) -> Option<f32> {
+        self.focus_permille.map(|permille| f32::from(permille) / 1000.0)
     }
 }
 

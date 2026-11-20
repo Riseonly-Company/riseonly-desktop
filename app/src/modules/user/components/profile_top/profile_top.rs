@@ -52,7 +52,7 @@ use crate::core::media_viewer::media_viewer_presentation_state::{
     MediaViewerPresentationState, media_viewer_presentation,
 };
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_ui::BottomSheetUi;
-use crate::core::ui::premium_badge::{PremiumBadge, PremiumBadgeSource};
+use crate::core::ui::premium_badge::{BadgeInfoPrompt, PremiumBadge, PremiumBadgeSource};
 use crate::core::ui::premium_name_color::PremiumNameColor;
 use crate::core::widgets::notifier::notifier_store::Notifier;
 use crate::core::widgets::sheets::share_sheet::ShareSheetStore;
@@ -102,7 +102,7 @@ use crate::modules::user::stores::user::user_interactions::user_interactions::Us
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 use crate::modules::user::stores::user_profile_photos::user_profile_photos_services::user_profile_photos_services::UserProfilePhotosServicesStore;
 
-const BANNER_HEIGHT: f32 = 250.0;
+pub const BANNER_HEIGHT: f32 = 250.0;
 const AVATAR_SIZE: f32 = 88.0;
 const AVATAR_HANG: f32 = 46.0;
 const FEATURED_TRACKS_FRACTIONS: [f32; 2] = [0.62, 0.92];
@@ -1411,7 +1411,13 @@ impl ProfileTopBody {
             .relative()
             .top(px(3.0))
             .child(name)
-            .children(self.profile.more.is_official.then(|| OfficialBadge::new().size(px(20.0))))
+            .children(self.profile.more.is_official.then(|| {
+                div()
+                    .id(self.element_id("official-badge"))
+                    .cursor_pointer()
+                    .on_click(|_: &ClickEvent, window, cx| BadgeInfoPrompt::official(window, cx))
+                    .child(OfficialBadge::new().size(px(20.0)))
+            }))
             .children(is_premium.then(|| self.premium_badge(!self.treat_as_foreign, cx)));
 
         let tag = trimming_whitespaces_and_newlines(&self.profile.tag);
@@ -1446,10 +1452,16 @@ impl ProfileTopBody {
         let badge = PremiumBadge::new()
             .user_id(Some(SharedString::from(self.profile.id.clone())))
             .emoji(self.profile.more.premium_badge_emoji.clone().map(SharedString::from))
-            .size(22.0);
+            .size(22.0)
+            .shows_hint(!can_edit);
 
         if !can_edit {
-            return badge.into_any_element();
+            return div()
+                .id(self.element_id("premium-badge-info"))
+                .cursor_pointer()
+                .on_click(|_: &ClickEvent, window, cx| BadgeInfoPrompt::premium(window, cx))
+                .child(badge)
+                .into_any_element();
         }
         let premium_badge_anchor = self.state.read(cx).premium_badge_anchor.clone();
         let tap_anchor = premium_badge_anchor.clone();

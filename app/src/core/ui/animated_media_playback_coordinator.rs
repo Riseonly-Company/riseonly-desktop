@@ -10,6 +10,9 @@ use rise_canon::RiseLimits;
 use rise_energy::rise_energy_saving::{
     RiseEnergySavingDidChange, RiseEnergySavingFeature, RiseEnergySavingSnapshot, RiseEnergySavingStore,
 };
+use rise_diagnostics::rise_breadcrumbs::{RiseBreadcrumbs, RiseBreadcrumbsChannel};
+use rise_platform::HostOs;
+use rise_platform::accessibility::reduce_motion_stops_content_playback;
 use rise_platform::process_info::{ThermalState, thermal_state};
 use rise_ui::swiftui::environment::reduce_motion;
 
@@ -190,6 +193,12 @@ impl AnimatedMediaPlaybackCoordinator {
         let energy_store = RiseEnergySavingStore::shared(cx);
         let conditions = Self::conditions(is_application_active, cx);
         let budget = AnimatedMediaPlaybackPolicy::budget(&conditions);
+        if budget == 0 {
+            let reduce_motion = conditions.is_reduce_motion_enabled;
+            RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Lifecycle, || {
+                format!("animations paused at start (app active {is_application_active}, reduce motion {reduce_motion})")
+            });
+        }
 
         let energy_saving_observer = cx.subscribe(
             &energy_store,
@@ -383,7 +392,20 @@ impl AnimatedMediaPlaybackCoordinator {
 
     fn refresh_budget(&mut self, cx: &mut Context<Self>) {
         self.conditions = Self::conditions(self.is_application_active, cx);
-        self.budget = AnimatedMediaPlaybackPolicy::budget(&self.conditions);
+        let budget = AnimatedMediaPlaybackPolicy::budget(&self.conditions);
+        if (budget == 0) != (self.budget == 0) {
+            let conditions = self.conditions.clone();
+            RiseBreadcrumbs::record(RiseBreadcrumbsChannel::Lifecycle, || {
+                format!(
+                    "animations {} (app active {}, reduce motion {}, power saving {})",
+                    if budget == 0 { "paused" } else { "resumed" },
+                    conditions.is_application_active,
+                    conditions.is_reduce_motion_enabled,
+                    conditions.energy_saving.is_active,
+                )
+            });
+        }
+        self.budget = budget;
         if self.testing_budget_override.is_some() {
             return;
         }
@@ -473,7 +495,7 @@ impl AnimatedMediaPlaybackCoordinator {
     fn conditions(is_application_active: bool, cx: &App) -> AnimatedMediaPlaybackConditions {
         AnimatedMediaPlaybackConditions {
             is_application_active,
-            is_reduce_motion_enabled: reduce_motion(cx),
+            is_reduce_motion_enabled: reduce_motion(cx) && reduce_motion_stops_content_playback(HostOs::current()),
             energy_saving: RiseEnergySavingStore::snapshot(),
         }
     }

@@ -1,0 +1,231 @@
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -10,7 +10,7 @@
+     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
+     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformImageUploader,
++    AtlasKey, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformImageUploader,
+     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
+     Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+@@ -1743,6 +1743,9 @@
+     pub(crate) hidden_dropped_deferred: u64,
+     /// Images dropped from the sprite atlas so far; a parked paint may point at their tiles.
+     pub(crate) image_drops: u64,
++    /// Atlas keys of dropped images, removed when the next frame starts: the frame on screen may
++    /// still draw their tiles and is presented again without a draw while input runs fast (Riseonly 0128).
++    pending_image_drops: Vec<AtlasKey>,
+     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
+     pub(crate) focus: Option<FocusId>,
+     focus_enabled: bool,
+@@ -2528,6 +2531,7 @@
+             hidden_depth: 0,
+             hidden_dropped_deferred: 0,
+             image_drops: 0,
++            pending_image_drops: Vec::new(),
+             activation_observers: SubscriberSet::new(),
+             focus: None,
+             focus_enabled: true,
+@@ -3635,6 +3639,7 @@
+     #[profiling::function]
+     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+         self.draw_count += 1;
++        self.flush_image_drops();
+         // Drain unconditionally so a stale first-invalidation timestamp can't
+         // leak into a later frame across enable/disable of frame tracing.
+         let frame_dirty = self.invalidator.take_frame_dirty();
+@@ -7380,7 +7385,7 @@
+         self.sprite_atlas.image_uploader()
+     }
+ 
+-    /// Removes an image from the sprite atlas.
++    /// Removes an image from the sprite atlas when the next frame starts (Riseonly 0128).
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         self.image_drops += 1;
+         for frame_index in 0..data.frame_count() {
+@@ -7389,12 +7394,21 @@
+                 frame_index,
+             };
+ 
+-            self.sprite_atlas.remove(&params.clone().into());
++            self.pending_image_drops.push(params.into());
+         }
++        if self.pending_image_drops.len() > MAX_PENDING_IMAGE_DROPS {
++            self.flush_image_drops();
++        }
+ 
+         Ok(())
+     }
+ 
++    fn flush_image_drops(&mut self) {
++        for key in self.pending_image_drops.drain(..) {
++            self.sprite_atlas.remove(&key);
++        }
++    }
++
+     /// Returns whether every frame of an image is present in the sprite atlas.
+     #[cfg(any(test, feature = "test-support"))]
+     pub fn has_image_atlas_entry(&self, data: &RenderImage) -> bool {
+@@ -9672,6 +9686,9 @@
+     }
+ }
+ 
++/// Dropped images a window that draws no frame holds before it frees them anyway (Riseonly 0128).
++const MAX_PENDING_IMAGE_DROPS: usize = 4096;
++
+ /// Segments each rounded corner of a transformed quad is tessellated into.
+ const TRANSFORMED_CORNER_SEGMENTS: usize = 8;
+ 
+--- a/crates/gpui_macos/src/metal_atlas.rs
++++ b/crates/gpui_macos/src/metal_atlas.rs
+@@ -24,8 +24,16 @@
+         })))
+     }
+ 
+-    pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
+-        self.0.lock().texture(id).metal_texture.clone()
++    /// None once the texture was freed while a frame drawn before still names it (Riseonly 0128).
++    pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> Option<metal::Texture> {
++        let lock = self.0.lock();
++        let textures = match id.kind {
++            AtlasTextureKind::Monochrome => &lock.monochrome_textures,
++            AtlasTextureKind::Polychrome => &lock.polychrome_textures,
++            AtlasTextureKind::Subpixel => return None,
++        };
++        let texture = textures.textures.get(id.index as usize)?.as_ref()?;
++        Some(texture.metal_texture.0.clone())
+     }
+ }
+ 
+@@ -393,7 +401,7 @@
+         let tile_a2 = insert_tile(&atlas, &key_a, small);
+ 
+         // The texture must actually exist — this would panic before the fix.
+-        let _texture = atlas.metal_texture(tile_a2.texture_id);
++        assert!(atlas.metal_texture(tile_a2.texture_id).is_some());
+     }
+ 
+     #[test]
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -1201,7 +1201,9 @@
+             return;
+         }
+ 
+-        let texture = self.sprite_atlas.metal_texture(texture_id);
++        let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
++            return;
++        };
+         let texture_size = size(
+             DevicePixels(texture.width() as i32),
+             DevicePixels(texture.height() as i32),
+@@ -1255,7 +1257,9 @@
+             return;
+         }
+ 
+-        let texture = self.sprite_atlas.metal_texture(texture_id);
++        let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
++            return;
++        };
+         let texture_size = size(
+             DevicePixels(texture.width() as i32),
+             DevicePixels(texture.height() as i32),
+--- a/crates/gpui_wgpu/src/wgpu_atlas.rs
++++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
+@@ -76,12 +76,18 @@
+         lock.flush_uploads();
+     }
+ 
+-    pub fn get_texture_info(&self, id: AtlasTextureId) -> WgpuTextureInfo {
++    /// None once the texture was freed while a frame drawn before still names it (Riseonly 0128).
++    pub fn get_texture_info(&self, id: AtlasTextureId) -> Option<WgpuTextureInfo> {
+         let lock = self.0.lock();
+-        let texture = &lock.storage[id];
+-        WgpuTextureInfo {
++        let textures = match id.kind {
++            AtlasTextureKind::Monochrome => &lock.storage.monochrome_textures,
++            AtlasTextureKind::Subpixel => &lock.storage.subpixel_textures,
++            AtlasTextureKind::Polychrome => &lock.storage.polychrome_textures,
++        };
++        let texture = textures.textures.get(id.index as usize)?.as_ref()?;
++        Some(WgpuTextureInfo {
+             view: texture.view.clone(),
+-        }
++        })
+     }
+ 
+     /// Clears all cached textures and tiles, forcing them to be recreated.
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -1895,7 +1895,9 @@
+         if range.is_empty() {
+             return;
+         }
+-        let texture_info = self.atlas.get_texture_info(texture_id);
++        let Some(texture_info) = self.atlas.get_texture_info(texture_id) else {
++            return;
++        };
+         let texture =
+             self.create_texture_bind_group("atlas_texture_bind_group", &texture_info.view);
+         pass.set_pipeline(pipeline);
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -53,13 +53,19 @@
+         })))
+     }
+ 
++    /// None once the texture was freed while a frame drawn before still names it (Riseonly 0128).
+     pub(crate) fn get_texture_view(
+         &self,
+         id: AtlasTextureId,
+-    ) -> [Option<ID3D11ShaderResourceView>; 1] {
++    ) -> Option<[Option<ID3D11ShaderResourceView>; 1]> {
+         let lock = self.0.lock();
+-        let tex = lock.texture(id);
+-        tex.view.clone()
++        let textures = match id.kind {
++            AtlasTextureKind::Monochrome => &lock.monochrome_textures,
++            AtlasTextureKind::Polychrome => &lock.polychrome_textures,
++            AtlasTextureKind::Subpixel => &lock.subpixel_textures,
++        };
++        let tex = textures.textures.get(id.index as usize)?.as_ref()?;
++        Some(tex.view.clone())
+     }
+ 
+     pub(crate) fn handle_device_lost(
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -859,7 +859,9 @@
+             return Ok(());
+         }
+         let devices = self.devices.as_ref().context("devices missing")?;
+-        let texture_view = self.atlas.get_texture_view(texture_id);
++        let Some(texture_view) = self.atlas.get_texture_view(texture_id) else {
++            return Ok(());
++        };
+         self.pipelines.mono_sprites.draw_range_with_texture(
+             &devices.device_context,
+             &texture_view,
+@@ -883,7 +885,9 @@
+             return Ok(());
+         }
+         let devices = self.devices.as_ref().context("devices missing")?;
+-        let texture_view = self.atlas.get_texture_view(texture_id);
++        let Some(texture_view) = self.atlas.get_texture_view(texture_id) else {
++            return Ok(());
++        };
+         self.pipelines.subpixel_sprites.draw_range_with_texture(
+             &devices.device_context,
+             &texture_view,
+@@ -907,7 +911,9 @@
+             return Ok(());
+         }
+         let devices = self.devices.as_ref().context("devices missing")?;
+-        let texture_view = self.atlas.get_texture_view(texture_id);
++        let Some(texture_view) = self.atlas.get_texture_view(texture_id) else {
++            return Ok(());
++        };
+         self.pipelines.poly_sprites.draw_range_with_texture(
+             &devices.device_context,
+             &texture_view,

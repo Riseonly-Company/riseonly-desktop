@@ -85,10 +85,36 @@ impl ChatScreen {
         Some(ChatMessageSearchHighlight { message_id: hit.id.clone(), ranges: hit.highlight_ranges.clone() })
     }
 
+    /// where the found word sits in its message as a share of the text
+    pub(in super::super) fn message_search_focus(&self, message_id: &str, cx: &mut App) -> Option<f32> {
+        if !self.state.is_message_search_active {
+            return None;
+        }
+        let hits = self.message_search_state(cx).hits;
+        let hit = hits.get(usize::try_from(self.state.message_search_index).ok()?)?;
+        if hit.id != message_id && !hit.message.matches_message_id(message_id) {
+            return None;
+        }
+        let first = hit.highlight_ranges.iter().map(|range| range.location).min()?;
+        let total = hit.message.text.encode_utf16().count();
+        if total == 0 {
+            return None;
+        }
+        Some((first as f32 / total as f32).clamp(0.0, 1.0))
+    }
+
     pub(in super::super) fn message_search_state(&self, cx: &mut App) -> RiseMessageSearchPresentationState {
         let chat_id = self.resolved_chat_id(cx);
         let query = self.state.message_search_query.clone();
-        message_services(cx, |store, cx| store.chat_message_search_state(&chat_id, &query, cx))
+        let mut search = message_services(cx, |store, cx| store.chat_message_search_state(&chat_id, &query, cx));
+        if self.is_thread_screen() {
+            return search;
+        }
+        if let Some(topic_id) = self.resolved_topic_id(cx) {
+            search.hits.retain(|hit| hit.message.topic_id.as_deref().unwrap_or("") == topic_id);
+            search.total_count = None;
+        }
+        search
     }
 
     pub(in super::super) fn handle_message_search_query_change(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -108,7 +134,14 @@ impl ChatScreen {
         if query.is_empty() || !search.did_load() {
             return;
         }
+        let starved = search.hits.len() <= usize::try_from(self.state.message_search_index + self.state.message_search_pending_step).unwrap_or(0);
+        if starved && search.has_more && !search.is_loading() {
+            self.load_more_message_search(cx);
+        }
         if self.state.message_search_delivered_query.as_deref() != Some(query.as_str()) {
+            if search.hits.is_empty() && search.has_more {
+                return;
+            }
             self.state.message_search_delivered_query = Some(query);
             self.state.message_search_index = 0;
             self.state.message_search_pending_step = 0;

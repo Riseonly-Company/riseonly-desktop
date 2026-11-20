@@ -51,6 +51,14 @@ fn send_bottom_notice(title: String, r#type: NotifierType, cx: &mut App) {
     );
 }
 
+fn send_removal_notice(title: String, cx: &mut App) {
+    Notifier::send(
+        title,
+        NotifierSendOptions { r#type: NotifierType::Info, is_notification: true, ..NotifierSendOptions::default() },
+        cx,
+    );
+}
+
 impl ChatInteractionsStore {
     pub fn load_member_restriction_permissions(
         &mut self,
@@ -292,7 +300,7 @@ impl ChatInteractionsStore {
             } else {
                 tr("chat_no_longer_member_unnamed_group_toast")
             };
-            send_bottom_notice(title, NotifierType::Info, cx);
+            send_removal_notice(title, cx);
             return;
         };
         let name = trimming_whitespaces_and_newlines(&named.title);
@@ -302,7 +310,7 @@ impl ChatInteractionsStore {
             (false, true) => tr("chat_no_longer_member_channel_toast"),
             (false, false) => tr("chat_no_longer_member_group_toast"),
         };
-        send_bottom_notice(template.replace("{name}", name), NotifierType::Info, cx);
+        send_removal_notice(template.replace("{name}", name), cx);
     }
 
     pub fn restrict_member(

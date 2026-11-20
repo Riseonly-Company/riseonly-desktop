@@ -466,13 +466,13 @@ impl RiseMessageManualListView {
                 && let Some(native) = NativeBubbleRegistry::kind_for(entry, &configuration, width, cx)
             {
                 let kind = native.kind;
-                let reuse_identifier = kind.reuse_identifier;
+                let reuse_identifier = RiseManualMessageHostingView::reuse_identifier(entry);
                 if !is_retained_item
                     && let Some(item) =
                         self.reusable_item(
                             &entry.id,
                             exact_height,
-                            reuse_identifier,
+                            &reuse_identifier,
                             entry.content_version,
                             can_reuse_prepared_items,
                             sticky_header.as_ref(),
@@ -488,7 +488,7 @@ impl RiseMessageManualListView {
                     entry.id.clone(),
                     RiseManualListItem::new(
                         exact_height,
-                        reuse_identifier.to_owned(),
+                        reuse_identifier,
                         entry.content_version,
                         RiseManualListItemMountPolicy::Immediate,
                         None,

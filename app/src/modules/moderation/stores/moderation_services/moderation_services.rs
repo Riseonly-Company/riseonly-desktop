@@ -321,6 +321,7 @@ impl ModerationServicesStore {
                 r#type: NotifierType::Success,
                 position: NotifierPosition::Bottom,
                 icon: NotifierIcon::System("checkmark.seal.fill".to_owned()),
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,
@@ -406,6 +407,7 @@ impl ModerationServicesStore {
                 position: NotifierPosition::Bottom,
                 icon: NotifierIcon::System("exclamationmark.shield.fill".to_owned()),
                 duration: SANCTION_TOAST_DURATION,
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,

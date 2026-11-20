@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use gpui::{AnyWindowHandle, App, Bounds, Pixels, Point, ScrollWheelEvent, Window, point, px};
+use gpui::{AnyWindowHandle, App, Bounds, Pixels, Point, Window, point, px};
 use rise_ui::guide_anchor_ui::guide_scroll_host::GuideScrollHost;
 
 use crate::app::router::navigation_types::MainTab;
@@ -90,36 +90,6 @@ impl MainTabScrollToTop {
         }
     }
 
-    /// wheel over the empty sides of a width capped page scrolls the vertical list at that point
-    /// as if the pointer was over it, true when a list took the wheel
-    pub fn forward_wheel(at: Point<Pixels>, event: &ScrollWheelEvent, window: &mut Window, cx: &mut App) -> bool {
-        let handle = window.window_handle();
-        let Some(target) = Self::target_at(at, handle, &GuideScrollHost::live(), &MainTabScrollToTopList::live())
-        else {
-            return false;
-        };
-        match target {
-            MainTabScrollToTopTarget::List(list) => match &list.wheel {
-                Some(wheel) => {
-                    wheel(event, window, cx);
-                    true
-                }
-                None => false,
-            },
-            MainTabScrollToTopTarget::Scroll(scroll_view) => {
-                let delta = event.delta.pixel_delta(window.line_height());
-                let offset = scroll_view.content_offset();
-                let maximum = scroll_view.max_content_offset().y.max(px(0.0));
-                let target_y = (offset.y - delta.y).max(px(0.0)).min(maximum);
-                if target_y != offset.y {
-                    scroll_view.set_content_offset(point(offset.x, target_y), false, cx);
-                    window.refresh();
-                }
-                true
-            }
-        }
-    }
-
     fn visible_list(window: &Window, cx: &mut App) -> Option<MainTabScrollToTopTarget> {
         let handle = window.window_handle();
         let has_area = |column: &Bounds<Pixels>| column.size.width > px(0.0) && column.size.height > px(0.0);
@@ -202,7 +172,6 @@ enum MainTabScrollToTopTarget {
 pub struct MainTabScrollToTopList {
     frame: Cell<Option<(AnyWindowHandle, Bounds<Pixels>)>>,
     scroll_to_top: Box<dyn Fn(bool, &mut Window, &mut App)>,
-    wheel: Option<Box<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>>,
 }
 
 impl MainTabScrollToTopList {
@@ -228,21 +197,7 @@ impl MainTabScrollToTopListMount {
     /// scroll_to_top is what happens on a hit
     /// feed refreshes if asked or jumps to top by remounting, other list views just scroll to top
     pub fn new(scroll_to_top: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
-        Self::mount(Box::new(scroll_to_top), None)
-    }
-
-    pub fn with_wheel(
-        scroll_to_top: impl Fn(bool, &mut Window, &mut App) + 'static,
-        wheel: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        Self::mount(Box::new(scroll_to_top), Some(Box::new(wheel)))
-    }
-
-    fn mount(
-        scroll_to_top: Box<dyn Fn(bool, &mut Window, &mut App)>,
-        wheel: Option<Box<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>>,
-    ) -> Self {
-        let list = Rc::new(MainTabScrollToTopList { frame: Cell::new(None), scroll_to_top, wheel });
+        let list = Rc::new(MainTabScrollToTopList { frame: Cell::new(None), scroll_to_top: Box::new(scroll_to_top) });
         LIVE_LISTS.with(|lists| lists.borrow_mut().push(Rc::downgrade(&list)));
         Self { list }
     }

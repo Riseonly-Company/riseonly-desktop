@@ -2,7 +2,7 @@ use gpui::{App, Context, Entity};
 use rise_platform::user_defaults::UserDefaults;
 use rise_platform::user_defaults_keys::DESKTOP_WINDOW_ZOOM_PERCENT;
 
-pub const WINDOW_ZOOM_STEPS: [u32; 10] = [67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+pub const WINDOW_ZOOM_STEPS: [u32; 10] = [60, 70, 80, 90, 100, 110, 125, 150, 175, 200];
 
 pub const WINDOW_ZOOM_DEFAULT: u32 = 100;
 
@@ -61,7 +61,13 @@ pub fn previous_zoom_step(percent: u32) -> u32 {
 }
 
 pub fn stored_zoom_percent(stored: i64) -> u32 {
-    u32::try_from(stored).ok().filter(|percent| WINDOW_ZOOM_STEPS.contains(percent)).unwrap_or(WINDOW_ZOOM_DEFAULT)
+    let lowest = WINDOW_ZOOM_STEPS[0];
+    let highest = WINDOW_ZOOM_STEPS[WINDOW_ZOOM_STEPS.len() - 1];
+    u32::try_from(stored)
+        .ok()
+        .filter(|percent| (lowest..=highest).contains(percent))
+        .and_then(|percent| WINDOW_ZOOM_STEPS.iter().copied().min_by_key(|step| (step.abs_diff(percent), *step < percent)))
+        .unwrap_or(WINDOW_ZOOM_DEFAULT)
 }
 
 pub fn zoom_factor(percent: u32) -> f32 {

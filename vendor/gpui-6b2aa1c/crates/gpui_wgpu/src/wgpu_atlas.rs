@@ -76,12 +76,18 @@ impl WgpuAtlas {
         lock.flush_uploads();
     }
 
-    pub fn get_texture_info(&self, id: AtlasTextureId) -> WgpuTextureInfo {
+    /// None once the texture was freed while a frame drawn before still names it (Riseonly 0128).
+    pub fn get_texture_info(&self, id: AtlasTextureId) -> Option<WgpuTextureInfo> {
         let lock = self.0.lock();
-        let texture = &lock.storage[id];
-        WgpuTextureInfo {
+        let textures = match id.kind {
+            AtlasTextureKind::Monochrome => &lock.storage.monochrome_textures,
+            AtlasTextureKind::Subpixel => &lock.storage.subpixel_textures,
+            AtlasTextureKind::Polychrome => &lock.storage.polychrome_textures,
+        };
+        let texture = textures.textures.get(id.index as usize)?.as_ref()?;
+        Some(WgpuTextureInfo {
             view: texture.view.clone(),
-        }
+        })
     }
 
     /// Clears all cached textures and tiles, forcing them to be recreated.

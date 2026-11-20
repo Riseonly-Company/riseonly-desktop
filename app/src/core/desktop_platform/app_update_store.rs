@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -223,6 +223,12 @@ fn staging_dir() -> Option<PathBuf> {
         .map(|paths| paths.cache_dir().join("updates"))
 }
 
+fn leftovers_manifest() -> Option<PathBuf> {
+    AppPaths::resolve(AppEnvironment::current().canon())
+        .ok()
+        .map(|paths| paths.cache_dir().join("update-leftovers"))
+}
+
 fn io_runtime() -> Option<&'static tokio::runtime::Runtime> {
     static RUNTIME: OnceLock<Option<tokio::runtime::Runtime>> = OnceLock::new();
     RUNTIME
@@ -244,13 +250,8 @@ fn clear_leftovers() {
     if let Some(staging) = staging_dir() {
         let _ = std::fs::remove_dir_all(staging);
     }
-    if HostOs::current() == HostOs::Windows
-        && let Some(dir) = std::env::current_exe()
-            .ok()
-            .as_deref()
-            .and_then(Path::parent)
-    {
-        updater::remove_leftovers(dir);
+    if let Some(manifest) = leftovers_manifest() {
+        updater::remove_leftovers(&manifest);
     }
 }
 
@@ -392,7 +393,8 @@ fn install_blocking(offer: AppUpdateOffer, bytes: Vec<u8>) -> Result<PathBuf, St
             .parent()
             .ok_or_else(|| "no install folder".to_owned())?
             .to_path_buf();
-        updater::replace_running_tree(&unpacked, &install_dir, &running)
+        let manifest = leftovers_manifest().ok_or_else(|| "no app cache folder".to_owned())?;
+        updater::replace_running_tree(&unpacked, &install_dir, &manifest)
             .map_err(|error| error.to_string())?;
         return Ok(install_dir.join("riseonly.exe"));
     }

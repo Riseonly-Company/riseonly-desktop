@@ -1,12 +1,14 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ElementId, Font, FontFeatures, FontWeight, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, font, px,
 };
 use rise_i18n::tr;
 use rise_theme::FONT_FAMILY;
+use rise_ui::swiftui::environment::{EnvKey, env, env_scope};
 use rise_ui::swiftui::minimum_scale_factor::MinimumScaleText;
 use rise_ui::swiftui::shapes::{Shape, SwiftUiShapes};
 use rise_ui::skeleton_ui::SkeletonLine;
@@ -38,16 +40,36 @@ impl ParentElement for GiftInfoTable {
     }
 }
 
+const TABLE_CORNER_RADIUS: f32 = 16.0;
+const TABLE_BORDER_WIDTH: f32 = 1.0;
+
+struct GiftInfoRowEdgesKey;
+
+impl EnvKey for GiftInfoRowEdgesKey {
+    type Value = (bool, bool);
+
+    fn default_value() -> Self::Value {
+        (false, false)
+    }
+
+    fn fingerprint(value: &Self::Value) -> Option<u64> {
+        Some(u64::from(value.0) | (u64::from(value.1) << 1))
+    }
+}
+
 impl RenderOnce for GiftInfoTable {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = rise_ui::theme(cx);
+        let count = self.content.len();
         div()
             .flex()
             .flex_col()
             .bg(theme.bg._100)
-            .clip_shape(Shape::continuous(16.0))
-            .stroke_border(theme.border._200, 1.0)
-            .children(self.content)
+            .clip_shape(Shape::continuous(TABLE_CORNER_RADIUS))
+            .stroke_border(theme.border._200, TABLE_BORDER_WIDTH)
+            .children(self.content.into_iter().enumerate().map(|(index, row)| {
+                env_scope::<GiftInfoRowEdgesKey>((index == 0, index + 1 == count)).child(row)
+            }))
     }
 }
 
@@ -82,11 +104,15 @@ impl GiftInfoRow {
 impl RenderOnce for GiftInfoRow {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = rise_ui::theme(cx);
+        let (is_first, is_last) = env::<GiftInfoRowEdgesKey>(cx);
+        let label_corner = px(TABLE_CORNER_RADIUS - TABLE_BORDER_WIDTH);
         let mut row = div().flex().flex_row().items_stretch().w_full().min_h(px(48.0));
         if let Some(label) = self.label {
             row = row
                 .child(
                     div()
+                        .when(is_first, |cell| cell.rounded_tl(label_corner))
+                        .when(is_last, |cell| cell.rounded_bl(label_corner))
                         .flex()
                         .flex_col()
                         .flex_none()

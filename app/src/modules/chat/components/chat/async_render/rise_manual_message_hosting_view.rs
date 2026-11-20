@@ -8,9 +8,9 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, App, AppContext, AvailableSpace, Bounds, Context, ElementId, Entity, EntityId, Global, Hsla,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, Pixels, Point, Render,
-    ScrollDelta, ScrollWheelEvent, Size,
-    Styled, Task, TouchPhase, WeakEntity, Window, div, point, px, transparent_black,
+    DispatchPhase, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Size, Styled, Task, TouchPhase, WeakEntity,
+    Window, canvas, div, point, px, transparent_black,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_core::rise_app_events::RiseAppEvents;
@@ -19,6 +19,9 @@ use rise_ui::animated_media_playback_scope::{
     ANIMATED_MEDIA_VIEWPORT_SCOPE_DID_CHANGE, AnimatedMediaViewportScopeProviding, AnimatedMediaViewportScopeViewKey,
 };
 use rise_ui::hold_context_menu_ui::bubble_scroll_passthrough::BubbleScrollPassthrough;
+use rise_ui::swiftui::text_selection::{
+    TextDragAxis, gesture_plate_took_press, mark_text_press_swiped, text_drag_axis, text_glyph_took_press,
+};
 use rise_ui::icon_ui::icon_ui::IconUi;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::environment::env_scope;
@@ -367,6 +370,9 @@ pub struct RiseManualMessageHostingView {
     debug_is_own_bubble: bool,
     allows_reply: bool,
     reply_armed: bool,
+    reply_pulls_right: bool,
+    mouse_press: Option<Point<Pixels>>,
+    mouse_axis: Option<TextDragAxis>,
     on_reply: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     on_row_double_tap: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     row_double_tap_armed: bool,
@@ -435,6 +441,9 @@ impl RiseManualMessageHostingView {
             debug_is_own_bubble: false,
             allows_reply: false,
             reply_armed: false,
+            reply_pulls_right: false,
+            mouse_press: None,
+            mouse_axis: None,
             on_reply: None,
             on_row_double_tap: None,
             row_double_tap_armed: false,
@@ -610,6 +619,8 @@ impl RiseManualMessageHostingView {
     ) {
         self.reset_reply_presentation(false, cx);
         self.reply_pan_phase = None;
+        self.mouse_press = None;
+        self.mouse_axis = None;
         let message = entry.message.as_ref().filter(|_| !measurement_only && entry.kind == ChatMessageRenderEntryKind::Message);
         let Some(message) = message else {
             self.allows_reply = false;
@@ -654,17 +665,24 @@ impl RiseManualMessageHostingView {
         }));
     }
 
-    fn handle_row_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.row_double_tap_armed = event.click_count == 2
-            && self.on_row_double_tap.is_some()
-            && !window.default_prevented()
+    fn handle_row_mouse_down(&mut self, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let swipes = self.allows_reply
+            && self.reply_pan_phase != Some(RiseManualMessageReplyPanPhase::Began)
             && !HoldContextMenuPresenter::has_active_request(cx)
+            && !BubbleScrollPassthrough::with_shared(|passthrough| passthrough.contains(event.position));
+        self.mouse_press = swipes.then_some(event.position);
+        self.mouse_axis = None;
+        self.row_double_tap_armed = event.click_count >= 2 && event.click_count % 2 == 0
+            && self.on_row_double_tap.is_some()
+            && !gesture_plate_took_press(event.position, cx)
+            && !HoldContextMenuPresenter::has_active_request(cx)
+            && !text_glyph_took_press(event.position, cx)
             && !BubbleScrollPassthrough::with_shared(|passthrough| passthrough.contains(event.position));
     }
 
     fn handle_row_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         let armed = std::mem::take(&mut self.row_double_tap_armed);
-        if !armed || event.click_count < 2 {
+        if !armed || event.click_count < 2 || event.click_count % 2 != 0 {
             return;
         }
         if let Some(on_row_double_tap) = self.on_row_double_tap.clone() {
@@ -674,6 +692,9 @@ impl RiseManualMessageHostingView {
 
     fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.vertical_scroll_gate.handle_scroll_wheel(event);
+        if self.reply_pan_phase == Some(RiseManualMessageReplyPanPhase::Began) {
+            return;
+        }
         if event.touch_phase == TouchPhase::Started {
             self.reply_pan_translation = Point::default();
             self.reply_pan_phase = self.allows_reply.then_some(RiseManualMessageReplyPanPhase::Possible);
@@ -695,6 +716,8 @@ impl RiseManualMessageHostingView {
                         }
                         if self.gesture_recognizer_should_begin(delta, event.position, cx) {
                             self.reply_pan_phase = Some(RiseManualMessageReplyPanPhase::Began);
+                            self.reply_pulls_right = false;
+                            self.mouse_press = None;
                             cancel_enclosing_scroll_pan_for_current_touch(cx);
                             self.reply_pan_did_change(cx);
                         } else {
@@ -714,6 +737,67 @@ impl RiseManualMessageHostingView {
         }
     }
 
+    /// a begun pan follows the gesture wherever the pointer is, the list may slide under it
+    fn handle_active_reply_scroll(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reply_pan_phase != Some(RiseManualMessageReplyPanPhase::Began) || self.mouse_press.is_some() {
+            return;
+        }
+        match event.touch_phase {
+            TouchPhase::Moved => {
+                if let ScrollDelta::Pixels(delta) = event.delta {
+                    self.reply_pan_translation =
+                        point(self.reply_pan_translation.x + delta.x, self.reply_pan_translation.y + delta.y);
+                    self.reply_pan_did_change(cx);
+                }
+            }
+            TouchPhase::Ended | TouchPhase::Cancelled | TouchPhase::Started => {
+                self.reply_pan_phase = None;
+                self.reply_pan_did_end(event.touch_phase == TouchPhase::Ended, window, cx);
+            }
+        }
+    }
+
+    fn handle_reply_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(press) = self.mouse_press else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.handle_reply_mouse_release(false, window, cx);
+            return;
+        }
+        if self.mouse_axis.is_none() {
+            let Some(axis) = text_drag_axis(press, event.position) else {
+                return;
+            };
+            let pulls_left = event.position.x < press.x;
+            if axis != TextDragAxis::Swipe || HoldContextMenuPresenter::has_active_request(cx) {
+                self.mouse_press = None;
+                return;
+            }
+            mark_text_press_swiped(press, cx);
+            if !pulls_left {
+                self.mouse_press = None;
+                return;
+            }
+            self.mouse_axis = Some(axis);
+            self.reply_pan_phase = Some(RiseManualMessageReplyPanPhase::Began);
+            self.reply_pulls_right = false;
+        }
+        self.reply_pan_translation = event.position - press;
+        self.reply_pan_did_change(cx);
+    }
+
+    fn handle_reply_mouse_release(&mut self, completed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(_) = self.mouse_press.take() else {
+            return;
+        };
+        let began = self.mouse_axis.take().is_some();
+        if began && self.reply_pan_phase == Some(RiseManualMessageReplyPanPhase::Began) {
+            self.reply_pan_phase = None;
+            self.reply_pan_did_end(completed, window, cx);
+        }
+    }
+
     fn gesture_recognizer_should_begin(&self, velocity: Point<Pixels>, start_location: Point<Pixels>, cx: &mut App) -> bool {
         if !self.allows_reply || HoldContextMenuPresenter::has_active_request(cx) {
             return false;
@@ -729,14 +813,17 @@ impl RiseManualMessageHostingView {
     }
 
     fn reply_pan_did_change(&mut self, cx: &mut Context<Self>) {
-        let pull = (-f32::from(self.reply_pan_translation.x)).clamp(0.0, Self::REPLY_MAXIMUM_PULL);
+        let towards = f32::from(self.reply_pan_translation.x);
+        let towards = if self.reply_pulls_right { towards } else { -towards };
+        let pull = towards.clamp(0.0, Self::REPLY_MAXIMUM_PULL);
         let damped = if pull <= Self::REPLY_ARM_PULL {
             pull
         } else {
             Self::REPLY_ARM_PULL + (pull - Self::REPLY_ARM_PULL) * 0.35
         };
         let progress = (pull / Self::REPLY_ARM_PULL).min(1.0);
-        self.hosted_translation_x.jump(self.selection_translation_x - damped);
+        let shift = if self.reply_pulls_right { damped } else { -damped };
+        self.hosted_translation_x.jump(self.selection_translation_x + shift);
         self.reply_hint_alpha.jump(progress);
         self.reply_hint_scale.jump(0.6 + progress * 0.4);
         let next_armed = pull >= Self::REPLY_ARM_PULL;
@@ -1092,7 +1179,11 @@ impl Render for RiseManualMessageHostingView {
             && let Some(bounds) = self.bounds
         {
             let side = Self::REPLY_HINT_SIDE;
-            let hint_left = (f32::from(bounds.size.width) - MessageSizes::row_side_inset() - side).max(0.0);
+            let hint_left = if self.reply_pulls_right {
+                MessageSizes::row_side_inset()
+            } else {
+                (f32::from(bounds.size.width) - MessageSizes::row_side_inset() - side).max(0.0)
+            };
             let hint_top = ((f32::from(bounds.size.height) - side) * 0.5).max(0.0);
             row = row.child(
                 div()
@@ -1110,6 +1201,34 @@ impl Render for RiseManualMessageHostingView {
                         self.reply_hint_tint_color,
                         true,
                     )),
+            );
+        }
+        if self.allows_reply {
+            let tracker = this.clone();
+            row = row.child(
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let (moves, ups, scrolls) = (tracker.clone(), tracker.clone(), tracker.clone());
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                let _ = moves.update(cx, |row, cx| row.handle_reply_mouse_move(event, window, cx));
+                            }
+                        });
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+                                let _ = ups.update(cx, |row, cx| row.handle_reply_mouse_release(true, window, cx));
+                            }
+                        });
+                        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                let _ = scrolls.update(cx, |row, cx| row.handle_active_reply_scroll(event, window, cx));
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_0(),
             );
         }
         row.child(measure("rise-manual-message-hosting-bounds", move |bounds, window, cx| {

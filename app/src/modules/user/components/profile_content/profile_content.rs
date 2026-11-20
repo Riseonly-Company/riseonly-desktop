@@ -6,19 +6,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext, AsyncApp, Bounds, Context, ElementId, Entity, InteractiveElement, IntoElement,
-    ParentElement, Render, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
-    Task, Pixels, WeakEntity, Window, canvas, div, px,
+    AnyElement, AnyView, App, AppContext, AsyncApp, BACKDROP_BLUR_SUPPORTED, Bounds, Context, Corners, ElementId, Entity,
+    InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, Subscription, Task, Pixels, WeakEntity, Window, canvas, div, px,
 };
-use rise_canon::{RiseGuideAnchor, RiseGuideSignal};
+use rise_canon::{RiseGuideAnchor, RiseGuideSignal, RisePrivacyRule};
 use rise_core::foundation::foundation_date::TimeInterval;
 use rise_i18n::{FormatArg, tr, tr_args};
-use rise_theme::{RiseThemeAppearance, ThemeStore};
+use rise_theme::ThemeStore;
 use rise_ui::animated_tabs_ui::animated_tabs_types::{AnimatedTabsMetrics, TabHeaderConfig};
 use rise_ui::guide_anchor_ui::guide_scroll_host::GuideScrollHost;
-use rise_ui::scroll_edge_blur_ui::ScrollEdgeBlurFalloff;
+use rise_ui::scroll_edge_blur_ui::{HeaderEdgeBlur, ScrollEdgeBlurFalloff};
 use rise_ui::swiftui::environment_values::accessibility_reduce_transparency;
-use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyle, ScrollChromeShadowUi};
+use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyle, ScrollChromeShadowStyleAnchor, ScrollChromeShadowUi};
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::environment::{LayoutDirection, LayoutDirectionKey, env_scope, layout_direction};
 use rise_ui::swiftui::lifecycle::{LifecycleModifiers, on_change};
@@ -41,6 +41,7 @@ use crate::modules::gifts::components::user_gifts_tab::UserGiftsTab;
 use crate::modules::gifts::stores::gifts::gifts_actions::gifts_actions::GiftsActionsStore;
 use crate::modules::post::components::post_collection_ui::PostLayoutToggleUi;
 use crate::modules::post::engine::rise_post_engine_models::RisePostProfileKind;
+use crate::modules::rtc::media::rise_rtc_audio_settings::RiseRTCStreamerMode;
 use crate::modules::post::stores::post_interactions::post_interactions::PostInteractionsStore;
 use crate::modules::story::components::stories_grid::stories_grid_cell::StoriesGridMetrics;
 use crate::modules::story::components::stories_grid::stories_grid_page::StoriesGridPage;
@@ -734,8 +735,30 @@ impl ProfileContent {
             Self::page_empty_state(ChatProfileEmptyState::new(icon, text))
         } else if self.foreign_closed_tabs.contains(&tab) {
             Self::page_empty_state(ChatProfileEmptyState::new("lock", tr("profile_section_hidden")))
+        } else if self.is_own_profile
+            && let Some(rule) = Self::streamer_rule(tab)
+        {
+            let page = self.open_profile_page(tab, cx);
+            RiseRTCStreamerMode::veil(tab_id("profile-streamer-veil", tab), rule, page, cx)
         } else {
             self.open_profile_page(tab, cx)
+        }
+    }
+
+    fn streamer_rule(tab: ProfileContentTab) -> Option<RisePrivacyRule> {
+        match tab {
+            ProfileContentTab::Stories => Some(RisePrivacyRule::Stories),
+            ProfileContentTab::Comments => Some(RisePrivacyRule::Comments),
+            ProfileContentTab::Reposts => Some(RisePrivacyRule::Reposts),
+            ProfileContentTab::Mentions => Some(RisePrivacyRule::Tag),
+            ProfileContentTab::Gifts => Some(RisePrivacyRule::Gifts),
+            ProfileContentTab::Goals => Some(RisePrivacyRule::Goal),
+            ProfileContentTab::Plans => Some(RisePrivacyRule::Plan),
+            ProfileContentTab::Publications
+            | ProfileContentTab::Riffs
+            | ProfileContentTab::Threads
+            | ProfileContentTab::Favorites
+            | ProfileContentTab::Liked => None,
         }
     }
 
@@ -758,6 +781,7 @@ impl ProfileContent {
             .w_full()
             .flex()
             .justify_center()
+            .wheel_into_children()
             .child(div().w_full().min_w_0().max_w(width).child(page))
             .into_any_element()
     }
@@ -1010,18 +1034,16 @@ impl Default for ProfilePinnedChromePlate {
 impl RenderOnce for ProfilePinnedChromePlate {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let page = rise_ui::theme(cx).bg._100;
-        let tint_peak = if ThemeStore::shared(cx).read(cx).resolved_appearance() == RiseThemeAppearance::Dark {
-            ScrollEdgeBlurFalloff::HEADER_TINT_PEAK_DARK
-        } else {
-            ScrollEdgeBlurFalloff::HEADER_TINT_PEAK
-        };
-        let blur_stops = ScrollEdgeBlurFalloff::tint_stops_with_peak(
+        let reduce_transparency = accessibility_reduce_transparency(cx);
+        let blur_stops = ScrollEdgeBlurFalloff::paint_stops(
             page,
-            ProfileViewportLayoutPolicy::page_content_top_inset() / Self::height(),
-            tint_peak,
-            accessibility_reduce_transparency(cx),
+            ScrollEdgeBlurFalloff::DEFAULT_SOLID_END,
+            ScrollEdgeBlurFalloff::TINT_PEAK,
+            reduce_transparency,
+            BACKDROP_BLUR_SUPPORTED,
         );
-        let stops = ScrollChromeShadowUi::new(Self::style()).stops(cx);
+        let blurs = BACKDROP_BLUR_SUPPORTED && !reduce_transparency;
+        let stops = ScrollChromeShadowUi::new(HeaderEdgeBlur::shadow_style(ScrollChromeShadowStyleAnchor::FromTop)).stops(cx);
         let pinned_min_y = self.pinned_min_y;
         canvas(
             move |bounds, _, cx: &mut App| {
@@ -1035,6 +1057,10 @@ impl RenderOnce for ProfilePinnedChromePlate {
             move |bounds, (reveal, direction): (f32, LayoutDirection), window, _| {
                 if reveal <= 0.0 {
                     return;
+                }
+                if blurs {
+                    let sigma = px(ScrollEdgeBlurFalloff::EDGE_RADIUS * reveal);
+                    window.paint_progressive_backdrop_blur(bounds, Corners::default(), sigma, px(0.0), false);
                 }
                 for layer in [&blur_stops, &stops] {
                     let faded = layer

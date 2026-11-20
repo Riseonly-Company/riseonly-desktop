@@ -728,7 +728,7 @@ impl ChatListPreviewRow {
                 )
                 .into_any_element(),
             ChatListPreviewPresentationTitleAccessory::Tag(tag) => div()
-                .flex_none()
+                .min_w_0()
                 .child(MainText::new(tag.clone()).px(12.0).color(theme.text.secondary).number_of_lines(1))
                 .into_any_element(),
             ChatListPreviewPresentationTitleAccessory::SystemImage(name) => div()

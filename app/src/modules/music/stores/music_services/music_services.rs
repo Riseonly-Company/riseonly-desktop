@@ -3737,6 +3737,7 @@ impl MusicServicesStore {
                     r#type: NotifierType::Error,
                     position: NotifierPosition::Top,
                     icon: NotifierIcon::System("lock.fill".to_owned()),
+                    is_notification: true,
                     ..NotifierSendOptions::default()
                 },
                 cx,
