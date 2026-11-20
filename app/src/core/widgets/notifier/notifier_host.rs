@@ -415,10 +415,6 @@ impl NotifierHost {
         self.is_overlay
     }
 
-    fn window_drag_band(cx: &mut App) -> Pixels {
-        ThemeStore::shared(cx).read(cx).current_theme().shell.window_drag_height
-    }
-
     fn banner_top(position: NotifierBannerPosition, window: &Window, cx: &mut App) -> f32 {
         let shell = ThemeStore::shared(cx).read(cx).current_theme().shell;
         let margin = f32::from(shell.overlay_margin);
@@ -429,8 +425,8 @@ impl NotifierHost {
         let strip = f32::from(shell.window_drag_height);
         let band = window_chrome::controls_band_height(host, window_chrome::granted_decorations(window), strip);
         let under_controls = match host {
-            HostOs::MacOs => position == NotifierBannerPosition::TopLeft,
-            HostOs::Windows | HostOs::Linux => band > 0.0 && position != NotifierBannerPosition::TopCenter,
+            HostOs::MacOs | HostOs::Windows => position == NotifierBannerPosition::TopLeft,
+            HostOs::Linux => band > 0.0 && position != NotifierBannerPosition::TopCenter,
         };
         if !under_controls {
             return margin;
@@ -438,7 +434,8 @@ impl NotifierHost {
         let lights = f32::from(shell.traffic_light_origin().y) + window_chrome::ControlLayout::for_host(host).button_height;
         let cleared = match host {
             HostOs::MacOs => strip.max(lights / cx.window_zoom()),
-            HostOs::Windows | HostOs::Linux => band,
+            HostOs::Windows => strip,
+            HostOs::Linux => band,
         };
         cleared + f32::from(shell.rail_outer_inset)
     }
@@ -538,7 +535,7 @@ impl Render for NotifierHost {
         }
 
         let window_size = window.viewport_size();
-        let window_top = f32::from(Self::window_drag_band(cx)) + EDGE_PADDING;
+        let window_top = Self::banner_top(NotifierBannerPosition::TopCenter, window, cx);
         let banner_top = Self::banner_top(position, window, cx);
         if !self.appearances.is_empty() || !self.departing.is_empty() {
             let appear: Vec<f32> = self.appearances.values().map(|appearance| appearance.value(now)).collect();

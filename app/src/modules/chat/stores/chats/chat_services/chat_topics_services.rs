@@ -87,6 +87,7 @@ impl ChatRemovedTopicNotice {
             NotifierSendOptions {
                 r#type: NotifierType::Info,
                 position: NotifierPosition::Bottom,
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,

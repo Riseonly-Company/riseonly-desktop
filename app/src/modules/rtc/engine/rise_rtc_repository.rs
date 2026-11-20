@@ -698,6 +698,32 @@ impl RiseRTCRepository {
         Ok(participant)
     }
 
+    pub async fn set_stream_watch(
+        &self,
+        credentials: &RiseRTCJoinCredentials,
+        target_user_id: &str,
+        watching: bool,
+    ) -> anyhow::Result<RiseRTCParticipant> {
+        let response = self
+            .rpc
+            .call::<_, rise_response::rtc::SetStreamWatch>(
+                RiseRTCEndpoints::set_stream_watch(),
+                rise_request::rtc::SetStreamWatch {
+                    connection_id: Some(credentials.connection_id.clone()),
+                    room_id: Some(credentials.room_id.clone()),
+                    session_id: Some(Self::TRUSTED_SESSION_PLACEHOLDER.to_owned()),
+                    target_user_id: Some(target_user_id.to_owned()),
+                    watching: Some(watching),
+                },
+            )
+            .await?;
+        let Some(participant) = response.participant.as_ref().map(RiseRTCWireModel::model) else {
+            return Err(RiseRTCStateError::MalformedResponse("set_stream_watch".to_owned()).into());
+        };
+        self.store_participant(&participant, &credentials.room_id).await?;
+        Ok(participant)
+    }
+
     pub async fn request_to_speak(
         &self,
         credentials: &RiseRTCJoinCredentials,
@@ -2139,6 +2165,7 @@ impl RiseRTCParticipantCanon for RiseRTCParticipant {
             updated_at_ms: participant.updated_at_ms,
             lease_expires_at_ms: participant.lease_expires_at_ms,
             order_sequence: participant.order_sequence,
+            watching_user_id: participant.watching_user_id.clone(),
             profile: None,
         }
     }

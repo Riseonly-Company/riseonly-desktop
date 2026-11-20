@@ -259,6 +259,8 @@ pub struct RiseRTCParticipant {
     pub updated_at_ms: i64,
     pub lease_expires_at_ms: i64,
     pub order_sequence: i64,
+    #[serde(default)]
+    pub watching_user_id: String,
     pub profile: Option<RiseRTCUserProfile>,
 }
 

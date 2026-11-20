@@ -53,6 +53,8 @@ const NOTIFICATIONS_PAGE: &str = "settings_notifications_title";
 const CUSTOMIZATION_PAGE: &str = "settings_customization_title";
 const MEMORY_PAGE: &str = "settings_memory_title";
 const REPORT: &str = "report_riseonly_title";
+const CALLS: &str = "desktop_settings_calls_title";
+const STREAMS_PAGE: &str = "desktop_settings_streams_title";
 const CRUMB_SEPARATOR: &str = " \u{203A} ";
 const OPTIONS: CompareOptions = CompareOptions::CASE_INSENSITIVE.union(CompareOptions::DIACRITIC_INSENSITIVE);
 
@@ -449,10 +451,26 @@ impl SettingsSearchIndex {
             entry(
                 "voice_video",
                 "rtc_voice_settings",
-                &[APP],
+                &[CALLS],
                 "waveform.and.mic",
                 color("#34C759"),
                 Route(RootRoute::RtcAudioSettings),
+            ),
+            entry(
+                "streams",
+                "desktop_settings_streams_title",
+                &[CALLS],
+                "wave.3.right",
+                color("#AF52DE"),
+                Route(RootRoute::RtcStreamSettings),
+            ),
+            entry(
+                "streamer_mode",
+                "desktop_streamer_mode_title",
+                &[CALLS, STREAMS_PAGE],
+                "wave.3.right",
+                color("#AF52DE"),
+                Route(RootRoute::RtcStreamSettings),
             ),
             entry(
                 "bug_report_open",

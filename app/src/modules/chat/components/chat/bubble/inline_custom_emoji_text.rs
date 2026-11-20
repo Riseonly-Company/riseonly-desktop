@@ -1,5 +1,5 @@
 use std::any::TypeId;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,7 +18,9 @@ use rise_ui::rich_text::document::rise_document_projection::RiseDocumentProjecti
 use rise_ui::rich_text::rich_text_markup::RichTextMarkup;
 use rise_ui::swiftui::font::{Font, NATURAL_LINE_HEIGHT, SwiftUiFont};
 use rise_ui::swiftui::rich_text::{AttributeContainer, AttributedString, RichFont, RichText};
-use rise_ui::swiftui::text_selection::{TextSelection, mark_selectable_text_press};
+use rise_ui::swiftui::text_selection::{
+    TextDragAxis, TextSelection, mark_selectable_text_press, mark_text_glyph_press, text_drag_axis, text_press_swiped,
+};
 
 use crate::core::ui::custom_emoji_glyph::CustomEmojiGlyphMetrics;
 use crate::core::ui::formatted_text_ui::{FormattedText, FormattedTextOptions, FormattedTextSelection, FormattedTextStyle};
@@ -423,6 +425,7 @@ struct InlineRunFlowCache {
 struct InlineRunFlowSelectionState {
     selection: Rc<RefCell<TextSelection>>,
     focus: FocusHandle,
+    drag: Rc<Cell<(Option<Point<Pixels>>, Option<TextDragAxis>)>>,
 }
 
 /// where one run landed this frame, for pointer and highlight
@@ -625,6 +628,7 @@ impl InlineRunFlow {
             let display = display.clone();
             let press_gate = press_gate.clone();
             let single_click_when = selection.configuration.single_click_when.clone();
+            let drag = state.drag.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble {
                     return;
@@ -639,8 +643,19 @@ impl InlineRunFlow {
                     return;
                 }
                 mark_selectable_text_press(event.position, cx);
-                let click_count =
-                    if single_click_when.as_ref().is_some_and(|single| single(cx)) { 1 } else { event.click_count };
+                let on_glyph = placed.iter().any(|run| {
+                    (run.line_top..=run.line_bottom).contains(&event.position.y)
+                        && (run.bounds.left()..=run.bounds.right()).contains(&event.position.x)
+                });
+                if on_glyph {
+                    mark_text_glyph_press(event.position, cx);
+                }
+                drag.set((Some(event.position), None));
+                let click_count = if !on_glyph || single_click_when.as_ref().is_some_and(|single| single(cx)) {
+                    1
+                } else {
+                    event.click_count
+                };
                 let index = Self::index_at(&placed, event.position);
                 selection_state.borrow_mut().press(&display, index, click_count, event.modifiers.shift);
                 if !selection_state.borrow().is_empty() {
@@ -655,6 +670,7 @@ impl InlineRunFlow {
             let focus = state.focus.clone();
             let placed = placed.clone();
             let display = display.clone();
+            let drag = state.drag.clone();
             move |event: &MouseMoveEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !selection_state.borrow().is_dragging() {
                     return;
@@ -662,6 +678,32 @@ impl InlineRunFlow {
                 if event.pressed_button != Some(MouseButton::Left) {
                     selection_state.borrow_mut().release();
                     return;
+                }
+                if let (Some(press), axis) = drag.get() {
+                    if text_press_swiped(press, cx) {
+                        let mut selection = selection_state.borrow_mut();
+                        selection.release();
+                        selection.clear();
+                        drop(selection);
+                        window.refresh();
+                        return;
+                    }
+                    let axis = match axis {
+                        Some(axis) => axis,
+                        None => {
+                            let Some(axis) = text_drag_axis(press, event.position) else {
+                                return;
+                            };
+                            drag.set((Some(press), Some(axis)));
+                            axis
+                        }
+                    };
+                    if axis != TextDragAxis::Select {
+                        if axis == TextDragAxis::Neither || text_press_swiped(press, cx) {
+                            selection_state.borrow_mut().release();
+                        }
+                        return;
+                    }
                 }
                 if press_gate(cx) {
                     selection_state.borrow_mut().release();
@@ -790,10 +832,15 @@ impl Element for InlineRunFlow {
                     let state = state.unwrap_or_else(|| InlineRunFlowSelectionState {
                         selection: Rc::default(),
                         focus: cx.focus_handle(),
+                        drag: Rc::default(),
                     });
                     (state.clone(), state)
                 }),
-                None => InlineRunFlowSelectionState { selection: Rc::default(), focus: cx.focus_handle() },
+                None => InlineRunFlowSelectionState {
+                    selection: Rc::default(),
+                    focus: cx.focus_handle(),
+                    drag: Rc::default(),
+                },
             };
             window.set_focus_handle(&state.focus, cx);
             (hitbox, state)

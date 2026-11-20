@@ -14,6 +14,7 @@ use rise_ui::hold_context_menu_ui::rise_strict_tap_gesture_recognizer::{
     RiseStrictTapGestureRecognizer, RiseTapPolicy,
 };
 use rise_ui::swiftui::context_menu::is_context_menu_keystroke;
+use rise_ui::swiftui::text_selection::{mark_gesture_plate_press, text_glyph_took_press};
 use rise_ui::view_anchor_probe::{ViewAnchorProbe, ViewAnchorProbeReader};
 
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
@@ -251,11 +252,12 @@ impl RenderOnce for HoldGesturePlate {
                 }
             })
             .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                mark_gesture_plate_press(event.position, cx);
                 let secondary = is_context_click_here(event.button, &event.modifiers);
-                Plate::touches_began(&primary, event.position, secondary, window, cx);
+                Plate::touches_began(&primary, event.position, secondary, event.click_count, window, cx);
             })
             .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, window, cx| {
-                Plate::touches_began(&secondary, event.position, true, window, cx);
+                Plate::touches_began(&secondary, event.position, true, 1, window, cx);
             })
             .on_mouse_up(MouseButton::Left, move |event: &MouseUpEvent, window, cx| {
                 Plate::touches_ended(&released, event, window, cx);
@@ -291,7 +293,7 @@ fn row_context_band(plate: gpui::Entity<Plate>) -> impl IntoElement {
                     return;
                 }
                 cx.stop_propagation();
-                Plate::touches_began(&plate, event.position, true, window, cx);
+                Plate::touches_began(&plate, event.position, true, 1, window, cx);
             });
         },
     )
@@ -345,7 +347,14 @@ struct TapRelease {
 }
 
 impl Plate {
-    fn touches_began(entity: &PlateEntity, location: Point<Pixels>, secondary: bool, window: &mut Window, cx: &mut App) {
+    fn touches_began(
+        entity: &PlateEntity,
+        location: Point<Pixels>,
+        secondary: bool,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let menu_is_open = HoldContextMenuPresenter::has_active_request(cx);
         if !menu_is_open && !secondary && BubbleScrollPassthrough::with_shared(|shared| shared.contains(location)) {
             return;
@@ -373,6 +382,9 @@ impl Plate {
 
         if secondary {
             Self::handle_confirm_began(entity, location, window, cx);
+            return;
+        }
+        if click_count >= 2 {
             return;
         }
         let weak = entity.downgrade();
@@ -468,6 +480,7 @@ impl Plate {
     fn touches_ended(entity: &PlateEntity, event: &MouseUpEvent, window: &mut Window, cx: &mut App) {
         let location = event.position;
         let menu_is_open = HoldContextMenuPresenter::has_active_request(cx);
+        let pressed_text = entity.read(cx).touch_start_location.is_some_and(|start| text_glyph_took_press(start, cx));
         let snapshot = entity.update(cx, |plate, _| {
             if !plate.is_pressed {
                 return None;
@@ -481,7 +494,7 @@ impl Plate {
             }
             let held = RiseClock::monotonic().saturating_sub(plate.touch_start_time).as_secs_f64();
             let tap = plate.tap_recognizer.touches_ended(location);
-            let double_tap = plate.double_tap_recognizer.touches_ended(location);
+            let double_tap = plate.double_tap_recognizer.touches_ended(location) && !pressed_text;
             plate.touch_start_location = None;
             Some((plate.confirmed, plate.anticipation, plate.confirm, held, tap, double_tap))
         });
@@ -597,7 +610,7 @@ impl Plate {
             return;
         }
         let can_double_tap = (coordinator.can_double_tap)(cx);
-        if click_count >= 2 && double_tap && can_double_tap {
+        if click_count >= 2 && click_count % 2 == 0 && double_tap && can_double_tap {
             entity.update(cx, |plate, _| plate.pending_tap = None);
             if let Some(on_double_tap) = &coordinator.on_double_tap
                 && !HoldContextMenuPresenter::has_active_request(cx)
@@ -606,7 +619,7 @@ impl Plate {
             }
             return;
         }
-        if !tap {
+        if !tap || click_count >= 2 {
             return;
         }
         if !can_double_tap {

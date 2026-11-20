@@ -34,6 +34,7 @@ else
     FFMPEG_TARGET_OS=windows FFMPEG_TARGET_ARCH="$ffmpeg_arch" FFMPEG_CROSS_PREFIX="$cross" \
         ./scripts/build-ffmpeg-lgpl.sh
     rm -rf "$ffmpeg_cache"
+    mkdir -p "$(dirname "$ffmpeg_cache")"
     cp -a "$ffmpeg" "$ffmpeg_cache"
 fi
 python3 scripts/check-ffmpeg-license.py "$ffmpeg"
@@ -85,7 +86,8 @@ SHIM
         chmod +x "$shim/clang"
         export PATH="$shim:$PATH"
     fi
-    env -u RISE_ENV cargo xwin build --locked --profile "$profile" --target "$triple" -p riseonly
+    env -u RISE_ENV cargo xwin build --locked --timings --profile "$profile" --target "$triple" -p riseonly
+    mkdir -p timings && cp "$target/cargo-timings/cargo-timing.html" "timings/windows-$arch.html"
     rm -rf "payload/windows-$arch"
     mkdir -p "payload/windows-$arch"
     cp "$exe" "payload/windows-$arch/riseonly.exe"

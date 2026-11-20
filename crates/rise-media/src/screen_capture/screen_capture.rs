@@ -356,6 +356,11 @@ pub type ScreenFrameSink = Arc<dyn Fn(ScreenFrame) + Send + Sync>;
 /// called once on any thread when the capture ends without the app asking
 pub type ScreenEndSink = Arc<dyn Fn(ScreenCaptureEnd) + Send + Sync>;
 
+/// rate the system sound of a share is asked for and carried at
+pub const SYSTEM_AUDIO_SAMPLE_RATE: u32 = 48_000;
+/// channels the system sound of a share is asked for and carried with
+pub const SYSTEM_AUDIO_CHANNEL_COUNT: u16 = 2;
+
 /// one block of the machine own sound during a share
 /// interleaved 16 bit pcm, rate and channels are what the branch system delivers
 #[derive(Clone, PartialEq, Eq, Debug)]

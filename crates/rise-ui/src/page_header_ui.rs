@@ -1,21 +1,34 @@
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId, FontWeight,
-    GlobalElementId, InspectorElementId, IntoElement, LayoutId, Length, ParentElement, Pixels,
-    Point, RenderOnce, SharedString, Size, Style, Styled, Window, div, point, px, relative,
+    AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Edges, Element, ElementId, FontWeight,
+    GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId, Length, ParentElement, Pixels,
+    Point, Position, RenderOnce, SharedString, Size, Style, Styled, Window, div, point, px, relative,
 };
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
+use rise_i18n::i18n::tr;
 use smallvec::SmallVec;
 
 use crate::liquid_chrome::LiquidChromeModifiers;
 use crate::main_text::{IgnoresTextSizeDeltaKey, MainText, TextAlignT};
-use crate::page_header_toolbar_button::{PageHeaderAction, PageHeaderBackButton, PageHeaderMetrics};
+use crate::page_header_toolbar_button::{
+    PageHeaderAction, PageHeaderBackButton, PageHeaderIconButton, PageHeaderMetrics,
+};
 use crate::swiftui::environment::{EnvKey, env, env_scope, layout_direction};
 use crate::swiftui::frame::SwiftUiAlignedFrame;
 use crate::swiftui::stacks::{Alignment, hstack, vstack};
+use crate::swiftui::tooltip_label::TooltipLabelModifiers;
 
 const BACK_BUTTON_ID: &str = "page-header-back";
+const PANEL_BACK_ID: &str = "panel-chrome-back";
+const PANEL_OPEN_IN_CENTRE_ID: &str = "panel-chrome-open-in-centre";
+const PANEL_CLOSE_ID: &str = "panel-chrome-close";
+const PANEL_BACK_KEY: &str = "back";
+const PANEL_OPEN_IN_CENTRE_KEY: &str = "aside_open_in_centre";
+const PANEL_CLOSE_KEY: &str = "desktop_panel_close";
+const PANEL_OPEN_IN_CENTRE_SYMBOL: &str = "arrow.up.left.and.arrow.down.right";
+const PANEL_CLOSE_SYMBOL: &str = "xmark";
 
 /// the page is the first one beside a split list (the settings sections)
 /// the list stays on screen so there is nothing to go back to and no back is drawn
@@ -62,6 +75,264 @@ impl EnvKey for PanelToggleHeaderReserveKey {
     }
 }
 
+/// back, open in centre and close a box of the window hands to the page inside it
+#[derive(Clone)]
+pub struct PanelChrome {
+    back: Option<PageHeaderAction>,
+    open_in_centre: Option<PageHeaderAction>,
+    close: Option<PageHeaderAction>,
+    taken: Rc<Cell<bool>>,
+}
+
+#[derive(Clone)]
+pub struct PanelChromeMenuAction {
+    pub id: &'static str,
+    pub label: SharedString,
+    pub system_image: &'static str,
+    pub action: PageHeaderAction,
+}
+
+impl PanelChrome {
+    pub fn new(taken: Rc<Cell<bool>>) -> Self {
+        Self { back: None, open_in_centre: None, close: None, taken }
+    }
+
+    pub fn back(mut self, back: Option<PageHeaderAction>) -> Self {
+        self.back = back;
+        self
+    }
+
+    pub fn open_in_centre(mut self, open_in_centre: Option<PageHeaderAction>) -> Self {
+        self.open_in_centre = open_in_centre;
+        self
+    }
+
+    pub fn close(mut self, close: Option<PageHeaderAction>) -> Self {
+        self.close = close;
+        self
+    }
+
+    pub fn with_taken(mut self, taken: Rc<Cell<bool>>) -> Self {
+        self.taken = taken;
+        self
+    }
+
+    pub fn close_action(&self) -> Option<PageHeaderAction> {
+        self.close.clone()
+    }
+
+    pub fn current(cx: &App) -> Option<Self> {
+        env::<PanelChromeKey>(cx)
+    }
+
+    /// chrome of the box around marked as placed, the box then keeps no row of its own
+    pub fn take(cx: &App) -> Option<Self> {
+        let chrome = env::<PanelChromeKey>(cx)?;
+        chrome.taken.set(true);
+        Some(chrome)
+    }
+
+    fn button(id: &'static str, symbol: &'static str, key: &'static str, action: PageHeaderAction) -> AnyElement {
+        div()
+            .id(id)
+            .tooltip_label(tr(key))
+            .child(PageHeaderIconButton::new(id, symbol, move |window, cx| action(window, cx)))
+            .into_any_element()
+    }
+
+    pub fn leading_button(&self) -> Option<AnyElement> {
+        let back = self.back.clone()?;
+        Some(
+            div()
+                .id(PANEL_BACK_ID)
+                .tooltip_label(tr(PANEL_BACK_KEY))
+                .child(PageHeaderBackButton::from_action(PANEL_BACK_ID, back))
+                .into_any_element(),
+        )
+    }
+
+    /// open in centre then close, none when the box offers neither
+    pub fn trailing_buttons(&self) -> Option<AnyElement> {
+        if self.open_in_centre.is_none() && self.close.is_none() {
+            return None;
+        }
+        let open = self
+            .open_in_centre
+            .clone()
+            .map(|action| Self::button(PANEL_OPEN_IN_CENTRE_ID, PANEL_OPEN_IN_CENTRE_SYMBOL, PANEL_OPEN_IN_CENTRE_KEY, action));
+        let close = self.close.clone().map(|action| Self::button(PANEL_CLOSE_ID, PANEL_CLOSE_SYMBOL, PANEL_CLOSE_KEY, action));
+        Some(hstack(PageHeaderMetrics::BUTTON_GAP).items_center().children(open).children(close).into_any_element())
+    }
+
+    /// row the box draws over a page that has no header of its own
+    pub fn row(&self) -> AnyElement {
+        hstack(PageHeaderMetrics::BUTTON_GAP)
+            .w_full()
+            .h(px(PageHeaderMetrics::PANEL_STRIP_HEIGHT))
+            .pt(px(PageHeaderMetrics::TOP_INSET))
+            .px(px(PageHeaderMetrics::BAR_EDGE_INSET))
+            .items_center()
+            .children(self.leading_button())
+            .child(div().flex_1())
+            .children(self.trailing_buttons())
+            .into_any_element()
+    }
+
+    pub fn menu_actions(&self) -> Vec<PanelChromeMenuAction> {
+        let open = self.open_in_centre.clone().map(|action| PanelChromeMenuAction {
+            id: PANEL_OPEN_IN_CENTRE_ID,
+            label: tr(PANEL_OPEN_IN_CENTRE_KEY).into(),
+            system_image: PANEL_OPEN_IN_CENTRE_SYMBOL,
+            action,
+        });
+        let close = self.close.clone().map(|action| PanelChromeMenuAction {
+            id: PANEL_CLOSE_ID,
+            label: tr(PANEL_CLOSE_KEY).into(),
+            system_image: PANEL_CLOSE_SYMBOL,
+            action,
+        });
+        open.into_iter().chain(close).collect()
+    }
+
+    pub fn run_menu_action(&self, id: &str, window: &mut Window, cx: &mut App) -> bool {
+        let action = match id {
+            PANEL_OPEN_IN_CENTRE_ID => self.open_in_centre.clone(),
+            PANEL_CLOSE_ID => self.close.clone(),
+            _ => None,
+        };
+        let Some(action) = action else {
+            return false;
+        };
+        action(window, cx);
+        true
+    }
+}
+
+/// set by a box of the window around the page it shows, none elsewhere
+pub struct PanelChromeKey;
+
+impl EnvKey for PanelChromeKey {
+    type Value = Option<PanelChrome>;
+
+    fn default_value() -> Self::Value {
+        None
+    }
+
+    fn fingerprint(value: &Self::Value) -> Option<u64> {
+        value.as_ref().map(|chrome| {
+            8 | u64::from(chrome.back.is_some())
+                | u64::from(chrome.open_in_centre.is_some()) << 1
+                | u64::from(chrome.close.is_some()) << 2
+        })
+    }
+}
+
+/// lays the page out first and then gives the box row only to a page that left the chrome untaken
+pub struct PanelChromeSlot {
+    taken: Rc<Cell<bool>>,
+    row_height: f32,
+    page: AnyElement,
+    row: Option<AnyElement>,
+}
+
+impl PanelChromeSlot {
+    pub fn new(taken: Rc<Cell<bool>>, page: impl IntoElement, row: Option<AnyElement>) -> Self {
+        Self { taken, row_height: PageHeaderMetrics::PANEL_STRIP_HEIGHT, page: page.into_any_element(), row }
+    }
+
+    fn pinned(top: f32, height: Option<f32>) -> Style {
+        let mut style = Style::default();
+        style.position = Position::Absolute;
+        style.inset = Edges {
+            top: px(top).into(),
+            right: px(0.0).into(),
+            bottom: if height.is_some() { Length::Auto } else { px(0.0).into() },
+            left: px(0.0).into(),
+        };
+        if let Some(height) = height {
+            style.size.height = Length::Definite(DefiniteLength::from(px(height)));
+        }
+        style
+    }
+}
+
+impl IntoElement for PanelChromeSlot {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for PanelChromeSlot {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let page = self.page.request_layout(window, cx);
+        if self.taken.get() {
+            self.row = None;
+        }
+        let page_top = if self.row.is_some() { self.row_height } else { 0.0 };
+        let mut children = vec![window.request_layout(Self::pinned(page_top, None), [page], cx)];
+        if let Some(row) = self.row.as_mut() {
+            let row = row.request_layout(window, cx);
+            children.push(window.request_layout(Self::pinned(0.0, Some(self.row_height)), [row], cx));
+        }
+        (window.request_layout(Self::pinned(0.0, None), children, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.page.prepaint(window, cx);
+        if self.row.is_some() && self.taken.get() {
+            self.row = None;
+            window.request_animation_frame();
+            return;
+        }
+        if let Some(row) = self.row.as_mut() {
+            row.prepaint(window, cx);
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.page.paint(window, cx);
+        if let Some(row) = self.row.as_mut() {
+            row.paint(window, cx);
+        }
+    }
+}
+
 /// the bar a page opens with, back or leading control
 /// trailing control and a title or center slot
 #[derive(IntoElement)]
@@ -75,6 +346,7 @@ pub struct PageHeaderUi {
     center_slot: Option<AnyElement>,
     center_slot_self_styled: bool,
     center_slot_fills_width: bool,
+    panel_chrome_in_menu: bool,
 }
 
 impl Default for PageHeaderUi {
@@ -89,6 +361,7 @@ impl Default for PageHeaderUi {
             center_slot: None,
             center_slot_self_styled: false,
             center_slot_fills_width: false,
+            panel_chrome_in_menu: false,
         }
     }
 }
@@ -141,6 +414,31 @@ impl PageHeaderUi {
     pub fn center_slot_fills_width(mut self, center_slot_fills_width: bool) -> Self {
         self.center_slot_fills_width = center_slot_fills_width;
         self
+    }
+
+    pub fn panel_chrome_in_menu(mut self, panel_chrome_in_menu: bool) -> Self {
+        self.panel_chrome_in_menu = panel_chrome_in_menu;
+        self
+    }
+
+    fn take_panel_chrome(&mut self, cx: &App) {
+        let Some(chrome) = PanelChrome::take(cx) else {
+            return;
+        };
+        if let Some(back) = chrome.back.clone() {
+            self.shows_back_button = true;
+            self.on_back = back;
+        }
+        if self.panel_chrome_in_menu {
+            return;
+        }
+        let Some(trailing) = chrome.trailing_buttons() else {
+            return;
+        };
+        self.right_jsx = Some(match self.right_jsx.take() {
+            Some(right) => hstack(PageHeaderMetrics::BUTTON_GAP).items_center().child(right).child(trailing).into_any_element(),
+            None => trailing,
+        });
     }
 
     pub fn trimmed_title(&self) -> Option<SharedString> {
@@ -239,6 +537,7 @@ impl RenderOnce for PageHeaderUi {
         if env::<PageBesideSplitListKey>(cx) {
             self.shows_back_button = false;
         }
+        self.take_panel_chrome(cx);
         let bar = if self.center_slot_fills_width
             && let Some(center) = self.center_slot.take()
         {

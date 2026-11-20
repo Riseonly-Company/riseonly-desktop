@@ -39,7 +39,9 @@ use crate::modules::rtc::engine::rise_rtc_engine_models::{
 };
 use crate::modules::rtc::engine::rise_rtc_domain::RiseRTCDomain;
 use crate::modules::rtc::engine::rise_rtc_media_boundary::RiseRTCMediaRuntime;
-use crate::modules::rtc::media::rise_rtc_audio_settings::{RiseRTCAudioProcessingSettings, RiseRTCAudioSettingsStore};
+use crate::modules::rtc::media::rise_rtc_audio_settings::{
+    RiseRTCAudioProcessingSettings, RiseRTCAudioSettingsStore, RiseRTCStreamerMode,
+};
 use crate::modules::rtc::media::rise_rtc_call_picture_in_picture::RiseRTCCallPictureInPictureController;
 use crate::modules::rtc::media::rise_rtc_live_kit_audio_coordinator::RiseRTCLiveKitAudioCoordinator;
 use crate::modules::rtc::media::rise_rtc_media_presentation::{
@@ -890,6 +892,7 @@ impl RiseRTCLiveKitMediaController {
             true
         });
         if created {
+            RiseRTCStreamerMode::share_started(cx);
             Self::present_room(cx);
         }
     }
@@ -1297,6 +1300,7 @@ impl RiseRTCLiveKitMediaController {
             updated_at_ms: now,
             lease_expires_at_ms: now + 120_000,
             order_sequence: now,
+            watching_user_id: String::new(),
             profile: None,
         }
     }
@@ -1622,6 +1626,9 @@ impl RiseRTCLiveKitMediaController {
         let removed = VIDEO_TRACKS.with_borrow_mut(|tracks| tracks.tracks.remove(track_key).is_some());
         if removed {
             Self::present_room(cx);
+            if track_key == LOCAL_SCREEN_TRACK_KEY {
+                RiseRTCStreamerMode::share_ended(cx);
+            }
         }
     }
 

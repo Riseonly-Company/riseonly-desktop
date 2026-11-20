@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use futures::FutureExt;
 use gpui::AsyncApp;
@@ -47,6 +48,71 @@ const NAME_FALLBACK_KEY: &str = "name";
 const SERVER_ID_KEY: &str = "server_id";
 const QUOTING_PROBE_LIMIT: usize = 16;
 const RECENT_COMMENTERS_LIMIT: usize = 3;
+
+static OWN_REACTION_INTENTS: LazyLock<Mutex<HashMap<String, HashMap<String, bool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// own reaction picks still in flight, by server message id
+pub enum RiseOwnReactionIntents {}
+
+impl RiseOwnReactionIntents {
+    pub fn set(server_message_id: &str, reaction: &str, wanted: bool) {
+        if server_message_id.is_empty() {
+            return;
+        }
+        let mut intents = OWN_REACTION_INTENTS.lock().unwrap_or_else(PoisonError::into_inner);
+        intents.entry(server_message_id.to_owned()).or_default().insert(reaction.to_owned(), wanted);
+    }
+
+    pub fn clear(server_message_id: &str, reaction: &str) {
+        let mut intents = OWN_REACTION_INTENTS.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(picks) = intents.get_mut(server_message_id) else {
+            return;
+        };
+        picks.remove(reaction);
+        if picks.is_empty() {
+            intents.remove(server_message_id);
+        }
+    }
+
+    pub fn clear_all() {
+        OWN_REACTION_INTENTS.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    fn pending(server_message_id: &str) -> Vec<(String, bool)> {
+        OWN_REACTION_INTENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(server_message_id)
+            .map(|picks| picks.iter().map(|(reaction, wanted)| (reaction.clone(), *wanted)).collect())
+            .unwrap_or_default()
+    }
+
+    fn keep(
+        wire: MessageWireDTO,
+        intents: &[(String, bool)],
+        account_id: &str,
+        own_reaction_limit: Option<i64>,
+    ) -> anyhow::Result<MessageWireDTO> {
+        let mut wire = wire;
+        for (reaction, wanted) in intents {
+            let is_mine = wire
+                .reactions
+                .as_ref()
+                .and_then(|reactions| reactions.iter().find(|candidate| &candidate.reaction == reaction))
+                .is_some_and(|candidate| candidate.reacted_by_you == Some(true));
+            if is_mine == *wanted {
+                continue;
+            }
+            let payload = BTreeMap::from([
+                (rise_key::events::REACTION.to_owned(), RiseJSONValue::String(reaction.clone())),
+                (rise_key::events::USER_ID.to_owned(), RiseJSONValue::String(account_id.to_owned())),
+            ]);
+            wire = RiseMessageWireCodec::applying_reaction(&wire, &payload, account_id, *wanted, own_reaction_limit)?;
+        }
+        Ok(wire)
+    }
+}
 
 /// raw values must match the canon wire names
 /// they are the canon constants and the set is checked at startup
@@ -320,6 +386,7 @@ impl RiseMessageRepository {
                 let own_reaction_limit = self.reaction_limit_for_active_account().await;
                 let leaves_unnamed_reactor = AtomicBool::new(false);
                 let account_id = self.account_id.as_str();
+                let intents = self.message_id(&root).map(|id| RiseOwnReactionIntents::pending(&id)).unwrap_or_default();
                 let batch = self
                     .reduce_patched_message(
                         &root,
@@ -337,6 +404,8 @@ impl RiseMessageRepository {
                                 true,
                                 own_reaction_limit,
                             )?;
+                            let patched =
+                                RiseOwnReactionIntents::keep(patched, &intents, account_id, own_reaction_limit)?;
                             let unnamed = RiseMessageWireCodec::has_unnamed_reactor(&patched);
                             leaves_unnamed_reactor.store(unnamed, Ordering::Relaxed);
                             Ok(patched)
@@ -358,6 +427,9 @@ impl RiseMessageRepository {
             }
             RiseMessageRepositoryRealtimeEvent::ReactionRemoved => {
                 let account_id = self.account_id.as_str();
+                let intents = self.message_id(&root).map(|id| RiseOwnReactionIntents::pending(&id)).unwrap_or_default();
+                let own_reaction_limit =
+                    if intents.is_empty() { None } else { self.reaction_limit_for_active_account().await };
                 self.reduce_patched_message(
                     &root,
                     version,
@@ -367,7 +439,8 @@ impl RiseMessageRepository {
                     true,
                     false,
                     |existing: &MessageWireDTO| {
-                        RiseMessageWireCodec::applying_reaction(existing, &root, account_id, false, None)
+                        let patched = RiseMessageWireCodec::applying_reaction(existing, &root, account_id, false, None)?;
+                        RiseOwnReactionIntents::keep(patched, &intents, account_id, own_reaction_limit)
                     },
                 )
                 .await
@@ -1280,11 +1353,14 @@ impl RiseMessageRepository {
             });
         }
 
-        let candidate_scopes: Vec<RiseMessageScope> = if has_topic_value {
-            vec![RiseMessageScope::new(chat_id.clone(), Some(topic_id.clone().unwrap_or_default()), None)]
-        } else {
-            self.known_scopes_with_chat(&chat_id)
-        };
+        let read_topic = has_topic_value.then(|| topic_id.clone().unwrap_or_default());
+        let mut candidate_scopes = self.known_scopes_with_chat(&chat_id);
+        if let Some(topic) = &read_topic {
+            let named = RiseMessageScope::new(chat_id.clone(), Some(topic.clone()), None);
+            if !candidate_scopes.contains(&named) {
+                candidate_scopes.push(named);
+            }
+        }
         let mut entities: HashMap<String, RiseStoreEntity> = HashMap::new();
         for scope in &candidate_scopes {
             let window = self
@@ -1312,6 +1388,9 @@ impl RiseMessageRepository {
                 continue;
             };
             if record.local_phase != RiseMessageLocalPhase::Remote {
+                continue;
+            }
+            if read_topic.as_deref().is_some_and(|topic| record.wire.topic_id.as_deref().unwrap_or_default() != topic) {
                 continue;
             }
             let sender_id = sender_id_of(&record.wire).unwrap_or_default();

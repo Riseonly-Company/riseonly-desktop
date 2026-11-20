@@ -1247,6 +1247,7 @@ impl UserServicesStore {
                 },
                 action,
                 duration: 5.2,
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,

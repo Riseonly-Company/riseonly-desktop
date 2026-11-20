@@ -3,7 +3,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, App, BoxShadow, ClickEvent, Context, Div, ElementId, Entity, FontWeight, Hsla,
+    AnyElement, AnyView, App, BoxShadow, Bounds, ClickEvent, Context, Div, ElementId, Entity, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, RenderOnce, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Task, Window, deferred, div, hsla, point, prelude::FluentBuilder,
     px,
@@ -22,6 +22,7 @@ use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::binding::Binding;
 use rise_ui::swiftui::button_style::plain;
 use rise_ui::swiftui::environment::{env, env_scope};
+use rise_ui::swiftui::measure::measure;
 use rise_ui::reorder_grip::ReorderMotion;
 use rise_ui::swiftui::drag_gesture::{DragGesture, DragGestureModifiers, DragGestureValue};
 use rise_ui::swiftui::environment_values::{ColorScheme, ColorSchemeKey};
@@ -216,6 +217,9 @@ pub struct MainTabBarState {
     bubble_placed: bool,
     reorder: ReorderMotion<RailEntry>,
     drag_swallows_click: bool,
+    pill_entry: Option<RailEntry>,
+    pill_in_foot: bool,
+    preview_settings: bool,
 }
 
 impl MainTabBarState {
@@ -236,14 +240,18 @@ impl MainTabBarState {
             bubble_placed: false,
             reorder: ReorderMotion::new(),
             drag_swallows_click: false,
+            pill_entry: None,
+            pill_in_foot: false,
+            preview_settings: false,
         }
     }
 
     /// selection changed from outside like a deep link or guide or push
     /// or the reader reordered buttons or the bar was just placed
-    fn follow(&mut self, center: f32, order: RiseTabBarButtonOrder, cx: &App) {
+    fn follow(&mut self, entry: RailEntry, center: f32, order: RiseTabBarButtonOrder, cx: &App) {
         let reordered = self.placed_order.is_some_and(|placed| placed != order);
         self.placed_order = Some(order);
+        let same_entry = self.pill_entry.replace(entry) == Some(entry);
         if !self.placed {
             self.placed = true;
             self.pill_y.jump(center);
@@ -252,14 +260,23 @@ impl MainTabBarState {
         if (self.pill_y.target() - center).abs() <= 0.5 {
             return;
         }
+        if same_entry && !reordered && !self.pill_y.is_running(RiseClock::monotonic()) {
+            self.pill_y.jump(center);
+            return;
+        }
         let motion = if reordered { spring(0.42, 0.8) } else { spring(0.42, 0.76) };
         self.pill_y.set_in(center, motion, RiseClock::monotonic(), cx);
     }
 
     fn note_offset(&mut self, offset: f32, cx: &mut Context<Self>) {
-        let moved = self.last_offset.is_some_and(|last| (last - offset).abs() > 0.5);
-        self.last_offset = Some(offset);
+        let last = self.last_offset.replace(offset);
+        let moved = last.is_some_and(|last| (last - offset).abs() > 0.5);
         if moved {
+            if self.pill_in_foot
+                && let Some(last) = last
+            {
+                self.pill_y.jump(*self.pill_y.target() - (offset - last));
+            }
             self.note_strip_moved(cx);
         }
     }
@@ -463,7 +480,7 @@ impl MainTabBar {
     #[allow(clippy::too_many_arguments)]
     fn commit(
         item: MainTabBarItem,
-        slot: Option<usize>,
+        pill_center: Option<f32>,
         current_tab: &Binding<MainTab>,
         state: &Entity<MainTabBarState>,
         nav_store: Option<&Entity<NavigationStore>>,
@@ -493,9 +510,9 @@ impl MainTabBar {
         let token = state.update(cx, |state, cx| {
             let now = RiseClock::monotonic();
             state.return_token += 1;
-            let travel = match slot {
-                Some(slot) => {
-                    let center = Self::slot_center(slot);
+            state.preview_settings = false;
+            let travel = match pill_center {
+                Some(center) => {
                     let travel = (center - state.pill_y.value(now)).abs();
                     state.pill_y.set(center, spring(0.42, 0.76), now, reduce_motion);
                     travel
@@ -615,7 +632,7 @@ impl MainTabBar {
         &self,
         index: usize,
         item: MainTabBarItem,
-        slot: Option<usize>,
+        pill_center: Option<f32>,
         is_selected: bool,
         lift: f32,
         hover: Hsla,
@@ -659,21 +676,22 @@ impl MainTabBar {
                 if state.update(cx, |state, _| std::mem::take(&mut state.drag_swallows_click)) {
                     return;
                 }
-                Self::commit(item, slot, &current_tab, &state, nav_store.as_ref(), is_preview, window, cx);
+                Self::commit(item, pill_center, &current_tab, &state, nav_store.as_ref(), is_preview, window, cx);
             })
             .child(label);
         let anchor = if self.is_preview { None } else { item.anchor };
         button.guide_anchor(anchor).into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn settings_button(
         &self,
         nav_store: Option<Entity<NavigationStore>>,
         glyph: Hsla,
         text: Hsla,
         tint: Hsla,
+        hover: Hsla,
         is_selected: bool,
-        dark: bool,
         state: &Entity<MainTabBarState>,
     ) -> AnyElement {
         let entry = MainTabBarMoreEntry::settings();
@@ -690,11 +708,17 @@ impl MainTabBar {
             .w_full()
             .h(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT))
             .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
+            .hover_fill(hover)
             .on_press(move |_window, cx| {
                 if press_state.update(cx, |state, _| std::mem::take(&mut state.drag_swallows_click)) {
                     return;
                 }
-                if !is_preview {
+                if is_preview {
+                    press_state.update(cx, |state, cx| {
+                        state.preview_settings = true;
+                        cx.notify();
+                    });
+                } else {
                     entry.open(nav_store.as_ref(), cx);
                 }
             })
@@ -713,17 +737,7 @@ impl MainTabBar {
                     .number_of_lines(1)
                     .minimum_scale_factor(0.7),
             );
-        if is_selected {
-            div()
-                .flex_shrink_0()
-                .w_full()
-                .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
-                .bg(Self::resting_fill(dark))
-                .child(button)
-                .into_any_element()
-        } else {
-            button.into_any_element()
-        }
+        button.into_any_element()
     }
 }
 
@@ -748,6 +762,7 @@ impl RenderOnce for MainTabBar {
             let routes = nav_store.read(cx).routes_since_tab_switch();
             (routes.iter().any(|route| matches!(route, RootRoute::Settings)), !routes.is_empty())
         });
+        let settings_open = settings_open || (self.is_preview && state.read(cx).preview_settings);
         let over_media = !theme_dark && !self.is_preview && current == MainTab::Shorts && !page_pushed;
         let dark = theme_dark || over_media;
         let selected_index = items.iter().position(|item| item.id == current).unwrap_or(0);
@@ -756,16 +771,11 @@ impl RenderOnce for MainTabBar {
         let strip_base = entries[..foot_start].to_vec();
         let foot_entries = entries[foot_start..].to_vec();
         let strip_entries = strip_base.clone();
-        let selected_slot = if settings_open {
-            None
-        } else {
-            Self::wire_button(current)
-                .and_then(|button| strip_entries.iter().position(|entry| *entry == RailEntry::Button(button)))
-        };
+        let selected_entry =
+            if settings_open { Some(RailEntry::Settings) } else { Self::wire_button(current).map(RailEntry::Button) };
+        let selected_place = selected_entry
+            .and_then(|selected| entries.iter().position(|entry| *entry == selected).map(|place| (selected, place)));
         let order = self.settings.button_order;
-        if let Some(slot) = selected_slot {
-            state.update(cx, |state, cx| state.follow(Self::slot_center(slot), order, cx));
-        }
 
         let geometry = state.read(cx).geometry.clone();
         geometry.set_items(&items);
@@ -793,6 +803,19 @@ impl RenderOnce for MainTabBar {
 
         let offset = f32::from(geometry.scroll.offset().y);
         state.update(cx, |state, cx| state.note_offset(offset, cx));
+        let pill_target = selected_place.and_then(|(entry, place)| {
+            if place < foot_start {
+                Some((entry, Self::slot_center(place), false))
+            } else {
+                geometry.foot_center(place - foot_start).map(|center| (entry, center - offset, true))
+            }
+        });
+        if let Some((entry, center, in_foot)) = pill_target {
+            state.update(cx, |state, cx| {
+                state.pill_in_foot = in_foot;
+                state.follow(entry, center, order, cx);
+            });
+        }
 
         let now = RiseClock::monotonic();
         let (pill_y, lift, stretch) = {
@@ -829,11 +852,6 @@ impl RenderOnce for MainTabBar {
             .pt(px(MainTabBarMetrics::INSET))
             .overflow_y_scroll()
             .track_scroll(&geometry.scroll);
-        strip = strip.child(if selected_slot.is_some() {
-            self.pill(pill_y, lift, stretch, strip_width, dark)
-        } else {
-            div().absolute().into_any_element()
-        });
         for (slot, entry) in strip_entries.iter().copied().enumerate() {
             let element = match entry {
                 RailEntry::Button(button) => {
@@ -843,7 +861,7 @@ impl RenderOnce for MainTabBar {
                     self.strip_button(
                         index,
                         items[index],
-                        Some(slot),
+                        Some(Self::slot_center(slot)),
                         index == selected_index && !settings_open,
                         lift,
                         hover,
@@ -856,24 +874,24 @@ impl RenderOnce for MainTabBar {
                     settings_glyph,
                     settings_text,
                     theme.primary._100,
+                    hover,
                     settings_open,
-                    dark,
                     &state,
                 ),
             };
             strip = strip.child(self.reorderable(entry, element, &entries, &slots, &state, window, cx));
         }
 
-        let mut foot = div().flex().flex_col().items_center().gap(px(MainTabBarMetrics::INSET)).w_full();
-        for entry in foot_entries {
+        let mut foot = div().relative().flex().flex_col().gap(px(MainTabBarMetrics::INSET)).w_full();
+        for (foot_index, entry) in foot_entries.into_iter().enumerate() {
             let element = match entry {
                 RailEntry::Settings => self.settings_button(
                     nav_store.clone(),
                     settings_glyph,
                     settings_text,
                     theme.primary._100,
+                    hover,
                     settings_open,
-                    dark,
                     &state,
                 ),
                 RailEntry::Button(button) => {
@@ -881,31 +899,30 @@ impl RenderOnce for MainTabBar {
                         continue;
                     };
                     let selected = !settings_open && current == button.tab();
-                    let element = self.strip_button(
+                    self.strip_button(
                         index,
                         items[index],
-                        None,
+                        geometry.foot_center(foot_index).map(|center| center - offset),
                         selected,
                         if selected { lift } else { 0.0 },
                         hover,
                         &state,
                         nav_store.as_ref(),
-                    );
-                    if selected {
-                        div()
-                            .flex_shrink_0()
-                            .w_full()
-                            .rounded(px(MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0))
-                            .bg(Self::resting_fill(dark))
-                            .child(element)
-                            .into_any_element()
-                    } else {
-                        element
-                    }
+                    )
                 }
             };
             foot = foot.child(self.reorderable(entry, element, &entries, &slots, &state, window, cx));
         }
+        let foot_geometry = geometry.clone();
+        let foot_state = state.clone();
+        foot = foot.child(
+            measure("main-tab-bar-foot", move |bounds, _, cx| {
+                foot_geometry.foot.set(Some(bounds));
+                foot_state.update(cx, |_, cx| cx.notify());
+            })
+            .absolute()
+            .inset_0(),
+        );
         let foot = div()
             .flex()
             .flex_col()
@@ -929,6 +946,16 @@ impl RenderOnce for MainTabBar {
             .pb(px(MainTabBarMetrics::INSET))
             .px(px(MainTabBarMetrics::INSET))
             .children(media_backing)
+            .children(pill_target.map(|_| {
+                div()
+                    .absolute()
+                    .top(px(strip_top))
+                    .bottom_0()
+                    .left(px(MainTabBarMetrics::INSET))
+                    .right(px(MainTabBarMetrics::INSET))
+                    .overflow_y_hidden()
+                    .child(self.pill(pill_y + offset, lift, stretch, strip_width, dark))
+            }))
             .child(strip)
             .child(foot);
 
@@ -971,6 +998,7 @@ pub struct MainTabBarGeometry {
     pub loops: Cell<bool>,
     items: RefCell<Vec<MainTabBarItem>>,
     strip: RefCell<Vec<Option<MainTab>>>,
+    foot: Cell<Option<Bounds<Pixels>>>,
 }
 
 impl Default for MainTabBarGeometry {
@@ -992,12 +1020,24 @@ impl MainTabBarGeometry {
             loops: Cell::new(false),
             items: RefCell::new(MainTabBarItem::all().to_vec()),
             strip: RefCell::new(strip),
+            foot: Cell::new(None),
         }
     }
 
     /// horizontal strip layout of the phone, for bar copies that still draw one
     pub fn layout(width: f32, count: usize) -> TabStripLayout {
         TabStripLayout::new(width - MainTabBarMetrics::INSET * 2.0, count, MainTabBarMetrics::VISIBLE_COUNT, 0.0)
+    }
+
+    /// centre of a foot place under the top of the strip, the frame the pill moves in
+    fn foot_center(&self, index: usize) -> Option<f32> {
+        let foot = self.foot.get()?;
+        let strip = self.scroll.bounds();
+        if strip.size.height <= px(0.0) {
+            return None;
+        }
+        let step = MainTabBarMetrics::RAIL_ITEM_HEIGHT + MainTabBarMetrics::INSET;
+        Some(f32::from(foot.top() - strip.top()) + step * index as f32 + MainTabBarMetrics::RAIL_ITEM_HEIGHT / 2.0)
     }
 
     fn set_items(&self, items: &[MainTabBarItem]) {
@@ -1021,7 +1061,7 @@ impl MainTabBarGeometry {
     }
 
     fn scroll_item(&self, index: usize) -> Option<usize> {
-        self.slot_of(index).map(|slot| slot + 1)
+        self.slot_of(index)
     }
 
     pub fn is_fully_visible(&self, index: usize, count: usize) -> bool {

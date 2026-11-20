@@ -72,6 +72,13 @@ impl Render for ThemePreviewHost {
         let current = services.preview().cloned().or_else(|| self.shown.clone());
         let sample_theme = services.preview_theme().cloned();
         let is_mutating = services.is_mutating();
+        let kept_copy = current.as_ref().and_then(|preview| {
+            services
+                .presets()
+                .iter()
+                .find(|kept| kept.id == preview.id || kept.source_theme_id.as_deref() == Some(preview.id.as_str()))
+                .map(|kept| kept.id.clone())
+        });
         let read = self.services.clone();
         let is_presented = Binding::new(
             move |cx| read.read(cx).preview().is_some(),
@@ -95,6 +102,15 @@ impl Render for ThemePreviewHost {
                 }
             }
         });
+        let on_unsave: Option<SheetAction> = kept_copy.map(|kept_id| -> SheetAction {
+            Rc::new(move |_, cx| {
+                let actions = ThemePresetsActionsStore::shared(cx);
+                actions.update(cx, |actions, cx| {
+                    actions.cancel_preview_action(cx);
+                    actions.delete_action(&kept_id, cx);
+                });
+            })
+        });
         div()
             .size_full()
             .relative()
@@ -107,6 +123,7 @@ impl Render for ThemePreviewHost {
                     is_mutating,
                     on_save,
                     on_save_and_apply,
+                    on_unsave,
                 }),
             )
             .child(div().absolute().inset_0().child(ThemeReplaceSavedSheet::new()))
@@ -140,6 +157,7 @@ pub struct ThemePreviewSheet {
     is_mutating: bool,
     on_save: SheetAction,
     on_save_and_apply: SheetAction,
+    on_unsave: Option<SheetAction>,
 }
 
 impl ThemePreviewSheet {
@@ -302,6 +320,24 @@ impl ThemePreviewSheet {
         let is_mutating = self.is_mutating;
         let on_save_and_apply = self.on_save_and_apply.clone();
         let on_save = self.on_save.clone();
+        if let Some(on_unsave) = self.on_unsave.clone() {
+            return vstack(8.).w_full().px(px(16.)).pt(px(12.)).pb(px(4.)).child(
+                ButtonUi::new(Self::child_id("unsave"))
+                    .background_color(theme.bg._200)
+                    .height(52.)
+                    .disabled(is_mutating)
+                    .on_press(move |window, cx| on_unsave(window, cx))
+                    .child(if is_mutating {
+                        progress_view().tint(theme.text.primary).into_any_element()
+                    } else {
+                        MainText::new(tr("theme_unsave"))
+                            .px(16.)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .color(theme.semantic.error_100)
+                            .into_any_element()
+                    }),
+            );
+        }
         vstack(8.)
             .w_full()
             .px(px(16.))

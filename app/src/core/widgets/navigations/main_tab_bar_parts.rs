@@ -41,9 +41,10 @@ impl MainTabBarItemLabel {
             return MainTabBarAvatar { ringed: self.tinted, ring: primary, fallback: secondary }.into_any_element();
         }
         let color = if self.tinted { primary } else { secondary };
+        let filled = self.tinted && self.item.id != MainTab::GlobalSearch;
         let mut icon = div()
             .relative()
-            .children(IconUi::sized(self.item.symbol, px(MainTabBarMetrics::RAIL_ICON_SIZE), color, self.tinted));
+            .children(IconUi::sized(self.item.symbol, px(MainTabBarMetrics::RAIL_ICON_SIZE), color, filled));
         if self.item.id == MainTab::Chats {
             icon = icon.child(
                 div()

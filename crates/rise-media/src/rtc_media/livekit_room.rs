@@ -34,7 +34,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::rtc_media::*;
-use crate::screen_capture::{ScreenCaptureError, ScreenFrame, ScreenPixels};
+use crate::screen_capture::{
+    SYSTEM_AUDIO_CHANNEL_COUNT, SYSTEM_AUDIO_SAMPLE_RATE, ScreenCaptureError, ScreenFrame, ScreenPixels,
+};
 use crate::texture::color::{ColorDescription, ColorRange, ColorSpace};
 use crate::texture::frame::FrameFormat;
 use crate::texture::native_surface::{self, HostNv12Frame, PreparedHostFrame};
@@ -44,6 +46,8 @@ const PLAYOUT_QUEUE_MS: u32 = 200;
 const PLAYOUT_RATE: u32 = 48_000;
 const PLAYOUT_CHANNELS: u16 = 2;
 const INPUT_BLOCKS: usize = 32;
+const STREAM_AUDIBLE_PEAK: i16 = 256;
+const STREAM_LEVEL_REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 const TESTER_INPUT_TICK: std::time::Duration = std::time::Duration::from_millis(10);
 const LEVEL_EVERY_BLOCKS: u32 = 8;
 const MICROPHONE_TEST_QUEUE_MS: u32 = 120;
@@ -157,6 +161,7 @@ struct Call {
     microphone_wanted: AtomicBool,
     microphone_reopens: AtomicU32,
     gate: Arc<Mutex<InputNoiseGate>>,
+    far_end: Arc<FarEndTap>,
     video: Mutex<HashMap<TrackSource, LocalVideo>>,
     screen_audio: Mutex<Option<ScreenAudio>>,
     remote: Mutex<HashMap<String, JoinHandle<()>>>,
@@ -186,6 +191,7 @@ struct ScreenAudio {
     blocks: mpsc::Sender<Vec<i16>>,
     sample_rate: u32,
     channels: u16,
+    mismatch_reported: AtomicBool,
 }
 
 struct LocalVideo {
@@ -419,21 +425,10 @@ pub fn perform(os: &dyn RtcMediaEngine, host: HostOs, intent: &MediaIntent) -> R
             }
             if let Some(call) = current_call(engine) {
                 call.gate.lock().update(settings.input_sensitivity);
-                if let Some(microphone) = call.microphone.lock().as_ref() {
-                    microphone.source.set_audio_options(source_options(settings.options_for(call.host)));
-                }
             }
             Ok(())
         }
         MediaIntent::SendData { .. } => Err(RtcUnavailable::Refused(CODE_DATA_PUBLISH_DISABLED)),
-    }
-}
-
-fn source_options(options: AudioProcessingOptions) -> AudioSourceOptions {
-    AudioSourceOptions {
-        echo_cancellation: options.echo_cancellation,
-        noise_suppression: options.noise_suppression,
-        auto_gain_control: options.auto_gain_control,
     }
 }
 
@@ -590,6 +585,7 @@ async fn run_call(engine: &'static Engine, request: ConnectRequest, generation: 
         microphone_reopens: AtomicU32::new(0),
         screen_audio: Mutex::new(None),
         gate: Arc::new(Mutex::new(InputNoiseGate::new(settings.processing.input_sensitivity))),
+        far_end: Arc::new(FarEndTap::default()),
         video: Mutex::new(HashMap::new()),
         remote: Mutex::new(HashMap::new()),
     });
@@ -759,6 +755,7 @@ fn translate(engine: &'static Engine, call: &Arc<Call>, event: RoomEvent) -> Opt
 fn start_remote(engine: &'static Engine, call: &Arc<Call>, key: String, user_id: Option<String>, source: TrackSource, track: RemoteTrack) {
     let task = match track {
         RemoteTrack::Audio(track) => {
+            let listener = user_id.clone();
             if source == TrackSource::ScreenShareAudio {
                 call.mixer.lock().add_stream_track(&key, user_id);
             } else {
@@ -766,9 +763,21 @@ fn start_remote(engine: &'static Engine, call: &Arc<Call>, key: String, user_id:
             }
             let mixer = call.mixer.clone();
             let task_key = key.clone();
+            let is_stream = source == TrackSource::ScreenShareAudio;
+            if is_stream {
+                tracing::warn!(target: "riseonly::X141", track = %key, "rtc remote screen audio subscribed");
+            }
+            let playout = call.playout.clone();
             engine.runtime.spawn(async move {
                 let mut stream = NativeAudioStream::new(track.rtc_track(), PLAYOUT_RATE as i32, i32::from(PLAYOUT_CHANNELS));
+                let mut level = StreamLevel::new();
                 while let Some(frame) = stream.next().await {
+                    if is_stream
+                        && let Some((peak, first)) = level.observe(&frame.data)
+                    {
+                        let volume = playout.lock().stream_volume_for(listener.as_deref());
+                        tracing::warn!(target: "riseonly::X141", track = %task_key, peak, first, volume, "rtc remote screen audio level");
+                    }
                     mixer.lock().push_i16(&task_key, &frame.data);
                 }
             })
@@ -809,6 +818,30 @@ fn start_remote(engine: &'static Engine, call: &Arc<Call>, key: String, user_id:
     };
     if let Some(previous) = call.remote.lock().insert(key, task) {
         previous.abort();
+    }
+}
+
+struct StreamLevel {
+    peak: i16,
+    reported_at: std::time::Instant,
+    audible: bool,
+}
+
+impl StreamLevel {
+    fn new() -> Self {
+        Self { peak: 0, reported_at: std::time::Instant::now(), audible: false }
+    }
+
+    fn observe(&mut self, samples: &[i16]) -> Option<(i16, bool)> {
+        let peak = samples.iter().map(|sample| sample.saturating_abs()).max().unwrap_or(0);
+        self.peak = self.peak.max(peak);
+        let first = !self.audible && peak >= STREAM_AUDIBLE_PEAK;
+        if !first && self.reported_at.elapsed() < STREAM_LEVEL_REPORT_EVERY {
+            return None;
+        }
+        self.audible |= first;
+        self.reported_at = std::time::Instant::now();
+        Some((std::mem::take(&mut self.peak), first))
     }
 }
 
@@ -871,27 +904,53 @@ fn nv12_from_buffer(buffer: &dyn VideoBuffer, stream_id: u64, generation: u64) -
 pub fn push_screen_audio(samples: Vec<i16>, sample_rate: u32, channels: u16) -> Result<(), RtcUnavailable> {
     let engine = engine()?;
     let call = current_call(engine).ok_or(RtcUnavailable::NotConnected)?;
-    let video = call.video.lock();
-    if !video.contains_key(&TrackSource::ScreenShare) {
+    let lane = call.screen_audio.lock();
+    let Some(audio) = lane.as_ref() else {
         return Err(RtcUnavailable::NotConnected);
-    }
+    };
     if sample_rate < 100 || channels == 0 {
         return Ok(());
     }
-    let mut lane = call.screen_audio.lock();
-    let is_current = lane.as_ref().is_some_and(|audio| audio.sample_rate == sample_rate && audio.channels == channels);
-    if !is_current {
-        let (blocks, receiver) = mpsc::channel::<Vec<i16>>(INPUT_BLOCKS);
-        engine.runtime.spawn(pump_screen_audio(call.clone(), receiver, sample_rate, channels));
-        *lane = Some(ScreenAudio { blocks, sample_rate, channels });
-    }
-    if let Some(audio) = lane.as_ref()
-        && audio.blocks.try_send(samples).is_err()
-    {
+    let samples = if sample_rate == audio.sample_rate && channels == audio.channels {
+        samples
+    } else {
+        if !audio.mismatch_reported.swap(true, Ordering::Relaxed) {
+            tracing::warn!(sample_rate, channels, "rtc screen audio is converted to the share track format");
+        }
+        conformed_audio(&samples, sample_rate, channels, audio.sample_rate, audio.channels)
+    };
+    if audio.blocks.try_send(samples).is_err() {
         tracing::debug!("rtc screen audio block dropped");
     }
-    drop(video);
     Ok(())
+}
+
+fn conformed_audio(samples: &[i16], rate: u32, channels: u16, to_rate: u32, to_channels: u16) -> Vec<i16> {
+    let (from, to) = (usize::from(channels), usize::from(to_channels));
+    let frames: Vec<&[i16]> = samples.chunks_exact(from).collect();
+    let channel = |frame: &[i16], index: usize| -> i16 {
+        if from == 1 {
+            frame[0]
+        } else if to == 1 || index >= from {
+            (frame.iter().map(|sample| i32::from(*sample)).sum::<i32>() / from as i32) as i16
+        } else {
+            frame[index]
+        }
+    };
+    let out_frames = (frames.len() as u64 * u64::from(to_rate) / u64::from(rate)) as usize;
+    let mut out = Vec::with_capacity(out_frames * to);
+    for index in 0..out_frames {
+        let position = index as f64 * f64::from(rate) / f64::from(to_rate);
+        let lower = (position.floor() as usize).min(frames.len().saturating_sub(1));
+        let upper = (lower + 1).min(frames.len().saturating_sub(1));
+        let fraction = position - position.floor();
+        for target in 0..to {
+            let start = f64::from(channel(frames[lower], target));
+            let end = f64::from(channel(frames[upper], target));
+            out.push((start + (end - start) * fraction).round() as i16);
+        }
+    }
+    out
 }
 
 /// hands one captured picture from camera or screen capture to its published track
@@ -1017,6 +1076,9 @@ async fn publish_video(
             frames: frames.clone(),
         },
     );
+    if screencast && include_system_audio {
+        open_screen_audio(engine, &call);
+    }
     emit(engine, RtcEvent::LocalVideoWanted { source, device_id, include_system_audio, shelf });
     if screencast {
         tokio::time::sleep(SCREEN_SHARE_FIRST_FRAME_WINDOW).await;
@@ -1057,6 +1119,21 @@ async fn capture_allowed(engine: &'static Engine, kind: CaptureKind) -> bool {
     }
 }
 
+fn open_screen_audio(engine: &'static Engine, call: &Arc<Call>) {
+    if !matches!(crate::screen_capture::system_audio_support(), rise_platform::PlatformSupport::Performed) {
+        return;
+    }
+    let (blocks, receiver) = mpsc::channel::<Vec<i16>>(INPUT_BLOCKS);
+    let lane = ScreenAudio {
+        blocks,
+        sample_rate: SYSTEM_AUDIO_SAMPLE_RATE,
+        channels: SYSTEM_AUDIO_CHANNEL_COUNT,
+        mismatch_reported: AtomicBool::new(false),
+    };
+    *call.screen_audio.lock() = Some(lane);
+    engine.runtime.spawn(pump_screen_audio(call.clone(), receiver, SYSTEM_AUDIO_SAMPLE_RATE, SYSTEM_AUDIO_CHANNEL_COUNT));
+}
+
 /// the sound goes with the picture of the share
 fn stop_screen_audio(call: &Call, source: TrackSource) {
     if source == TrackSource::ScreenShare {
@@ -1080,10 +1157,15 @@ async fn pump_screen_audio(call: Arc<Call>, mut blocks: mpsc::Receiver<Vec<i16>>
             return;
         }
     };
+    tracing::warn!(target: "riseonly::X141", %sid, rate, channels, "rtc screen audio track published");
     let per_channel = rate / 100;
     let chunk = per_channel as usize * usize::from(channels);
     let mut pending: Vec<i16> = Vec::with_capacity(chunk * 2);
+    let mut level = StreamLevel::new();
     while let Some(block) = blocks.recv().await {
+        if let Some((peak, first)) = level.observe(&block) {
+            tracing::warn!(target: "riseonly::X141", %sid, peak, first, "rtc screen audio level sent");
+        }
         pending.extend_from_slice(&block);
         while pending.len() >= chunk {
             let data: Vec<i16> = pending.drain(..chunk).collect();
@@ -1132,8 +1214,7 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
             return;
         }
     };
-    let options = source_options(settings.processing.options_for(call.host));
-    let source = NativeAudioSource::new(options, rate, u32::from(channels), SOURCE_QUEUE_MS);
+    let source = NativeAudioSource::new(AudioSourceOptions::default(), MICROPHONE_MONITOR_RATE, 1, SOURCE_QUEUE_MS);
     let track = LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(source.clone()));
     let publish = TrackPublishOptions {
         source: SdkTrackSource::Microphone,
@@ -1161,7 +1242,8 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
         // why: a mute or a second enable that landed while this one opened the device wins
         let stale = slot.is_some() || !call.microphone_wanted.load(Ordering::SeqCst);
         if !stale {
-            call.gate.lock().initialize(rate);
+            call.gate.lock().initialize(MICROPHONE_MONITOR_RATE);
+            call.far_end.clear();
             let muted = Arc::new(AtomicBool::new(false));
             let pump = engine.runtime.spawn(pump_microphone(
                 engine,
@@ -1175,7 +1257,7 @@ async fn set_microphone(engine: &'static Engine, call: Arc<Call>, enabled: bool)
                 sid: sid.clone(),
                 publication,
                 source,
-                rate,
+                rate: MICROPHONE_MONITOR_RATE,
                 muted,
                 _device: device,
                 pump,
@@ -1290,12 +1372,11 @@ async fn pump_microphone(
     muted: Arc<AtomicBool>,
 ) {
     let MicrophoneFormat { rate, channels } = format;
-    let Some(gate) = call.upgrade().map(|call| call.gate.clone()) else {
+    let Some((gate, far_end, host)) = call.upgrade().map(|call| (call.gate.clone(), call.far_end.clone(), call.host)) else {
         return;
     };
-    let per_channel = rate / 100;
-    let chunk = per_channel as usize * usize::from(channels);
-    let mut pending: Vec<f32> = Vec::with_capacity(chunk * 2);
+    let mut monitor = MicrophoneMonitor::new(rate, channels);
+    let mut chain = VoiceChain::default();
     let mut counted = 0u32;
     let mut delivered = false;
     loop {
@@ -1324,30 +1405,69 @@ async fn pump_microphone(
             }
         }
         if muted.load(Ordering::Relaxed) {
-            pending.clear();
+            monitor = MicrophoneMonitor::new(rate, channels);
+            far_end.clear();
             continue;
         }
-        pending.extend_from_slice(&block);
-        while pending.len() >= chunk {
-            let mut samples: Vec<f32> = pending.drain(..chunk).collect();
-            gate.lock().process(&mut samples, usize::from(channels));
+        monitor.push(&block);
+        while let Some(mut samples) = monitor.next_frame() {
+            gate.lock().process(&mut samples, 1);
             if MICROPHONE_TEST_HUSHES_CALL.load(Ordering::Relaxed) {
                 samples.fill(0.0);
             }
+            let mut data: Vec<i16> =
+                samples.iter().map(|sample| sample.clamp(-GATE_FULL_SCALE, GATE_FULL_SCALE - 1.0) as i16).collect();
+            let processing = engine.settings.lock().processing;
+            chain.process(&mut data, processing.options_for(host), &far_end);
+            apply_input_gain(&mut data, processing.input_gain);
             counted += 1;
             if counted % LEVEL_EVERY_BLOCKS == 0 {
-                emit(engine, RtcEvent::InputLevel(indicator_level(&samples)));
+                let level: Vec<f32> = data.iter().map(|sample| f32::from(*sample)).collect();
+                emit(engine, RtcEvent::InputLevel(indicator_level(&level)));
             }
-            let data: Vec<i16> = samples.iter().map(|sample| sample.clamp(-GATE_FULL_SCALE, GATE_FULL_SCALE - 1.0) as i16).collect();
             let frame = AudioFrame {
                 data: data.into(),
-                sample_rate: rate,
-                num_channels: u32::from(channels),
-                samples_per_channel: per_channel,
+                sample_rate: MICROPHONE_MONITOR_RATE,
+                num_channels: 1,
+                samples_per_channel: MICROPHONE_MONITOR_RATE / 100,
             };
             if let Err(error) = source.capture_frame(&frame).await {
                 tracing::warn!(%error, "rtc microphone frame was refused");
             }
+        }
+    }
+}
+
+/// webrtc echo canceller, noise suppressor and gain control on the published mic
+/// a native audio source sends frames as they come, nothing in the sdk processes them
+/// so without this the call went out raw, quiet and full of room noise
+#[derive(Default)]
+struct VoiceChain {
+    module: Option<(AudioProcessingOptions, AudioProcessingModule)>,
+}
+
+impl VoiceChain {
+    fn process(&mut self, frame: &mut [i16], options: AudioProcessingOptions, far_end: &FarEndTap) {
+        if self.module.as_ref().is_none_or(|(applied, _)| *applied != options) {
+            let module = AudioProcessingModule::new(
+                options.echo_cancellation,
+                options.auto_gain_control,
+                options.highpass_filter,
+                options.noise_suppression,
+            );
+            self.module = Some((options, module));
+        }
+        let Some((_, module)) = self.module.as_mut() else {
+            return;
+        };
+        let rate = MICROPHONE_MONITOR_RATE as i32;
+        for mut played in far_end.take_frames() {
+            if let Err(error) = module.process_reverse_stream(&mut played, rate, 1) {
+                tracing::debug!(%error, "rtc far end frame was refused");
+            }
+        }
+        if let Err(error) = module.process_stream(frame, rate, 1) {
+            tracing::debug!(%error, "rtc microphone frame was not processed");
         }
     }
 }
@@ -1378,6 +1498,7 @@ fn start_output(engine: &Engine, call: &Call) -> Result<(), RtcUnavailable> {
         call.playout.clone(),
         PlayoutRole::Call,
         Some(call.output_health.clone()),
+        Some(call.far_end.clone()),
     )?;
     *call.output.lock() = Some(device);
     Ok(())
@@ -1567,7 +1688,15 @@ fn open_microphone_test(engine: &'static Engine, host_id: cpal::HostId, host: Ho
     mixer.lock().add_track(MICROPHONE_TEST_TRACK, None);
     let playout = Arc::new(Mutex::new(RemotePlayout::default()));
     let output =
-        DeviceThread::open_output(host_id, settings.output.clone(), mixer.clone(), playout, PlayoutRole::MicrophoneTest, None)?;
+        DeviceThread::open_output(
+        host_id,
+        settings.output.clone(),
+        mixer.clone(),
+        playout,
+        PlayoutRole::MicrophoneTest,
+        None,
+        None,
+    )?;
     let (blocks, receiver) = mpsc::channel::<Vec<f32>>(INPUT_BLOCKS);
     let (input, rate, channels) = DeviceThread::open_input(host_id, settings.input.clone(), blocks)?;
     let gate = Arc::new(Mutex::new(InputNoiseGate::new(settings.processing.input_sensitivity)));
@@ -1629,6 +1758,7 @@ fn run_microphone_test(
                     tracing::debug!(%error, "rtc microphone test frame was refused");
                 }
             }
+            apply_input_gain(&mut frame, engine.settings.lock().processing.input_gain);
             played.clear();
             played.extend_from_slice(&frame);
             let stereo = MicrophoneMonitor::to_stereo(&frame);
@@ -1847,6 +1977,7 @@ impl DeviceThread {
         playout: Arc<Mutex<RemotePlayout>>,
         role: PlayoutRole,
         health: Option<Arc<OutputHealth>>,
+        far_end: Option<Arc<FarEndTap>>,
     ) -> Result<Self, RtcUnavailable> {
         Self::spawn("rtc-playout", DeviceDirection::Output, move || {
             let direction = DeviceDirection::Output;
@@ -1878,9 +2009,9 @@ impl DeviceThread {
                 buffer_size: cpal::BufferSize::Default,
             };
             let stream = match format {
-                cpal::SampleFormat::F32 => build_output::<f32>(&device, &config, mixer, playout, role, health),
-                cpal::SampleFormat::I16 => build_output::<i16>(&device, &config, mixer, playout, role, health),
-                cpal::SampleFormat::I32 => build_output::<i32>(&device, &config, mixer, playout, role, health),
+                cpal::SampleFormat::F32 => build_output::<f32>(&device, &config, mixer, playout, role, health, far_end),
+                cpal::SampleFormat::I16 => build_output::<i16>(&device, &config, mixer, playout, role, health, far_end),
+                cpal::SampleFormat::I32 => build_output::<i32>(&device, &config, mixer, playout, role, health, far_end),
                 _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
             }
             .map_err(|_| RtcUnavailable::Device {
@@ -1927,6 +2058,7 @@ fn build_output<T>(
     playout: Arc<Mutex<RemotePlayout>>,
     role: PlayoutRole,
     health: Option<Arc<OutputHealth>>,
+    far_end: Option<Arc<FarEndTap>>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
@@ -1948,6 +2080,9 @@ where
                 scratch.fill(0.0);
             }
             crate::audio::sound_mute::silence_if_muted(&mut scratch);
+            if let Some(far_end) = far_end.as_ref() {
+                far_end.push_stereo(&scratch);
+            }
             for (slot, sample) in out.iter_mut().zip(scratch.iter()) {
                 *slot = T::from_sample(*sample);
             }

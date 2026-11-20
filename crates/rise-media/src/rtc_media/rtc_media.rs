@@ -634,6 +634,7 @@ pub enum ProcessingMode {
 pub struct AudioProcessingSettings {
     pub software_noise_suppression: bool,
     pub input_sensitivity: f64,
+    pub input_gain: f64,
 }
 
 impl Default for AudioProcessingSettings {
@@ -641,6 +642,87 @@ impl Default for AudioProcessingSettings {
         Self {
             software_noise_suppression: false,
             input_sensitivity: 0.0,
+            input_gain: INPUT_GAIN_DEFAULT,
+        }
+    }
+}
+
+pub const INPUT_GAIN_MAX: f64 = 2.0;
+pub const INPUT_GAIN_DEFAULT: f64 = 1.0;
+
+/// mic volume slider 0 to 2, NaN falls back to the default
+pub fn normalize_input_gain(value: f64) -> f64 {
+    if value.is_nan() {
+        return INPUT_GAIN_DEFAULT;
+    }
+    value.clamp(0.0, INPUT_GAIN_MAX)
+}
+
+const LIMITER_KNEE: f32 = 0.7 * GATE_FULL_SCALE;
+
+/// scales a block on the i16 scale and bends peaks over the knee instead of clipping them
+/// so 200 percent on a loud voice stays clean and never cracks
+pub fn apply_input_gain(samples: &mut [i16], gain: f64) {
+    let gain = normalize_input_gain(gain) as f32;
+    if (gain - 1.0).abs() < 1e-3 {
+        return;
+    }
+    let headroom = GATE_FULL_SCALE - 1.0 - LIMITER_KNEE;
+    for sample in samples.iter_mut() {
+        let scaled = f32::from(*sample) * gain;
+        let magnitude = scaled.abs();
+        let shaped = if magnitude <= LIMITER_KNEE {
+            magnitude
+        } else {
+            LIMITER_KNEE + headroom * ((magnitude - LIMITER_KNEE) / headroom).tanh()
+        };
+        *sample = (shaped.copysign(scaled)).clamp(-GATE_FULL_SCALE, GATE_FULL_SCALE - 1.0) as i16;
+    }
+}
+
+/// what the speakers played, handed from the output callback to the mic chain
+/// the echo canceller needs it to take the room out of the mic
+/// mono 48 kHz on the i16 scale, the oldest audio drops past the bound
+#[derive(Debug, Default)]
+pub struct FarEndTap {
+    samples: std::sync::Mutex<std::collections::VecDeque<f32>>,
+}
+
+impl FarEndTap {
+    const BOUND: usize = (MICROPHONE_MONITOR_RATE / 2) as usize;
+    pub const FRAME_SAMPLES: usize = (MICROPHONE_MONITOR_RATE / 100) as usize;
+
+    /// interleaved stereo block at 48 kHz on the -1 to 1 scale, never blocks the device thread
+    pub fn push_stereo(&self, block: &[f32]) {
+        let Ok(mut samples) = self.samples.try_lock() else {
+            return;
+        };
+        samples.extend(block.chunks_exact(2).map(|pair| (pair[0] + pair[1]) * 0.5 * GATE_FULL_SCALE));
+        let excess = samples.len().saturating_sub(Self::BOUND);
+        if excess > 0 {
+            samples.drain(..excess);
+        }
+    }
+
+    /// whole 10 ms frames waiting, oldest first
+    pub fn take_frames(&self) -> Vec<Vec<i16>> {
+        let Ok(mut samples) = self.samples.lock() else {
+            return Vec::new();
+        };
+        let whole = samples.len() / Self::FRAME_SAMPLES;
+        (0..whole)
+            .map(|_| {
+                samples
+                    .drain(..Self::FRAME_SAMPLES)
+                    .map(|sample| sample.clamp(-GATE_FULL_SCALE, GATE_FULL_SCALE - 1.0) as i16)
+                    .collect()
+            })
+            .collect()
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut samples) = self.samples.lock() {
+            samples.clear();
         }
     }
 }
@@ -666,6 +748,7 @@ impl AudioProcessingSettings {
         Self {
             software_noise_suppression: self.software_noise_suppression,
             input_sensitivity: normalize_sensitivity(self.input_sensitivity),
+            input_gain: normalize_input_gain(self.input_gain),
         }
     }
 

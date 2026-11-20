@@ -556,6 +556,7 @@ fn list_column(width: Pixels, content: AnyElement) -> AnyElement {
         .flex()
         .flex_row()
         .justify_center()
+        .wheel_into_children()
         .child(div().relative().h_full().w_full().max_w(width).child(content))
         .into_any_element()
 }

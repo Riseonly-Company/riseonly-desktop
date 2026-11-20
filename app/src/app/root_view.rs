@@ -46,7 +46,7 @@ use rise_core::foundation::foundation_url::Url;
 use rise_core::foundation::foundation_uuid::Uuid;
 
 use crate::core::push_notifications::socket_notification_source::SocketNotificationSource;
-use crate::app::aside::aside_navigator::{self, AsideHeaderButtons, AsideNavigator, AsideReveal};
+use crate::app::aside::aside_navigator::{self, AsideNavigator, AsideReveal};
 use crate::app::aside::aside_registry::{AsideScope, AsideSection, is_music_request_list};
 use crate::app::rise_launch_splash::RiseLaunchSplashState;
 use crate::riseonly_app::RiseonlyApp;
@@ -954,7 +954,6 @@ pub struct RootView {
     side_panel_content: Entity<RootSidePanelContent>,
     side_panel_context: Option<RootSidePanelContext>,
     aside: Entity<AsideNavigator>,
-    aside_header: AnyView,
     aside_slide_over_open: bool,
     map_aside_was_open: bool,
     aside_shows_now_playing: bool,
@@ -1018,7 +1017,6 @@ impl RootView {
         });
         let aside = cx.new(|cx| AsideNavigator::new(&nav_store, cx));
         let section_rail = cx.new(|cx| RootSectionRail::new(nav_store.clone(), cx));
-        let aside_header: AnyView = cx.new(|cx| AsideHeaderButtons::new(&aside, cx)).into();
         let side_panel_content = cx.new(|_: &mut Context<RootSidePanelContent>| RootSidePanelContent {
             context: None,
             nav_store: nav_store.clone(),
@@ -1207,7 +1205,6 @@ impl RootView {
             side_panel_content,
             side_panel_context: None,
             aside,
-            aside_header,
             aside_slide_over_open: false,
             map_aside_was_open: false,
             aside_shows_now_playing: false,
@@ -3037,36 +3034,12 @@ impl RootView {
                 | RootRoute::TopicProfile { .. }
                 | RootRoute::UserPage { .. }
                 | RootRoute::MyProfile
-                | RootRoute::MusicArtistProfile { .. }
-                | RootRoute::HashtagSearch { .. }
-                | RootRoute::MusicSettings
-                | RootRoute::MusicLibrary
-                | RootRoute::MusicLocalTracks
-                | RootRoute::MusicTrackRequestsAdmin
-                | RootRoute::MusicArtistRequestsAdmin
-                | RootRoute::MusicAlbumRequestsAdmin
-                | RootRoute::MyMusicTrackRequests
-                | RootRoute::MyMusicArtistRequest
-                | RootRoute::MyMusicAlbumRequests
-                | RootRoute::MyBugReports
-                | RootRoute::UserSubscribers { .. }
-                | RootRoute::UserSubs { .. }
-                | RootRoute::UserFriends { .. }
-                | RootRoute::ArtistStudio
-                | RootRoute::MusicPlaylistDetail { .. }
-                | RootRoute::MusicAlbumDetail { .. }
-                | RootRoute::MusicPlaylistSettings { .. }
-                | RootRoute::MusicPlaylistInviteLink { .. }
-                | RootRoute::MusicPlaylistJoinRequests { .. }
-                | RootRoute::MusicPlaylistMembers { .. }
-                | RootRoute::MusicPlaylistMemberRights { .. }
                 | RootRoute::CreatePostMedia { .. }
                 | RootRoute::CreatePost { .. }
                 | RootRoute::EditPost { .. }
                 | RootRoute::CreatePostWithAchievement { .. }
                 | RootRoute::BotMiniApp { .. }
                 | RootRoute::BotMiniAppLink { .. }
-                | RootRoute::PostStats { .. }
                 | RootRoute::QrScanner
                 | RootRoute::MusicNowPlaying
                 | RootRoute::WorldMap
@@ -3079,9 +3052,39 @@ impl RootView {
         )
     }
 
+    fn is_music_page(route: &RootRoute) -> bool {
+        matches!(
+            route,
+            RootRoute::MusicPlaylistDetail { .. }
+                | RootRoute::MusicAlbumDetail { .. }
+                | RootRoute::MusicArtistProfile { .. }
+                | RootRoute::MusicSettings
+                | RootRoute::MusicLibrary
+                | RootRoute::MusicLocalTracks
+                | RootRoute::MusicTrackRequestsAdmin
+                | RootRoute::MusicArtistRequestsAdmin
+                | RootRoute::MusicAlbumRequestsAdmin
+                | RootRoute::MyMusicTrackRequests
+                | RootRoute::MyMusicArtistRequest
+                | RootRoute::MyMusicAlbumRequests
+                | RootRoute::ArtistStudio
+                | RootRoute::MusicPlaylistSettings { .. }
+                | RootRoute::MusicPlaylistInviteLink { .. }
+                | RootRoute::MusicPlaylistJoinRequests { .. }
+                | RootRoute::MusicPlaylistMembers { .. }
+                | RootRoute::MusicPlaylistMemberRights { .. }
+        )
+    }
+
     /// how wide a centre page lays out its rows, none keeps the whole column
     fn page_column_width(route: &RootRoute, theme: &rise_theme::AppTheme) -> Option<Pixels> {
         if matches!(route, RootRoute::MyProfile | RootRoute::UserPage { .. }) {
+            return Some(theme.shell.profile_max_width);
+        }
+        if Self::is_music_page(route) {
+            return Some(theme.shell.music_max_width);
+        }
+        if matches!(route, RootRoute::HashtagSearch { .. }) {
             return Some(theme.shell.profile_max_width);
         }
         (!Self::page_fills_wide_centre(route)).then_some(theme.shell.list_max_width)
@@ -3154,7 +3157,9 @@ impl RootView {
         window.paint_quad(fill(band, header.background));
         let direction = LayoutDirection::current();
         LinearGradient::new(header.tint, UnitPoint::TOP, UnitPoint::BOTTOM).paint(band, direction, window);
-        LinearGradient::new(header.shadow, UnitPoint::TOP, UnitPoint::BOTTOM).paint(band, direction, window);
+        let shadow_height = header.shadow_height.clamp(0.0, f32::from(bounds.size.height));
+        let shadow_band = Bounds::new(bounds.origin, size(bounds.size.width, px(shadow_height)));
+        LinearGradient::new(header.shadow, UnitPoint::TOP, UnitPoint::BOTTOM).paint(shadow_band, direction, window);
     }
 
     /// stack page element with rows held to column_width in the middle of a wider centre
@@ -3228,6 +3233,7 @@ impl RootView {
                 .flex()
                 .flex_row()
                 .justify_center()
+                .wheel_into_children()
                 .child(div().relative().h_full().w_full().max_w(column_width).child(content)),
         )
         .into_any_element()
@@ -3283,7 +3289,8 @@ impl RootView {
                 Some(
                     RootRoute::Chat { chat_id }
                     | RootRoute::ChatTopic { chat_id, .. }
-                    | RootRoute::ForumAll { chat_id },
+                    | RootRoute::ForumAll { chat_id }
+                    | RootRoute::PinnedMessages { chat_id, .. },
                 ) => (chat_id.clone().filter(|chat_id| !chat_id.is_empty()), None, false),
                 Some(RootRoute::PostDetail { post_id, .. }) => (None, post_id.clone(), false),
                 Some(_) => (None, None, false),
@@ -3467,12 +3474,6 @@ impl RootView {
         });
         self.drop_closed_map_pages(section, cx);
         let context = self.resolve_side_panel_context(cx);
-        let header_overlays = matches!(context, Some(RootSidePanelContext::Aside(_)));
-        let header_blurred = header_overlays && !self.aside.read(cx).shows_docked_comments(cx);
-        self.side_panel.update(cx, |side_panel, cx| {
-            side_panel.set_header_overlays(header_overlays, cx);
-            side_panel.set_header_blurred(header_blurred, cx);
-        });
         if self.side_panel_context == context {
             return;
         }
@@ -3487,7 +3488,6 @@ impl RootView {
         };
         let key = context.key();
         let shows_close = !context.draws_own_close();
-        let header_leading = matches!(context, RootSidePanelContext::Aside(_)).then(|| self.aside_header.clone());
         self.side_panel_content.update(cx, |content, cx| {
             content.context = Some(context);
             cx.notify();
@@ -3505,7 +3505,6 @@ impl RootView {
         }
         self.side_panel.update(cx, |side_panel, cx| {
             side_panel.set_shows_close(shows_close, cx);
-            side_panel.set_header_leading(header_leading, cx);
         });
     }
 
@@ -3547,12 +3546,13 @@ impl RootView {
         let top_inset = f32::from(self.screen_top_inset(window, cx));
         let host = self.hosts.rise_rtc_room_presentation_host.clone();
         let content = host.read(cx).in_app_call_content(host.downgrade(), cx);
-        let body = div().relative().size_full().overflow_hidden().flex().justify_center().child(
+        let background = host.read(cx).call_background(cx);
+        let body = div().relative().size_full().overflow_hidden().flex().justify_center().wheel_into_children().child(
             div().h_full().w_full().max_w(theme.shell.call_max_width).child(
                 env_scope::<RiseRTCScreenTopInsetKey>(top_inset).child(div().size_full().child(content)),
             ),
         );
-        let room = Self::pane(body, framed, Self::pane_radius(theme), gap, theme).h_full().w_full();
+        let room = Self::pane(body, framed, Self::pane_radius(theme), gap, theme).bg(background).h_full().w_full();
         div().flex_1().min_w_0().h_full().flex().child(room)
     }
 

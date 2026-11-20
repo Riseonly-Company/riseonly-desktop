@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Global, InteractiveElement,
+    AnyElement, AnyView, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Global, Hsla, InteractiveElement,
     IntoElement, ParentElement, Render, StyleRefinement, Styled, Subscription, Task, TitlebarOptions, WeakEntity, Window,
     WindowAppearance, WindowBounds, WindowHandle, WindowOptions, black, deferred, div, px, size,
 };
@@ -14,14 +14,18 @@ use rise_platform::HostOs;
 use rise_platform::user_defaults::UserDefaults;
 use rise_platform::user_defaults_keys::DESKTOP_CALL_IN_SEPARATE_WINDOW;
 use rise_platform::window_chrome::{app_owns_titlebar_drag, set_system_controls_appearance};
+use rise_ui::expandable_text_ui::EdgeInsets;
 use rise_ui::swiftui::environment::{env, env_scope};
+use rise_ui::swiftui::transition::UnitPoint;
+use rise_ui::IconUi;
 use rise_ui::window_cover::WindowCoverFrame;
 use rise_ui::guide_overlay_ui::guide_overlay_window::GuideOverlayWindow;
 use rise_theme::AppTheme;
 use rise_widgets::window_controls_band;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey};
-use crate::app::router::navigation_types::RiseRTCRoomTarget;
+use crate::app::router::navigation_store::NavigationStoreSettlingPush;
+use crate::app::router::navigation_types::{RiseRTCRoomTarget, RootRoute};
 use crate::app::shell::handover_hooks::handover_hooks;
 use crate::core::lib::sai::core::logger::sai_log_kind::SaiLogKind;
 use crate::core::lib::sai::sai::Sai;
@@ -29,14 +33,20 @@ use crate::core::ui::hold_context_menu_ui::hold_context_menu_host::HoldContextMe
 use crate::core::widgets::notifier::notifier_host::NotifierHost;
 use crate::core::widgets::sheets::report_sheet::ReportSheetHost;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
+use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
+use crate::modules::rtc::components::rise_rtc_floating_video_window::RiseRTCFloatingVideoWindow;
+use crate::modules::rtc::components::rise_rtc_own_screen_share_wall::RiseRTCOwnScreenShareWall;
 use crate::modules::rtc::engine::rise_rtc_engine_models::{
     RiseRTCCallStateExt, RiseRTCDirectCall, RiseRTCEvictionReason, RiseRTCRoomEviction, RiseRTCRoomMode,
+    RiseRTCScreenShareQuality,
 };
-use crate::modules::rtc::media::rise_rtc_call_picture_in_picture::RiseRTCCallPictureInPictureController;
+use crate::modules::rtc::media::rise_rtc_media_presentation::RiseRTCMediaPresentation;
 use crate::modules::rtc::media::rise_rtc_end_tone_player::RiseRTCEndTonePlayer;
 use crate::modules::rtc::pages::rise_rtc_call_window_chrome_hooks::rise_rtc_call_window_chrome_hooks;
 use crate::modules::rtc::pages::rise_rtc_direct_call_screen::{RiseRTCDirectCallScreen, RiseRTCTerminalHold};
-use crate::modules::rtc::pages::rise_rtc_room_screen::RiseRTCRoomScreen;
+use crate::modules::rtc::pages::rise_rtc_room_screen::{
+    RiseRTCRoomScreen, RiseRTCRoomScreenView, RiseRTCStreamViewersPill, non_empty,
+};
 use crate::modules::rtc::pages::shell_window_actions_hooks::{CloseWindow, KEY_CONTEXT};
 use crate::modules::rtc::shared::rise_rtc_screen_safe_area::RiseRTCScreenTopInsetKey;
 use crate::modules::rtc::shared::rise_rtc_navigation_gate::{RiseRTCNavigationGate, RiseRTCRoomTargetSafeLogKind};
@@ -59,6 +69,8 @@ const ENDING_SYSTEM_CALL_DEADLINE: Duration = Duration::from_millis(760);
 const DIRECT_CALL_WINDOW_SIZE: (f32, f32) = (440.0, 780.0);
 const ROOM_WINDOW_SIZE: (f32, f32) = (960.0, 720.0);
 const CALL_WINDOW_MIN_SIZE: (f32, f32) = (360.0, 480.0);
+const OWN_SHARE_CARD_SIZE: (f32, f32) = (208.0, 117.0);
+const OWN_SHARE_CARD_MARGIN: f32 = 12.0;
 
 pub struct RiseRTCRoomPresentationHost {
     rtc: Entity<RTCServicesStore>,
@@ -86,6 +98,8 @@ pub struct RiseRTCRoomPresentationHost {
     ending_task_identity: Option<Uuid>,
     terminal_task: Option<Task<()>>,
     ending_task: Option<Task<()>>,
+    own_share_card_position: UnitPoint,
+    own_share_card_key: Option<Vec<String>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -183,6 +197,11 @@ impl RiseRTCRoomPresentationHost {
         self.call_window_content(host, cx)
     }
 
+    /// colour of the call surface, the in app pane and the call window paint it edge to edge
+    pub fn call_background(&self, cx: &App) -> Hsla {
+        if self.is_direct_call_presentation(cx) { black() } else { rise_ui::theme(cx).bg._000 }
+    }
+
     pub fn minimize_in_app_call(&mut self, cx: &mut Context<Self>) {
         if self.in_app_call_key(cx).is_some() {
             self.minimize_active_presentation(cx);
@@ -193,11 +212,13 @@ impl RiseRTCRoomPresentationHost {
         let rtc = RTCServicesStore::shared(cx);
         let system_calls = RiseRTCSystemCallPresentationStore::shared(cx);
         let interactions = RTCInteractionsStore::shared(cx);
+        let media = RiseRTCMediaPresentation::shared(cx);
 
         let subscriptions = vec![
             cx.observe(&rtc, |this, _, cx| this.synchronize(cx)),
             cx.observe(&system_calls, |this, _, cx| this.synchronize(cx)),
             cx.observe_global::<RiseRTCCallWindowMode>(|this, cx| this.set_needs_synchronize(cx)),
+            cx.observe(&media, |this, _, cx| this.refresh_own_share_card(cx)),
         ];
 
         Sai::log("RTC", || "room presentation host mounted".to_owned(), SaiLogKind::Network, cx);
@@ -235,27 +256,136 @@ impl RiseRTCRoomPresentationHost {
             ending_task_identity: None,
             terminal_task: None,
             ending_task: None,
+            own_share_card_position: UnitPoint::BOTTOM_TRAILING,
+            own_share_card_key: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn own_share_user_id(&self, cx: &mut App) -> Option<String> {
+        if Self::uses_separate_window(cx) || self.in_app_call_key(cx).is_some() {
+            return None;
+        }
+        let user_id =
+            AuthServicesStore::shared(cx).read(cx).active_account_id().filter(|id| !id.is_empty()).map(str::to_owned)?;
+        RiseRTCMediaPresentation::shared(cx).read(cx).screen_share_track(&user_id)?;
+        Some(user_id)
+    }
+
+    fn own_share_card_key(&self, cx: &mut App) -> Option<Vec<String>> {
+        let user_id = self.own_share_user_id(cx)?;
+        let rtc = self.rtc.read(cx);
+        let room = rtc.active_room(cx).filter(|room| room.config.mode != RiseRTCRoomMode::DirectCall)?;
+        let mut key = vec![room.config.room_id.clone()];
+        key.extend(
+            room.participants
+                .iter()
+                .filter(|participant| participant.user_id != user_id && participant.watching_user_id == user_id)
+                .map(|participant| participant.user_id.clone()),
+        );
+        Some(key)
+    }
+
+    fn refresh_own_share_card(&mut self, cx: &mut Context<Self>) {
+        let key = self.own_share_card_key(cx);
+        if key != self.own_share_card_key {
+            self.own_share_card_key = key;
+            cx.notify();
+        }
+    }
+
+    fn own_share_card(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let user_id = self.own_share_user_id(cx)?;
+        let (room_chat_id, room_channel_id, viewers) = {
+            let rtc = self.rtc.read(cx);
+            let room = rtc.active_room(cx).filter(|room| room.config.mode != RiseRTCRoomMode::DirectCall)?;
+            let viewers: Vec<_> = room
+                .participants
+                .iter()
+                .filter(|participant| participant.user_id != user_id && participant.watching_user_id == user_id)
+                .cloned()
+                .collect();
+            (room.config.chat_id.clone(), room.config.channel_id.clone(), viewers)
+        };
+        let roles = room_channel_id
+            .map(|topic_id| RiseRTCStreamViewersPill::forum_roles(&room_chat_id, &topic_id, cx))
+            .unwrap_or_default();
+        let theme = rise_ui::theme(cx).clone();
+        let navigation_store = self.navigation_store.clone();
+        let pill = RiseRTCStreamViewersPill::new("rtc-own-share-card-viewers".into(), viewers, roles, user_id).on_open(
+            move |viewer, _, cx| {
+                let route = RootRoute::UserPage {
+                    user_id: Some(viewer.user_id.clone()),
+                    tag: viewer.profile.as_ref().and_then(|profile| non_empty(&profile.tag)),
+                };
+                if let Some(navigation_store) = &navigation_store {
+                    navigation_store.update(cx, |navigation_store, cx| {
+                        navigation_store.push(route, NavigationStoreSettlingPush::default(), cx);
+                    });
+                }
+            },
+        );
+        let stop = |_: &mut Window, cx: &mut App| {
+            let task = RTCInteractionsStore::shared(cx).update(cx, |interactions, cx| {
+                interactions.set_screen_share(false, false, RiseRTCScreenShareQuality::Balanced, cx)
+            });
+            cx.spawn(async move |_| {
+                if let Err(error) = task.await {
+                    tracing::warn!(%error, "rtc screen share stop from the share card failed");
+                }
+            })
+            .detach();
+        };
+        let content = div()
+            .relative()
+            .size_full()
+            .child(RiseRTCOwnScreenShareWall::new("rtc-own-share-card-wall", theme.clone()).compact(true))
+            .child(div().absolute().top(px(6.0)).right(px(6.0)).child(RiseRTCRoomScreenView::glass_circle(
+                "rtc-own-share-card-stop",
+                tr("rtc_stop_stream"),
+                26.0,
+                stop,
+                IconUi::sized("rectangle.on.rectangle.slash", px(11.0), theme.text.primary, false),
+            )))
+            .child(div().absolute().right(px(6.0)).bottom(px(6.0)).child(pill));
+        let viewport = window.viewport_size();
+        let top = f32::from(theme.shell.window_drag_height) + OWN_SHARE_CARD_MARGIN;
+        let insets = EdgeInsets::new(top, OWN_SHARE_CARD_MARGIN, OWN_SHARE_CARD_MARGIN, OWN_SHARE_CARD_MARGIN);
+        let moved = cx.weak_entity();
+        let on_position_change = move |position: UnitPoint, _: &mut Window, cx: &mut App| {
+            let _ = moved.update(cx, |host, cx| {
+                host.own_share_card_position =
+                    UnitPoint { x: if position.x < 0.5 { 0.0 } else { 1.0 }, y: position.y.clamp(0.0, 1.0) };
+                cx.notify();
+            });
+        };
+        let open: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(|_, cx| Self::present_call(cx));
+        Some(
+            RiseRTCFloatingVideoWindow::new(
+                "rtc-own-share-card",
+                self.own_share_card_position,
+                size(OWN_SHARE_CARD_SIZE.0, OWN_SHARE_CARD_SIZE.1),
+                insets,
+                size(f32::from(viewport.width), f32::from(viewport.height)),
+                on_position_change,
+                Some(open),
+                content,
+            )
+            .into_any_element(),
+        )
     }
 
     /// everything the host body on_change and task handlers did
     /// handlers of the call window run with that window leased and closing
     /// it there would fail, so they come here through set_needs_synchronize
     fn synchronize(&mut self, cx: &mut Context<Self>) {
+        self.refresh_own_share_card(cx);
         self.synchronize_room_presentation(cx);
         self.synchronize_system_call_presentation(cx);
         self.synchronize_settling_tasks(cx);
         self.synchronize_call_window(cx);
         self.did_synchronize = true;
         cx.emit(RiseRTCCallWindowContentChanged);
-    }
-
-    fn end_stream_float(cx: &mut App) {
-        let controller = RiseRTCCallPictureInPictureController::shared(cx);
-        if controller.read(cx).is_floating_stream() {
-            controller.update(cx, |controller, cx| controller.end_stream_float(cx));
-        }
     }
 
     fn set_needs_synchronize(&mut self, cx: &mut Context<Self>) {
@@ -274,7 +404,6 @@ impl RiseRTCRoomPresentationHost {
         let account_id = rtc.account_id(cx).map(str::to_owned);
         let active_room_id = rtc.active_room(cx).map(|room| room.config.room_id.clone());
         self.settle_switched_voice_seat(target.as_ref(), active_room_id, cx);
-        let target_gone = target.is_none();
 
         if target != self.last_target {
             let kind = target.as_ref().map_or("none", |target| target.safe_log_kind()).to_owned();
@@ -284,12 +413,6 @@ impl RiseRTCRoomPresentationHost {
         if is_visible != self.last_is_visible {
             Sai::log("RTC", move || format!("room presentation visible={is_visible}"), SaiLogKind::Network, cx);
             self.last_is_visible = is_visible;
-            if is_visible {
-                Self::end_stream_float(cx);
-            }
-        }
-        if target_gone {
-            Self::end_stream_float(cx);
         }
         if eviction != self.last_eviction {
             self.last_eviction = eviction.clone();
@@ -465,6 +588,7 @@ impl RiseRTCRoomPresentationHost {
             NotifierSendOptions {
                 r#type: eviction.reason.notifier_type(),
                 position: NotifierPosition::Bottom,
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,
@@ -747,13 +871,13 @@ pub struct RiseRTCCallWindowContentChanged;
 impl EventEmitter<RiseRTCCallWindowContentChanged> for RiseRTCRoomPresentationHost {}
 
 impl Render for RiseRTCRoomPresentationHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.navigation_store = env::<NavigationStoreKey>(cx);
         if !self.is_mounted_in_window {
             self.is_mounted_in_window = true;
             self.set_needs_synchronize(cx);
         }
-        div()
+        div().relative().size_full().children(self.own_share_card(window, cx))
     }
 }
 
@@ -853,7 +977,7 @@ impl Render for RiseRTCCallWindow {
             }
         }
         let content = self.host.read(cx).call_window_content(self.host.downgrade(), cx);
-        let background = if is_direct { black() } else { rise_ui::theme(cx).bg._000 };
+        let background = self.host.read(cx).call_background(cx);
         let band = window_controls_band(window, cx);
         let top_inset = f32::from(WindowCoverFrame::resolve(window, cx).safe_top);
         let body = div()
@@ -868,7 +992,7 @@ impl Render for RiseRTCCallWindow {
                 env_scope::<NavigationStoreKey>(self.navigation_store.clone())
                     .child(env_scope::<RiseRTCScreenTopInsetKey>(top_inset).child(content)),
             )
-            .children((band > px(0.0)).then(|| self.title_bar.clone()).flatten())
+            .children((band > px(0.0) || !window.is_fullscreen()).then(|| self.title_bar.clone()).flatten())
             .child(
                 AnyView::from(self.report_sheet_host.clone())
                     .cached(StyleRefinement::default().absolute().top_0().left_0().size_full()),

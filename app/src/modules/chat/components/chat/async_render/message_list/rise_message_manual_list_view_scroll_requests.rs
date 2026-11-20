@@ -263,8 +263,9 @@ impl RiseMessageManualListView {
                     return false;
                 };
                 let direction = self.jump_direction(request, configuration, cx);
+                let focus = request.focus();
                 let performed = self.list_view.update(cx, |list_view, cx| {
-                    list_view.smart_scroll_to_item_centered(&entry_id, direction, animated, window, cx)
+                    list_view.smart_scroll_to_item_focused(&entry_id, focus, direction, animated, window, cx)
                 });
                 if performed {
                     self.flash_jump_highlight(entry_id, Self::jump_highlight_color(configuration), window, cx);

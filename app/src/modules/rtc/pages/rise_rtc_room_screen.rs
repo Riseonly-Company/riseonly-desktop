@@ -3,14 +3,14 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, ElementId, Empty, Entity, FocusHandle, FontWeight, Hsla,
+    AnyElement, AnyView, Anchor, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, ElementId, Empty, Entity, FocusHandle, FontWeight, Hsla,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement, Pixels, Point,
     Render, RenderOnce, SharedString, Size, StatefulInteractiveElement, Styled, StyledImage as _, Subscription, Task,
-    StyleRefinement, TextRun, WeakEntity, Window, black, container_query, div, img, px, rgb, size, white,
+    StyleRefinement, TextRun, WeakEntity, Window, anchored, black, container_query, deferred, div, img, px, rgb, size, white,
 };
 use rise_canon::RiseGuideAnchor;
 use rise_core::foundation::foundation_date::RiseClock;
@@ -38,6 +38,7 @@ use rise_ui::swiftui::environment::{env, reduce_motion};
 use rise_ui::swiftui::measure::measure;
 use rise_ui::swiftui::motion::{MotionSpec, ease_in_out, spring};
 use rise_ui::swiftui::progress_view::{ControlSize, progress_view};
+use rise_ui::window_cover::WindowCoverFrame;
 use rise_ui::swiftui::scroll_view::scroll_view;
 use rise_ui::swiftui::shapes::{Shape, SwiftUiShapes, centred_stroke};
 use rise_ui::swiftui::stacks::{HorizontalAlignment, StackAlign, hstack, spacer, vstack};
@@ -60,6 +61,7 @@ use crate::core::ui::hold_context_menu_ui::hold_context_menu_container::{
     HoldContextMenuActionsProvider, HoldContextMenuContainer, HoldContextMenuSourceContent,
 };
 use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
+use crate::core::ui::premium_badge::UserNameWithBadges;
 use crate::core::ui::premium_diamond::PremiumDiamond;
 use crate::core::ui::user_logo_ui::UserLogoUi;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
@@ -71,6 +73,7 @@ use crate::modules::chat::stores::chats::chat_actions::chat_types::{
     ChatChannelKind, ChatPerm, ChatPermExt, VoiceChannelConfig, VoiceChannelParticipant, VoiceChannelState,
 };
 use crate::modules::chat::stores::chats::chat_actions::chat_wire_types::EffectivePermissionsDTOExt;
+use crate::modules::chat::pages::chats::chat::chat_topics::member_tag_chip_hooks::MemberTagChip;
 use crate::modules::chat::stores::chats::chat_interactions::chat_interactions::ChatInteractionsStore;
 use crate::core::widgets::sheets::report_sheet::ReportSheetStore;
 use crate::modules::chat::stores::chats::chat_services::chat_profile_permissions::ChatProfilePermissions;
@@ -150,6 +153,7 @@ struct CaptionImposed {
     muted: bool,
     deafened: bool,
     color: Hsla,
+    speaking: Option<Hsla>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +176,7 @@ struct RoomChangeKeys {
     guides_running: bool,
     call_state: Option<RiseRTCCallState>,
     stage_capture: Option<(String, Option<String>)>,
+    stream_watch: Option<String>,
 }
 
 /// room of a voice channel, group voice chat or direct call
@@ -257,6 +262,10 @@ pub struct RiseRTCRoomScreenView {
     chrome_visible: bool,
     chrome_progress: Animated<f32>,
     selected_stream_user_id: Option<String>,
+    fullscreen_user_id: Option<String>,
+    fullscreen_window: Option<AnyWindowHandle>,
+    watch_requested: Option<String>,
+    watch_joined_at_ms: Option<i64>,
     stream_quality: RiseRTCScreenShareQuality,
     stream_includes_audio: bool,
     stream_audio_supported: bool,
@@ -284,6 +293,7 @@ pub struct RiseRTCRoomScreenView {
 
 impl RiseRTCRoomScreenView {
     const KICK_REASON: &'static str = "moderator_removed";
+    const TILE_FULLSCREEN_SIDE: f32 = 30.0;
 
     fn new(
         target: RiseRTCRoomTarget,
@@ -373,6 +383,10 @@ impl RiseRTCRoomScreenView {
             chrome_visible: true,
             chrome_progress: Animated::new(1.0),
             selected_stream_user_id: None,
+            fullscreen_user_id: None,
+            fullscreen_window: None,
+            watch_requested: None,
+            watch_joined_at_ms: None,
             stream_quality: RiseRTCScreenShareQuality::Balanced,
             stream_includes_audio: true,
             stream_audio_supported: matches!(rise_media::screen_capture::system_audio_support(), PlatformSupport::Performed),
@@ -415,6 +429,7 @@ impl RiseRTCRoomScreenView {
             self.target = target;
             self.connect_task = None;
             self.joining = false;
+            self.release_stage_fullscreen(cx);
             self.refresh_room(cx);
         }
     }
@@ -442,6 +457,9 @@ impl RiseRTCRoomScreenView {
         } else {
             None
         };
+        if self.displayed_room.is_none() {
+            self.release_stage_fullscreen(cx);
+        }
         let visible = self.compute_visible_participants(cx);
         if visible.iter().map(|row| (&row.user_id, &row.role)).ne(self.visible_participants.iter().map(|row| (&row.user_id, &row.role))) {
             tracing::warn!(
@@ -891,6 +909,7 @@ impl RiseRTCRoomScreenView {
             updated_at_ms: hand.requested_at_ms,
             lease_expires_at_ms: 0,
             order_sequence: 0,
+            watching_user_id: String::new(),
             profile: hand.profile.clone(),
         }
     }
@@ -1069,6 +1088,7 @@ impl RiseRTCRoomScreenView {
             guides_running: self.guides.read(cx).is_running(cx),
             call_state: self.call(cx).map(|call| call.state),
             stage_capture,
+            stream_watch: self.desired_stream_watch(cx),
         }
     }
 
@@ -1122,7 +1142,42 @@ impl RiseRTCRoomScreenView {
         if keys.stage_capture != previous.stage_capture {
             self.synchronize_stage_capture(previous.stage_capture.as_ref(), keys.stage_capture.as_ref(), cx);
         }
+        if keys.stream_watch != previous.stream_watch || keys.self_participant != previous.self_participant {
+            self.synchronize_stream_watch(keys.stream_watch.clone(), cx);
+        }
         cx.notify();
+    }
+
+    fn desired_stream_watch(&self, cx: &App) -> Option<String> {
+        let current_user_id = self.current_user_id(cx);
+        self.focused_stream_user_id(cx)
+            .filter(|user_id| *user_id != current_user_id && self.focusable_track(user_id, cx).is_some())
+    }
+
+    fn synchronize_stream_watch(&mut self, desired: Option<String>, cx: &mut Context<Self>) {
+        let joined_at_ms = self.self_participant().map(|participant| participant.joined_at_ms);
+        let stored = self
+            .self_participant()
+            .map(|participant| participant.watching_user_id.clone())
+            .filter(|user_id| !user_id.is_empty());
+        let rejoined = joined_at_ms.is_some() && joined_at_ms != self.watch_joined_at_ms && desired != stored;
+        if desired == self.watch_requested && !rejoined {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.watch_requested, desired.clone());
+        self.watch_joined_at_ms = joined_at_ms;
+        let (target_user_id, watching) = match (desired, previous.or(stored)) {
+            (Some(target_user_id), _) => (target_user_id, true),
+            (None, Some(previous)) => (previous, false),
+            (None, None) => return,
+        };
+        let task = self.interactions.update(cx, |interactions, cx| interactions.set_stream_watch(target_user_id, watching, cx));
+        cx.spawn(async move |_, _| {
+            if let Err(error) = task.await {
+                tracing::debug!(%error, "rtc stream watch not stored");
+            }
+        })
+        .detach();
     }
 
     fn synchronize_stage_capture(
@@ -1179,6 +1234,13 @@ impl RiseRTCRoomScreenView {
             return;
         }
         self.standard_body_mounted = false;
+        self.release_stage_fullscreen(cx);
+        if let Some(target_user_id) = self.watch_requested.take() {
+            self.watch_joined_at_ms = None;
+            self.interactions
+                .update(cx, |interactions, cx| interactions.set_stream_watch(target_user_id, false, cx))
+                .detach();
+        }
         RiseRTCCallPictureInPictureController::shared(cx).update(cx, |controller, cx| {
             controller.disable(RiseRTCCallPictureInPictureControllerOwner::VoiceRoom, cx);
         });
@@ -1239,8 +1301,8 @@ impl RiseRTCRoomScreenView {
         div()
             .id("rise-rtc-room-body")
             .track_focus(&self.focus_handle)
-            .on_key_down(move |event: &KeyDownEvent, _, cx| {
-                on_key.update(cx, |this, cx| this.handle_key(event, cx));
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                on_key.update(cx, |this, cx| this.handle_key(event, window, cx));
             })
             .relative()
             .size_full()
@@ -1280,14 +1342,16 @@ impl RiseRTCRoomScreenView {
             ))
     }
 
-    fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn handle_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         if keystroke.key == "escape" && !keystroke.modifiers.modified() {
             if self.gear_menu_presented {
                 return;
             }
             cx.stop_propagation();
-            if self.stream_settings_visible {
+            if self.fullscreen_user_id.is_some() {
+                self.exit_stage_fullscreen(window, cx);
+            } else if self.stream_settings_visible {
                 self.stream_settings_visible = false;
             } else if self.audio_inputs_visible {
                 self.audio_inputs_visible = false;
@@ -1401,6 +1465,9 @@ impl RiseRTCRoomScreenView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if let Some(user_id) = self.fullscreen_user_id.clone() {
+            return self.fullscreen_stage(&user_id, theme, window, cx);
+        }
         let width = f32::from(geometry.width);
         let height = f32::from(geometry.height);
         let focused = self.focused_stream_user_id(cx);
@@ -1410,7 +1477,7 @@ impl RiseRTCRoomScreenView {
 
         let primary = match (&focused, participant) {
             (Some(user_id), Some(participant)) => match self.focusable_track(user_id, cx) {
-                Some(track) => self.stream_stage(track, &participant, theme, geometry, window, cx),
+                Some(track) => self.stream_stage(track, &participant, theme, geometry, false, window, cx),
                 None => div()
                     .id("rtc-stage-placeholder")
                     .size_full()
@@ -1542,7 +1609,7 @@ impl RiseRTCRoomScreenView {
     }
 
     /// round glass button with its hover hint, the label is the only name an icon button has
-    fn glass_circle(
+    pub(crate) fn glass_circle(
         id: &'static str,
         label: String,
         size: f32,
@@ -1848,6 +1915,7 @@ impl RiseRTCRoomScreenView {
         participant: &RiseRTCParticipant,
         theme: &AppTheme,
         bounds: Size<Pixels>,
+        fullscreen: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1866,8 +1934,9 @@ impl RiseRTCRoomScreenView {
         let primary_is_own_camera = is_own_stage && camera.as_ref().is_some_and(|camera| Rc::ptr_eq(&track, camera));
         let shows_identity_badge = !is_own_stage;
         let chrome_visible = self.chrome_visible;
-        let top_safe = self.top_safe_inset();
+        let top_safe = if fullscreen { f32::from(WindowCoverFrame::resolve(window, cx).safe_top) } else { self.top_safe_inset() };
         let horizontal_safe = Self::horizontal_safe_inset();
+        let dock_reserved = if fullscreen { Self::bottom_safe_inset() + 12.0 } else { self.dock_reserved_height(window) };
         let inset_top_padding = match (shows_identity_badge, chrome_visible) {
             (true, true) => top_safe + 70.0,
             (true, false) => 62.0,
@@ -1908,7 +1977,7 @@ impl RiseRTCRoomScreenView {
             let insets = EdgeInsets::new(
                 inset_top_padding,
                 12.0 + horizontal_safe,
-                if chrome_visible { self.dock_reserved_height(window) } else { Self::bottom_safe_inset() + 12.0 },
+                if chrome_visible { dock_reserved } else { Self::bottom_safe_inset() + 12.0 },
                 12.0 + horizontal_safe,
             );
             let on_position_change = self.handler_with_position();
@@ -1941,8 +2010,8 @@ impl RiseRTCRoomScreenView {
             )
         });
 
-        let dock_reserved = self.dock_reserved_height(window);
-        let caption = self.participant_caption(participant, cx);
+        let speaking = !fullscreen && self.media.read(cx).is_speaking(&user_id);
+        let caption = self.participant_caption(participant, speaking, cx);
         let caption = Self::transitioned(
             "rtc-stage-caption-presence",
             chrome_visible,
@@ -1963,7 +2032,7 @@ impl RiseRTCRoomScreenView {
 
         let stage_controls = (!is_own_stage && chrome_visible).then(|| {
             let is_stream = screen.as_ref().is_some_and(|screen| Rc::ptr_eq(&track, screen));
-            let controls = self.stage_controls_view(&user_id, is_stream, cx);
+            let controls = self.stage_controls_view(&user_id, is_stream, fullscreen, cx);
             AnyView::from(controls).cached(
                 StyleRefinement::default()
                     .absolute()
@@ -1973,8 +2042,6 @@ impl RiseRTCRoomScreenView {
                     .h(px(RiseRTCStageControls::HEIGHT)),
             )
         });
-        let speaking = self.media.read(cx).is_speaking(&user_id);
-        let radius = f32::from(theme.radius._300);
         let primary_is_own_screen = is_own_stage && screen.as_ref().is_some_and(|screen| Rc::ptr_eq(&track, screen));
         let primary = if primary_is_own_screen {
             let stop = self.handler(|this, _, cx| this.stop_screen_share(cx));
@@ -2005,21 +2072,19 @@ impl RiseRTCRoomScreenView {
             .children(inset)
             .children(caption)
             .children(stage_controls)
-            .when(speaking, |stage| {
-                stage.child(
-                    div()
-                        .absolute()
-                        .inset(px(4.0))
-                        .child(centred_stroke(theme.semantic.success_100, 3.0, Shape::continuous(radius))),
-                )
-            })
             .into_any_element()
     }
 
-    fn stage_controls_view(&mut self, user_id: &str, is_stream: bool, cx: &mut Context<Self>) -> Entity<RiseRTCStageControls> {
+    fn stage_controls_view(
+        &mut self,
+        user_id: &str,
+        is_stream: bool,
+        fullscreen: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<RiseRTCStageControls> {
         if let Some(controls) = self.stage_controls.as_ref().filter(|controls| {
             let controls = controls.read(cx);
-            controls.user_id == user_id && controls.is_stream == is_stream
+            controls.user_id == user_id && controls.is_stream == is_stream && controls.fullscreen == fullscreen
         }) {
             return controls.clone();
         }
@@ -2027,6 +2092,7 @@ impl RiseRTCRoomScreenView {
         let controls = cx.new(|_| RiseRTCStageControls {
             user_id: user_id.to_owned(),
             is_stream,
+            fullscreen,
             volume_open: false,
             dragged_percent: None,
             room,
@@ -2035,15 +2101,114 @@ impl RiseRTCRoomScreenView {
         controls
     }
 
-    fn open_mini_player(&mut self, cx: &mut Context<Self>) {
-        let Some((user_id, _, track)) = self.picture_in_picture_source(cx) else {
+    fn enter_stage_fullscreen(&mut self, user_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_stream(user_id, cx);
+        self.fullscreen_user_id = Some(user_id.to_owned());
+        if self.fullscreen_window.is_none() && !window.is_fullscreen() {
+            window.toggle_fullscreen();
+            self.fullscreen_window = Some(window.window_handle());
+        }
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn exit_stage_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fullscreen_user_id.take().is_none() {
+            return;
+        }
+        if self.fullscreen_window.take().is_some() && window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        cx.notify();
+    }
+
+    fn release_stage_fullscreen(&mut self, cx: &mut App) {
+        self.fullscreen_user_id = None;
+        let Some(handle) = self.fullscreen_window.take() else {
             return;
         };
-        let identity = self.picture_in_picture_source_identity(cx);
-        let track_key = track.track_key().to_owned();
-        RiseRTCCallPictureInPictureController::shared(cx)
-            .update(cx, |controller, cx| controller.float_stream(track_key, identity, user_id, cx));
-        self.minimize_or_close(cx);
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, _| {
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
+            });
+        });
+    }
+
+    fn toggle_stage_fullscreen(&mut self, user_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fullscreen_user_id.is_some() {
+            self.exit_stage_fullscreen(window, cx);
+        } else {
+            self.enter_stage_fullscreen(user_id, window, cx);
+        }
+    }
+
+    fn fullscreen_stage(&mut self, user_id: &str, theme: &AppTheme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let cover = WindowCoverFrame::resolve(window, cx);
+        let participant = self.visible_participants.iter().find(|participant| participant.user_id == user_id).cloned();
+        let stage = match (participant, self.focusable_track(user_id, cx)) {
+            (Some(participant), Some(track)) => self.stream_stage(track, &participant, theme, cover.size, true, window, cx),
+            (participant, _) => {
+                let toggle = self.handler(|this, _, cx| this.toggle_chrome(cx));
+                let controls = self.chrome_visible.then(|| {
+                    let controls = self.stage_controls_view(user_id, false, true, cx);
+                    AnyView::from(controls).cached(
+                        StyleRefinement::default()
+                            .absolute()
+                            .right(px(14.0 + Self::horizontal_safe_inset()))
+                            .bottom(px(Self::bottom_safe_inset() + 12.0))
+                            .w(px(RiseRTCStageControls::WIDTH))
+                            .h(px(RiseRTCStageControls::HEIGHT)),
+                    )
+                });
+                div()
+                    .id("rtc-fullscreen-placeholder")
+                    .relative()
+                    .size_full()
+                    .on_click(move |_: &ClickEvent, window, cx| toggle(window, cx))
+                    .children(participant.map(|participant| self.stream_stage_placeholder(&participant, theme, cx)))
+                    .children(controls)
+                    .into_any_element()
+            }
+        };
+        div()
+            .size_full()
+            .bg(black())
+            .child(deferred(
+                anchored()
+                    .position(cover.origin)
+                    .child(div().id("rtc-fullscreen-stage").relative().w(cover.size.width).h(cover.size.height).bg(black()).occlude().child(stage)),
+            ))
+            .into_any_element()
+    }
+
+    fn stream_viewers(&self, user_id: &str) -> Vec<RiseRTCParticipant> {
+        let Some(room) = self.displayed_room.as_deref() else {
+            return Vec::new();
+        };
+        room.participants
+            .iter()
+            .filter(|participant| participant.user_id != user_id && participant.watching_user_id == user_id)
+            .cloned()
+            .collect()
+    }
+
+    fn viewers_pill(&self, user_id: &str, cx: &mut Context<Self>) -> RiseRTCStreamViewersPill {
+        let roles = match &self.target {
+            RiseRTCRoomTarget::Topic { chat_id, topic_id } => RiseRTCStreamViewersPill::forum_roles(chat_id, topic_id, cx),
+            _ => HashMap::new(),
+        };
+        let opened = self.this.clone();
+        RiseRTCStreamViewersPill::new(
+            SharedString::from(format!("rtc-room-viewers-{user_id}")),
+            self.stream_viewers(user_id),
+            roles,
+            self.current_user_id(cx),
+        )
+        .on_open(move |viewer, _, cx| {
+            let _ = opened.update(cx, |view, cx| view.open_participant_profile(viewer, cx));
+        })
     }
 
     fn handler_with_position(&self) -> impl Fn(UnitPoint, &mut Window, &mut App) + 'static + use<> {
@@ -2669,7 +2834,43 @@ impl RiseRTCRoomScreenView {
             );
         }
 
-        tile = tile.child(div().absolute().inset(px(9.0)).child(self.participant_caption(participant, cx)));
+        let fullscreen_ready = is_remote && self.focusable_track(&user_id, cx).is_some();
+        let shows_stream = if is_remote { is_screen_sharing } else { screen_track.is_some() };
+        let shows_viewers = !is_remote && (screen_track.is_some() || camera_track.is_some());
+        tile = tile.child(
+            div()
+                .absolute()
+                .inset(px(9.0))
+                .when(fullscreen_ready, |caption| caption.right(px(9.0 + Self::TILE_FULLSCREEN_SIDE + 6.0)))
+                .when(shows_viewers, |caption| caption.right(px(9.0 + 64.0)))
+                .child(self.participant_caption(participant, shows_stream && is_speaking, cx)),
+        );
+        if shows_viewers {
+            tile = tile.child(div().absolute().right(px(9.0)).bottom(px(9.0)).child(self.viewers_pill(&user_id, cx)));
+        }
+        if fullscreen_ready {
+            let fullscreen_user_id = user_id.clone();
+            let enter = self.handler(move |this, window, cx| this.enter_stage_fullscreen(&fullscreen_user_id, window, cx));
+            let label = tr("desktop_rtc_full_screen");
+            tile = tile.child(
+                div()
+                    .id(tile_id(&user_id, "fullscreen-hint"))
+                    .absolute()
+                    .right(px(9.0))
+                    .bottom(px(9.0))
+                    .block_mouse_except_scroll()
+                    .tooltip_label(label.clone())
+                    .child(
+                        LiquidGlassButton::new(tile_id(&user_id, "fullscreen"), LiquidGlassButtonShape::Circle)
+                            .size(Self::TILE_FULLSCREEN_SIDE)
+                            .haptic_on_press(false)
+                            .flattened(true)
+                            .accessibility_label(Some(label))
+                            .on_press(enter)
+                            .children(IconUi::sized("arrow.up.left.and.arrow.down.right", px(13.0), white(), true)),
+                    ),
+            );
+        }
 
         if is_screen_sharing && camera_track.is_none() && screen_track.is_none() {
             tile = tile.child(
@@ -2681,7 +2882,7 @@ impl RiseRTCRoomScreenView {
             );
         }
 
-        let target = if is_speaking { 1.0_f32 } else { 0.0 };
+        let target = if is_speaking && !shows_stream { 1.0_f32 } else { 0.0 };
         let ring = window.use_keyed_state(tile_id(&user_id, "speaking-ring"), cx, move |_, _| Animated::new(target));
         let now = RiseClock::monotonic();
         ring.update(cx, |ring, cx| ring.set_in(target, ease_in_out(0.18), now, cx));
@@ -2698,7 +2899,7 @@ impl RiseRTCRoomScreenView {
     }
 
     /// bottom leading capsule, the parent gives it the width it may take
-    fn participant_caption(&self, participant: &RiseRTCParticipant, cx: &App) -> impl IntoElement + use<> {
+    fn participant_caption(&self, participant: &RiseRTCParticipant, speaking: bool, cx: &App) -> impl IntoElement + use<> {
         let name = self.participant_name(participant, cx);
         let is_self = participant.user_id == self.current_user_id(cx);
         let (muted, deafened) = if is_self {
@@ -2714,6 +2915,7 @@ impl RiseRTCRoomScreenView {
             muted: participant.is_server_silenced(),
             deafened: participant.server_deafened,
             color: rise_ui::theme(cx).primary._100,
+            speaking: speaking.then(|| rise_ui::theme(cx).semantic.success_100),
         };
         div().size_full().child(RiseRTCListenerVolumeContent::new(
             participant.user_id.clone(),
@@ -2758,6 +2960,7 @@ impl RiseRTCRoomScreenView {
             .py(px(5.0))
             .rounded_full()
             .bg(black().opacity(0.58))
+            .when_some(imposed.speaking, |row, ring| row.border_2().border_color(ring))
             .when(deafened, |row| row.children(tinted(RiseSymbol::DEAFENED, imposed.deafened)))
             .children(tinted(if muted { "mic.slash.fill" } else { "mic.fill" }, muted && imposed.muted))
             .child(
@@ -4124,6 +4327,7 @@ impl VoiceChannelParticipantPendingRTC for VoiceChannelParticipant {
             updated_at_ms: self.joined_at_ms,
             lease_expires_at_ms: 0,
             order_sequence: self.order_sequence,
+            watching_user_id: String::new(),
             profile: Some(RiseRTCUserProfile {
                 id: self.user_id.clone(),
                 tag: self.tag.clone(),
@@ -4140,9 +4344,248 @@ impl VoiceChannelParticipantPendingRTC for VoiceChannelParticipant {
 
 /// mini player and sound of the watched stage, bottom trailing over the picture
 /// its own view so a slider drag redraws only this corner
+/// eye and the viewer count of ones own stream or video, a click lists who watches
+#[derive(IntoElement)]
+pub(crate) struct RiseRTCStreamViewersPill {
+    id: SharedString,
+    viewers: Vec<RiseRTCParticipant>,
+    roles: HashMap<String, (String, String)>,
+    current_user_id: String,
+    on_open: Option<Rc<dyn Fn(&RiseRTCParticipant, &mut Window, &mut App)>>,
+}
+
+#[derive(Default)]
+struct RiseRTCStreamViewersMenu {
+    open: bool,
+    closed_at: Option<Instant>,
+}
+
+impl RiseRTCStreamViewersMenu {
+    fn toggle(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.open = false;
+        } else if self.closed_at.take().is_some_and(|at| at.elapsed() < RiseRTCStreamViewersPill::REOPEN_GUARD) {
+            return;
+        } else {
+            self.open = true;
+        }
+        cx.notify();
+    }
+
+    fn close(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.open = false;
+            self.closed_at = Some(Instant::now());
+            cx.notify();
+        }
+    }
+}
+
+impl RiseRTCStreamViewersPill {
+    const MENU_WIDTH: f32 = 280.0;
+    const MENU_MAX_HEIGHT: f32 = 320.0;
+    const REOPEN_GUARD: Duration = Duration::from_millis(250);
+
+    pub(crate) fn new(
+        id: SharedString,
+        viewers: Vec<RiseRTCParticipant>,
+        roles: HashMap<String, (String, String)>,
+        current_user_id: String,
+    ) -> Self {
+        Self { id, viewers, roles, current_user_id, on_open: None }
+    }
+
+    pub(crate) fn on_open(mut self, on_open: impl Fn(&RiseRTCParticipant, &mut Window, &mut App) + 'static) -> Self {
+        self.on_open = Some(Rc::new(on_open));
+        self
+    }
+
+    /// role title and colour of each member of a forum voice channel that has one
+    pub(crate) fn forum_roles(chat_id: &str, topic_id: &str, cx: &mut App) -> HashMap<String, (String, String)> {
+        let Some(state) = RiseForumVoicePresentation::shared(cx).read(cx).state(chat_id, topic_id) else {
+            return HashMap::new();
+        };
+        state
+            .participants
+            .iter()
+            .filter(|participant| !participant.role_name.is_empty())
+            .map(|participant| {
+                (participant.user_id.clone(), (participant.role_name.clone(), participant.role_badge_color_hex()))
+            })
+            .collect()
+    }
+
+    fn child_id(&self, name: &'static str) -> ElementId {
+        ElementId::NamedChild(Arc::new(ElementId::Name(self.id.clone())), name.into())
+    }
+
+    fn row(
+        viewer: &RiseRTCParticipant,
+        role: Option<&(String, String)>,
+        current_user_id: &str,
+        theme: &AppTheme,
+        on_open: Option<Rc<dyn Fn(&RiseRTCParticipant, &mut Window, &mut App)>>,
+        menu: Entity<RiseRTCStreamViewersMenu>,
+    ) -> AnyElement {
+        let profile = viewer.profile.as_ref();
+        let name = RiseRTCRoomScreenView::participant_name_user_id(&viewer.user_id, profile, current_user_id);
+        let letter_name = profile.and_then(|profile| non_empty(&profile.name)).unwrap_or_else(|| name.clone());
+        let tag = profile.and_then(|profile| non_empty(&profile.tag)).map(|tag| format!("@{tag}"));
+        let opened = viewer.clone();
+        let hover = theme.bg._200;
+        div()
+            .id(tile_id(&viewer.user_id, "viewer-row"))
+            .w_full()
+            .px(px(12.0))
+            .py(px(6.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover))
+            .on_click(move |_: &ClickEvent, window, cx| {
+                menu.update(cx, |menu, cx| menu.close(cx));
+                if let Some(on_open) = &on_open {
+                    on_open(&opened, window, cx);
+                }
+            })
+            .child(
+                UserLogoUi::new(tile_id(&viewer.user_id, "viewer-avatar"))
+                    .source(profile.and_then(|profile| non_empty(&profile.avatar_url)).map(SharedString::from))
+                    .name(Some(SharedString::from(letter_name)))
+                    .user_id(Some(SharedString::from(viewer.user_id.clone())))
+                    .size(34.0)
+                    .show_story_ring(false)
+                    .image_cache_policy(CleverImageCachePolicy::MemoryOnly),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .min_w_0()
+                            .child(
+                                UserNameWithBadges::new(Some(SharedString::from(viewer.user_id.clone())), name)
+                                    .official(profile.is_some_and(|profile| profile.is_official))
+                                    .premium(profile.is_some_and(|profile| profile.is_premium), None, None)
+                                    .font(14.0, FontWeight::SEMIBOLD)
+                                    .badge_size(13.0),
+                            )
+                            .children(role.map(|(title, color)| MemberTagChip::new(title.clone()).color_hex(color.clone()))),
+                    )
+                    .children(tag.map(|tag| MainText::new(tag).px(12.0).color(theme.text.secondary).number_of_lines(1))),
+            )
+            .into_any_element()
+    }
+}
+
+impl RenderOnce for RiseRTCStreamViewersPill {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let menu = window.use_keyed_state(self.child_id("menu"), cx, |_, _| RiseRTCStreamViewersMenu::default());
+        let open = menu.read(cx).open;
+        let theme = rise_ui::theme(cx).clone();
+        let toggled = menu.clone();
+        let pill = div()
+            .id(self.child_id("pill"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(5.0))
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded_full()
+            .bg(black().opacity(0.58))
+            .cursor_pointer()
+            .tooltip_label(tr("desktop_rtc_stream_viewers"))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                toggled.update(cx, |menu, cx| menu.toggle(cx));
+            })
+            .children(IconUi::sized("eye", px(11.0), white(), false))
+            .child(
+                MainText::new(self.viewers.len().to_string())
+                    .px(12.0)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .color(white())
+                    .monospaced_digits(true),
+            );
+        let panel = open.then(|| {
+            let rows: Vec<AnyElement> = self
+                .viewers
+                .iter()
+                .map(|viewer| {
+                    Self::row(
+                        viewer,
+                        self.roles.get(&viewer.user_id),
+                        &self.current_user_id,
+                        &theme,
+                        self.on_open.clone(),
+                        menu.clone(),
+                    )
+                })
+                .collect();
+            let empty = rows.is_empty().then(|| {
+                div()
+                    .px(px(14.0))
+                    .py(px(8.0))
+                    .child(MainText::new(tr("desktop_rtc_stream_no_viewers")).px(13.0).color(theme.text.secondary))
+            });
+            let closed = menu.clone();
+            let body = div()
+                .id(self.child_id("panel"))
+                .mb(px(6.0))
+                .w(px(Self::MENU_WIDTH))
+                .max_h(px(Self::MENU_MAX_HEIGHT))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .py(px(6.0))
+                .rounded(px(14.0))
+                .bg(theme.bg._100)
+                .border_1()
+                .border_color(theme.border._100)
+                .shadow(vec![gpui::BoxShadow {
+                    color: black().opacity(0.24),
+                    offset: gpui::point(px(0.0), px(6.0)),
+                    blur_radius: px(18.0),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
+                .occlude()
+                .on_mouse_down_out(move |_, _, cx| closed.update(cx, |menu, cx| menu.close(cx)))
+                .child(
+                    div().px(px(14.0)).pt(px(4.0)).pb(px(6.0)).child(
+                        MainText::new(tr("desktop_rtc_stream_viewers"))
+                            .px(13.0)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .color(theme.text.secondary),
+                    ),
+                )
+                .children(rows)
+                .children(empty);
+            div().absolute().top_0().right_0().child(
+                deferred(anchored().anchor(Anchor::BottomRight).snap_to_window_with_margin(px(8.0)).child(body))
+                    .with_priority(1),
+            )
+        });
+        div().relative().child(pill).children(panel)
+    }
+}
+
 pub struct RiseRTCStageControls {
     user_id: String,
     is_stream: bool,
+    fullscreen: bool,
     volume_open: bool,
     dragged_percent: Option<f64>,
     room: WeakEntity<RiseRTCRoomScreenView>,
@@ -4243,6 +4686,7 @@ impl Render for RiseRTCStageControls {
         };
         let muted = RiseRTCListenerVolume::is_muted(percent);
         let room = self.room.clone();
+        let fullscreen_user_id = self.user_id.clone();
         let toggled = cx.entity().downgrade();
         let panel = self.volume_open.then(|| self.volume_panel(percent, &theme, cx));
         let icon = |name: &'static str| IconUi::sized(name, px(15.0), white(), true);
@@ -4255,13 +4699,17 @@ impl Render for RiseRTCStageControls {
                 hstack(8.0)
                     .items_center()
                     .child(RiseRTCRoomScreenView::glass_circle(
-                        "rtc-stage-mini-player",
-                        tr("desktop_rtc_mini_player"),
+                        "rtc-stage-fullscreen",
+                        tr(if self.fullscreen { "desktop_rtc_exit_full_screen" } else { "desktop_rtc_full_screen" }),
                         Self::BUTTON_SIDE,
-                        move |_, cx| {
-                            let _ = room.update(cx, |view, cx| view.open_mini_player(cx));
+                        move |window, cx| {
+                            let _ = room.update(cx, |view, cx| view.toggle_stage_fullscreen(&fullscreen_user_id, window, cx));
                         },
-                        icon("pip.enter"),
+                        icon(if self.fullscreen {
+                            "arrow.down.right.and.arrow.up.left"
+                        } else {
+                            "arrow.up.left.and.arrow.down.right"
+                        }),
                     ))
                     .child(RiseRTCRoomScreenView::glass_circle(
                         "rtc-stage-volume",

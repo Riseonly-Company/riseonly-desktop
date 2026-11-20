@@ -1015,6 +1015,7 @@ impl NotificationInAppBanner {
                 icon: Self::icon(item, actor),
                 action: route.map(NotifierAction::DeepLink),
                 duration: 5.2,
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,

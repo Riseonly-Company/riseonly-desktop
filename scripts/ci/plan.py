@@ -18,8 +18,13 @@ ARCH_LABELS = {
 DEFAULT_ARCHS = {"linux": ["x86_64"], "windows": ["x86_64"], "macos": ["aarch64", "x86_64"]}
 MACOS_LOCAL_LABEL = "macos-local"
 MACOS_LOCAL_RUNNER = ["self-hosted", "macOS", "ARM64", "riseonly-desktop-macos"]
-LABELS_OF = {p: {OS_LABEL[p]} | {label for label, _ in ARCH_LABELS[p]} for p in PLATFORMS}
-LABELS_OF["macos"].add(MACOS_LOCAL_LABEL)
+LOCAL_LABELS = {"linux": "linux-local", "windows": "win-local", "macos": MACOS_LOCAL_LABEL}
+LOCAL_DEFAULTS = {"linux": "LINUX_LOCAL", "windows": "WINDOWS_LOCAL", "macos": "MACOS_LOCAL"}
+SERVER_RUNNERS = {
+    "linux": ["self-hosted", "linux", "x64", "riseonly-desktop-linux"],
+    "windows": ["self-hosted", "linux", "x64", "riseonly-desktop-windows"],
+}
+LABELS_OF = {p: {OS_LABEL[p], LOCAL_LABELS[p]} | {label for label, _ in ARCH_LABELS[p]} for p in PLATFORMS}
 ENV_LABELS = (("env-dev", "dev"), ("env-staging", "staging"), ("env-prod", "production"))
 SLUGS = {"production": "Riseonly", "staging": "Riseonly-Staging", "dev": "Riseonly-Dev"}
 RELEASE_PROFILE_LABEL = "release-profile"
@@ -62,7 +67,32 @@ def archs(platform, labels):
     if OS_LABEL[platform] in labels:
         return every
     picked = [arch for label, arch in ARCH_LABELS[platform] if label in labels]
+    if platform == "linux" and LOCAL_LABELS["linux"] in labels and "aarch64" not in picked:
+        picked.append("aarch64")
     return picked or DEFAULT_ARCHS[platform]
+
+
+def on_mac(platform, labels, same_repo):
+    if not same_repo:
+        return False
+    return LOCAL_LABELS[platform] in labels or os.environ.get(LOCAL_DEFAULTS[platform], "").strip().lower() == "on"
+
+
+def runners(labels, same_repo):
+    local = {p: on_mac(p, labels, same_repo) for p in PLATFORMS}
+    linux_arm = os.environ.get("LINUX_ARM_RUNNER") or '"ubuntu-24.04-arm"'
+    # why: x86_64 Linux under Rosetta on the Mac took 54 min against 46 on the server, only arm64 gains there
+    return {
+        "linux_runners": json.dumps({
+            "x86_64": SERVER_RUNNERS["linux"],
+            "aarch64": MACOS_LOCAL_RUNNER if local["linux"] else json.loads(linux_arm),
+        }),
+        "linux_local": json.dumps({"x86_64": "false", "aarch64": str(local["linux"]).lower()}),
+        "windows_runner": json.dumps(MACOS_LOCAL_RUNNER if local["windows"] else SERVER_RUNNERS["windows"]),
+        "windows_local": str(local["windows"]).lower(),
+        "macos_runner": json.dumps(MACOS_LOCAL_RUNNER) if local["macos"] else os.environ.get("MACOS_RUNNER") or '"macos-15"',
+        "macos_local": str(local["macos"]).lower(),
+    }
 
 
 def staging_ships():
@@ -154,6 +184,31 @@ def already_shipped(version, targets, history=history_of):
     return sorted(set(targets) & set((release or {}).get("downloads", {})))
 
 
+# why: Windows on arm is rare and runs the x64 build, it ships only when labelled
+ONLY_LABELLED = {"windows-aarch64"}
+
+
+def shipped_targets(history):
+    return {target for release in history for target in release.get("downloads", {})} - ONLY_LABELLED
+
+
+def production_targets(labels, manifest, history, respin=True):
+    # invariant: one production version covers every target ever shipped, so no platform falls behind the number
+    # (ONLY_LABELLED targets aside)
+    history = [r for r in history if parse_version(r.get("version"))]
+    every = {f"{p}-{arch}" for p in PLATFORMS for arch in archs(p, labels)} | shipped_targets(history)
+    narrowed = [p for p in PLATFORMS if (LABELS_OF[p] - {LOCAL_LABELS[p]}) & labels]
+    wanted = {f"{p}-{arch}" for p in narrowed for arch in archs(p, labels)}
+    newest = max(history, key=lambda r: parse_version(r.get("version")), default=None)
+    if (
+        respin and wanted and wanted != every and newest
+        and parse_version(newest.get("version")) >= parse_version(manifest)
+        and not wanted & set(newest.get("downloads", {}))
+    ):
+        return newest["version"], sorted(wanted)
+    return None, sorted(every)
+
+
 def release_version(manifest, labels, history=published):
     floor = parse_version(manifest)
     shipped = history("staging") + history("production")
@@ -231,15 +286,14 @@ def main():
     pr = event["pull_request"]
     kind, reason, labels = decide(mode, event)
     head_repo = (pr["head"].get("repo") or {}).get("full_name")
-    local = MACOS_LOCAL_LABEL in labels and head_repo == pr["base"]["repo"]["full_name"]
+    placement = runners(labels, head_repo == pr["base"]["repo"]["full_name"])
     out = {
         "run": "false",
         "reason": reason,
         "linux_archs": json.dumps(archs("linux", labels)),
         "windows_archs": json.dumps(archs("windows", labels)),
         "macos_archs": json.dumps(archs("macos", labels)),
-        "macos_runner": json.dumps(MACOS_LOCAL_RUNNER) if local else os.environ.get("MACOS_RUNNER") or '"macos-15"',
-        "macos_local": str(local).lower(),
+        **placement,
     }
     if kind:
         env = ci_env(root)
@@ -272,7 +326,15 @@ def main():
             else:
                 version = release_version(manifest, labels)
         if kind == "release" and environment == "production":
-            targets = [f"{p}-{arch}" for p in picked for arch in archs(p, labels)]
+            respin, targets = production_targets(labels, manifest, history_of("production"), respin=not kept)
+            if respin:
+                version = respin
+                print(f"::notice::{', '.join(targets)} join {respin}, which shipped without them")
+            else:
+                print(f"::notice::{version} ships every target: {', '.join(targets)}")
+            picked = [p for p in PLATFORMS if any(t.startswith(f"{p}-") for t in targets)]
+            for p in PLATFORMS:
+                out[f"{p}_archs"] = json.dumps([t.split("-", 1)[1] for t in targets if t.startswith(f"{p}-")] or archs(p, labels))
             shipped = already_shipped(version, targets)
             if shipped:
                 sys.exit(f"::error::{version} is already in production for {', '.join(shipped)}: pick other platforms or change the sources")

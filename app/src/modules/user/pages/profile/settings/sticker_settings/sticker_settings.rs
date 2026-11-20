@@ -394,7 +394,7 @@ impl StickerSettings {
             .items_center()
             .pl(px(GroupedCardMetrics::ROW_HORIZONTAL_PADDING))
             .pr(px(if is_default { GroupedCardMetrics::ROW_HORIZONTAL_PADDING } else { 4.0 }))
-            .bg(theme.bg._200)
+            .when(is_dragging || lift > 0.0, |row| row.bg(theme.bg._200).rounded(px(GroupedCardMetrics::CORNER_RADIUS)))
             .track_focus(&focus)
             .cursor_pointer()
             .when(lift > 0.0, |row| {

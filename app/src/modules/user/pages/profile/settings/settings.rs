@@ -16,11 +16,13 @@ use rise_ui::secondary_text::SecondaryText;
 use rise_ui::settings_icon_palette::SettingsIconPalette;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
+use rise_ui::switch_ui::SwitchUi;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey};
 use crate::app::router::navigation_types::RootRoute;
 use crate::core::lib::canon_format::RiseFormat;
 use crate::core::lib::profile_field_formatting::PhoneNumberFormatting;
+use crate::core::desktop_platform::tray_controller::TrayController;
 use crate::core::lib::rise_feature_gate::RiseFeatureGate;
 use crate::core::ui::premium_badge::PremiumBadge;
 use crate::core::ui::premium_name_color::PremiumNameColor;
@@ -327,7 +329,7 @@ impl Settings {
         )
     }
 
-    fn app_group(nav_store: &NavStore, open: Option<&RootRoute>) -> GroupedBtns {
+    fn app_group(nav_store: &NavStore, open: Option<&RootRoute>, cx: &App) -> GroupedBtns {
         group(
             "settings-group-app",
             tr("settings_section_app"),
@@ -378,6 +380,35 @@ impl Settings {
                     tr("settings_memory_title"),
                     RootRoute::MemorySettings,
                 ),
+            ]
+            .into_iter()
+            .chain(Self::autostart_row(cx))
+            .collect(),
+        )
+    }
+
+    /// the same login start the status icon menu offers, hidden where the os cant do it
+    fn autostart_row(cx: &App) -> Option<GroupedBtn> {
+        let state = TrayController::autostart_state(cx)?;
+        let enabled = state.is_enabled();
+        Some(
+            GroupedBtn::new("autostart", tr("desktop_tray_launch_at_login"))
+                .icon("power")
+                .icon_background(SettingsIconPalette::memory())
+                .show_chevron(false)
+                .trailing_slot(SwitchUi::new(
+                    "settings-autostart-switch",
+                    Binding::new(move |_: &App| enabled, |value, _, cx| TrayController::set_autostart_enabled(value, cx)),
+                ))
+                .callback(move |_, cx| TrayController::set_autostart_enabled(!enabled, cx)),
+        )
+    }
+
+    fn calls_group(nav_store: &NavStore, open: Option<&RootRoute>) -> GroupedBtns {
+        group(
+            "settings-group-calls",
+            tr("desktop_settings_calls_title"),
+            vec![
                 route_row(
                     nav_store,
                     open,
@@ -386,6 +417,15 @@ impl Settings {
                     color("#34C759"),
                     tr("rtc_voice_settings"),
                     RootRoute::RtcAudioSettings,
+                ),
+                route_row(
+                    nav_store,
+                    open,
+                    "streams",
+                    "wave.3.right",
+                    color("#AF52DE"),
+                    tr("desktop_settings_streams_title"),
+                    RootRoute::RtcStreamSettings,
                 ),
             ],
         )
@@ -727,7 +767,8 @@ impl RenderOnce for Settings {
                 .child(Self::profile_group(&nav_store, open))
                 .child(Self::security_group(&nav_store, open))
                 .child(Self::chats_group(&nav_store, open, &profile))
-                .child(Self::app_group(&nav_store, open))
+                .child(Self::app_group(&nav_store, open, cx))
+                .child(Self::calls_group(&nav_store, open))
                 .child(Self::report_group(&nav_store, open))
                 .child(Self::services_group(&nav_store, open))
                 .child(account_group)

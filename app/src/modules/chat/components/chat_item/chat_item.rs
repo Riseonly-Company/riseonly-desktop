@@ -310,27 +310,27 @@ impl ChatItem {
         }
 
         let user_id = self.chat.participant.id.clone();
-        let on_press = self.on_press.clone();
-        let open_user_id = user_id.clone();
-        let suppressor = env::<ChatsListRowActionsSuppressorKey>(cx);
         let rail = env::<EmbeddedForumRailContextKey>(cx);
-        let tappable = div()
-            .id(self.child_id("avatar"))
-            .relative()
-            .rounded_full()
-            .block_mouse_except_scroll()
-            .child(logo)
-            .bubble_scroll_passthrough(self.child_id("avatar-scroll-passthrough"))
-            .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                Self::open_chat_avatar(&open_user_id, suppressor.as_ref(), rail.as_ref(), &on_press, window, cx);
-            });
-        ChatListStoryActivity {
-            id: self.child_id("story-activity"),
-            user_id,
-            is_active: self.is_active,
-            content: tappable.into_any_element(),
-        }
-        .into_any_element()
+        let content = if rail.as_ref().is_some_and(|rail| rail.progress(cx) > 0.0) {
+            logo.into_any_element()
+        } else {
+            let on_press = self.on_press.clone();
+            let open_user_id = user_id.clone();
+            let suppressor = env::<ChatsListRowActionsSuppressorKey>(cx);
+            div()
+                .id(self.child_id("avatar"))
+                .relative()
+                .rounded_full()
+                .block_mouse_except_scroll()
+                .child(logo)
+                .bubble_scroll_passthrough(self.child_id("avatar-scroll-passthrough"))
+                .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    Self::open_chat_avatar(&open_user_id, suppressor.as_ref(), rail.as_ref(), &on_press, window, cx);
+                })
+                .into_any_element()
+        };
+        ChatListStoryActivity { id: self.child_id("story-activity"), user_id, is_active: self.is_active, content }
+            .into_any_element()
     }
 
     fn open_chat_avatar(

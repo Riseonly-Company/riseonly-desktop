@@ -97,6 +97,7 @@ static ALL: LazyLock<Vec<RiseRTCEndpoint>> = LazyLock::new(|| {
         RiseRTCEndpoints::live_call_mutation(rtc::START_CALL_RECORDING),
         RiseRTCEndpoints::live_call_mutation(rtc::STOP_CALL_RECORDING),
         RiseRTCEndpoints::live_call_read(rtc::GET_CALL),
+        RiseRTCEndpoints::live_call_mutation(rtc::SET_STREAM_WATCH),
     ]
 });
 
@@ -189,6 +190,10 @@ impl RiseRTCEndpoints {
 
     pub fn get_call() -> &'static RiseRTCEndpoint {
         &ALL[21]
+    }
+
+    pub fn set_stream_watch() -> &'static RiseRTCEndpoint {
+        &ALL[22]
     }
 
     pub fn all() -> &'static [RiseRTCEndpoint] {

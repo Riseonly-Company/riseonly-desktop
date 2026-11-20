@@ -22,6 +22,7 @@ use crate::modules::chat::components::chat::scroll::chat_scroll_position_store::
 use crate::modules::chat::stores::message::message_interactions::message_reactions_interactions::MessageReactionSendLane;
 use crate::modules::chat::engine::core::rise_conversation_presentation::RiseConversationPresentation;
 use crate::modules::chat::engine::core::rise_conversation_repository_facade::RiseConversationActionExecutor;
+use crate::modules::chat::engine::messages::rise_message_realtime::RiseOwnReactionIntents;
 use crate::modules::chat::engine::messages::rise_message_scope::{
     RiseMessageJumpOutcome, RiseMessagePageDirection, RiseMessageScope, RiseMessageWindowConfiguration,
 };
@@ -145,6 +146,7 @@ impl MessageInteractionsStore {
         self.parked_reaction_sends.clear();
         self.durable_reaction_keys.clear();
         self.reaction_send_lanes.clear();
+        RiseOwnReactionIntents::clear_all();
         cx.notify();
     }
 

@@ -2,9 +2,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, ScrollHandle, ScrollWheelEvent, Stateful, StatefulInteractiveElement, StyleRefinement,
-    Styled, Task, TouchPhase, Window, div, point, px,
+    AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, HitboxBehavior, InteractiveElement,
+    IntoElement, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    RenderOnce, ScrollHandle, ScrollWheelEvent, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Task,
+    TouchPhase, Window, canvas, div, fill, point, px, size,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_platform::wheel_gesture::WHEEL_SETTLE_DELAY;
@@ -463,5 +464,146 @@ impl RenderOnce for ScrollView {
             .children(header)
             .child(GuideScrollHostScope::new(guide_host, scroller))
             .children(thumb)
+    }
+}
+
+const LIST_SCROLLBAR_WIDTH: f32 = 12.0;
+
+const LIST_SCROLLBAR_THUMB_WIDTH: f32 = 6.0;
+
+const LIST_SCROLLBAR_ACTIVE_OPACITY: f32 = 0.6;
+
+fn list_scrollbar_thumb(track: f32, viewport: f32, max_offset: f32, scrolled: f32) -> Option<(f32, f32)> {
+    let usable = track - 2.0 * INDICATOR_INSET;
+    if usable <= 0.0 || viewport <= 0.0 || max_offset < 1.0 {
+        return None;
+    }
+    let length = (usable * viewport / (viewport + max_offset)).clamp(INDICATOR_MIN_LENGTH.min(usable), usable);
+    let progress = (scrolled / max_offset).clamp(0.0, 1.0);
+    Some((INDICATOR_INSET + (usable - length) * progress, length))
+}
+
+fn list_scrollbar_offset(track: f32, length: f32, max_offset: f32, thumb_top: f32) -> f32 {
+    let travel = track - 2.0 * INDICATOR_INSET - length;
+    if travel <= 0.0 {
+        return 0.0;
+    }
+    ((thumb_top - INDICATOR_INSET) / travel).clamp(0.0, 1.0) * max_offset
+}
+
+#[derive(IntoElement)]
+pub struct ListScrollbar {
+    id: ElementId,
+    state: ListState,
+    top_inset: f32,
+}
+
+impl ListScrollbar {
+    pub fn new(id: impl Into<ElementId>, state: ListState) -> Self {
+        Self { id: id.into(), state, top_inset: 0.0 }
+    }
+
+    pub fn top_inset(mut self, top_inset: f32) -> Self {
+        self.top_inset = top_inset;
+        self
+    }
+}
+
+impl RenderOnce for ListScrollbar {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let grab = window.use_keyed_state(self.id, cx, |_, _| None::<f32>);
+        let primary = crate::theme(cx).primary._100;
+        let state = self.state;
+        let track = canvas(
+            {
+                let state = state.clone();
+                move |track, window, _| {
+                    let viewport = f32::from(state.viewport_bounds().size.height);
+                    let max_offset = f32::from(state.max_offset_for_scrollbar().y);
+                    let scrolled = -f32::from(state.scroll_px_offset_for_scrollbar().y);
+                    let thumb = list_scrollbar_thumb(f32::from(track.size.height), viewport, max_offset, scrolled)?;
+                    Some((thumb, max_offset, window.insert_hitbox(track, HitboxBehavior::BlockMouseExceptScroll)))
+                }
+            },
+            move |track, prepainted, window, cx| {
+                let Some(((top, length), max_offset, hitbox)) = prepainted else {
+                    return;
+                };
+                let height = f32::from(track.size.height);
+                let thumb = Bounds::new(
+                    point(track.right() - px(INDICATOR_INSET + LIST_SCROLLBAR_THUMB_WIDTH), track.top() + px(top)),
+                    size(px(LIST_SCROLLBAR_THUMB_WIDTH), px(length)),
+                );
+                let hovered = hitbox.is_hovered(window);
+                let active = grab.read(cx).is_some() || hovered;
+                let opacity = if active { LIST_SCROLLBAR_ACTIVE_OPACITY } else { INDICATOR_OPACITY };
+                window.paint_quad(fill(thumb, primary.opacity(opacity)).corner_radii(px(LIST_SCROLLBAR_THUMB_WIDTH / 2.0)));
+                let view = window.current_view();
+                let scroll_to = {
+                    let state = state.clone();
+                    move |thumb_top: Pixels| {
+                        let offset = list_scrollbar_offset(height, length, max_offset, f32::from(thumb_top - track.top()));
+                        state.set_offset_from_scrollbar(point(px(0.0), px(-offset)));
+                    }
+                };
+                {
+                    let grab = grab.clone();
+                    let state = state.clone();
+                    let scroll_to = scroll_to.clone();
+                    let hitbox = hitbox.clone();
+                    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Bubble || event.button != MouseButton::Left || !hitbox.is_hovered(window)
+                        {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        let offset = if thumb.contains(&event.position) {
+                            f32::from(event.position.y - thumb.top())
+                        } else {
+                            let offset = length / 2.0;
+                            scroll_to(event.position.y - px(offset));
+                            offset
+                        };
+                        state.scrollbar_drag_started();
+                        grab.update(cx, |grab, _| *grab = Some(offset));
+                        cx.notify(view);
+                    });
+                }
+                {
+                    let grab = grab.clone();
+                    let state = state.clone();
+                    let hitbox = hitbox.clone();
+                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture {
+                            return;
+                        }
+                        let Some(offset) = *grab.read(cx) else {
+                            if hitbox.is_hovered(window) != hovered {
+                                cx.notify(view);
+                            }
+                            return;
+                        };
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            grab.update(cx, |grab, _| *grab = None);
+                            state.scrollbar_drag_ended();
+                            cx.notify(view);
+                            return;
+                        }
+                        scroll_to(event.position.y - px(offset));
+                        cx.notify(view);
+                    });
+                }
+                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture || grab.read(cx).is_none() {
+                        return;
+                    }
+                    grab.update(cx, |grab, _| *grab = None);
+                    state.scrollbar_drag_ended();
+                    cx.notify(view);
+                });
+            },
+        )
+        .size_full();
+        div().absolute().top(px(self.top_inset)).bottom_0().right_0().w(px(LIST_SCROLLBAR_WIDTH)).child(track)
     }
 }

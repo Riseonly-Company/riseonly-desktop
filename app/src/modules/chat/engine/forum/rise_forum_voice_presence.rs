@@ -347,6 +347,17 @@ impl RiseForumVoicePresenceState {
             return None;
         }
 
+        let seated = self
+            .channels
+            .get(chat_id)
+            .and_then(|topics| topics.get(topic_id))
+            .and_then(|state| state.participants.iter().find(|row| row.user_id == account_id))
+            .cloned();
+        let participant = match (joined, seated) {
+            (true, Some(seated)) => Some(seated),
+            _ => participant,
+        };
+
         let key = channel_key(chat_id, topic_id);
         if joined {
             self.self_claims.insert(key, RiseClock::monotonic());

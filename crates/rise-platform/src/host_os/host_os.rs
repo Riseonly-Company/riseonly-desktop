@@ -30,3 +30,8 @@ mod tests {
         }
     }
 }
+
+/// keeps a helper process from flashing its own console window
+pub fn hide_console(command: &mut std::process::Command) {
+    super::os::hide_console(command);
+}

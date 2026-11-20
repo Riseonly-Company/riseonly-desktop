@@ -280,7 +280,6 @@ pub struct MessageContent {
     on_message_action: Option<MessageContentStringAction>,
     on_open_sender_profile: Option<MessageContentAction>,
     prepared_text: Option<FormattedTextInlinePreparation>,
-    can_double_tap: Option<Rc<dyn Fn() -> bool>>,
 }
 
 impl MessageContent {
@@ -299,7 +298,6 @@ impl MessageContent {
             on_message_action: None,
             on_open_sender_profile: None,
             prepared_text: None,
-            can_double_tap: None,
         }
     }
 
@@ -402,26 +400,16 @@ impl MessageContent {
         MessageMeta::new((*self.message).clone()).is_own(self.is_own).is_channel(self.is_channel()).style(MessageMetaStyle::Overlay)
     }
 
-    /// double tap the gesture plate answers
-    /// while its on offer the second click is the plates, not a word selection
-    pub fn can_double_tap(mut self, can_double_tap: Option<Rc<dyn Fn() -> bool>>) -> Self {
-        self.can_double_tap = can_double_tap;
-        self
-    }
-
     /// mouse text selection of the bubble, same guard as copy in the hold menu
     /// a message you cant copy you cant select either
     fn text_selection(&self, env: &MessageContentEnvironment) -> Option<FormattedTextSelection> {
         if !MessagePermissions::new(&self.message, &self.chat, self.is_own).can_copy() {
             return None;
         }
-        let single_click_when = self.can_double_tap.clone().map(|can_double_tap| -> Rc<dyn Fn(&mut App) -> bool> {
-            Rc::new(move |_: &mut App| can_double_tap())
-        });
         Some(FormattedTextSelection {
             color: if self.is_own { env.theme.content_on(env.theme.primary._100).opacity(OWN_SELECTION_OPACITY) } else { env.theme.input.selection },
             press_gate: Rc::new(|cx: &mut App| HoldContextMenuPresenter::has_active_request(cx)),
-            single_click_when,
+            single_click_when: None,
         })
     }
 

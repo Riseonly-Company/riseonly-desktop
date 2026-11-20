@@ -9,6 +9,16 @@ pub(super) fn place_traffic_lights(_window: &gpui::Window, _chrome: &WindowChrom
     PlatformSupport::Unsupported
 }
 
+pub(super) fn start_titlebar_move(window: &gpui::Window) -> PlatformSupport {
+    window.start_window_move();
+    PlatformSupport::Performed
+}
+
+pub(super) fn toggle_maximize(window: &gpui::Window) -> PlatformSupport {
+    window.zoom_window();
+    PlatformSupport::Performed
+}
+
 pub(super) fn set_system_controls_appearance(
     _window: &gpui::Window,
     _appearance: Option<gpui::WindowAppearance>,

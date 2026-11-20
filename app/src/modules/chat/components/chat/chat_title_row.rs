@@ -1,4 +1,4 @@
-use gpui::{App, FontWeight, SharedString, Window};
+use gpui::{App, ClickEvent, FontWeight, SharedString, Window};
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
 use rise_i18n::tr;
 use rise_ui::IconUi;
@@ -7,7 +7,7 @@ use rise_ui::main_text::MainText;
 use rise_ui::official_badge::OfficialBadge;
 use rise_ui::swiftui::prelude::*;
 
-use crate::core::ui::premium_badge::PremiumBadge;
+use crate::core::ui::premium_badge::{BadgeInfoPrompt, PremiumBadge};
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{ChatInfo, ChatType};
 use crate::modules::user::stores::user::user_actions::user_contact_wire_types::SavedContactDtoExt;
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
@@ -22,11 +22,17 @@ pub struct ChatTitleRow {
     fav_px: f32,
     icon_size: f32,
     font_weight: FontWeight,
+    explains_badges: bool,
 }
 
 impl ChatTitleRow {
     pub fn new(chat: ChatInfo) -> Self {
-        Self { chat, title_px: 16.0, fav_px: 16.0, icon_size: 12.0, font_weight: FontWeight::SEMIBOLD }
+        Self { chat, title_px: 16.0, fav_px: 16.0, icon_size: 12.0, font_weight: FontWeight::SEMIBOLD, explains_badges: false }
+    }
+
+    pub fn explains_badges(mut self, explains_badges: bool) -> Self {
+        self.explains_badges = explains_badges;
+        self
     }
 
     pub fn title_px(mut self, title_px: f32) -> Self {
@@ -95,14 +101,27 @@ impl RenderOnce for ChatTitleRow {
         let bot_icon = participant.filter(|participant| participant.is_bot).map(|_| {
             BotIcon::new(theme.text.primary).size((self.title_px * BOT_ICON_SCALE).max(BOT_ICON_MINIMUM_SIZE))
         });
-        let official_badge = participant
-            .filter(|participant| participant.more.is_official)
-            .map(|_| OfficialBadge::new().size(px(self.title_px)));
+        let explains = self.explains_badges;
+        let official_badge = participant.filter(|participant| participant.more.is_official).map(|_| {
+            div()
+                .id("chat-title-official-badge")
+                .when(explains, |badge| {
+                    badge.cursor_pointer().on_click(|_: &ClickEvent, window, cx| BadgeInfoPrompt::official(window, cx))
+                })
+                .child(OfficialBadge::new().size(px(self.title_px)))
+        });
         let premium_badge = participant.filter(|participant| participant.more.is_premium).map(|participant| {
-            PremiumBadge::new()
-                .user_id(Some(SharedString::from(participant.id.clone())))
-                .emoji(participant.more.premium_badge_emoji.clone().map(SharedString::from))
-                .size(self.title_px)
+            div()
+                .id("chat-title-premium-badge")
+                .when(explains, |badge| {
+                    badge.cursor_pointer().on_click(|_: &ClickEvent, window, cx| BadgeInfoPrompt::premium(window, cx))
+                })
+                .child(
+                    PremiumBadge::new()
+                        .user_id(Some(SharedString::from(participant.id.clone())))
+                        .emoji(participant.more.premium_badge_emoji.clone().map(SharedString::from))
+                        .size(self.title_px),
+                )
         });
         let type_icon = Self::type_icon_symbol(chat.r#type, chat.topics_enabled)
             .and_then(|symbol| IconUi::sized(symbol, px(self.icon_size), theme.text.secondary, true));

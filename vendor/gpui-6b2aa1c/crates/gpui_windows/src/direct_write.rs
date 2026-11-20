@@ -74,6 +74,7 @@ struct DirectWriteState {
     gpu_state: GPUState,
     system_font_collection: IDWriteFontCollection1,
     custom_font_collection: IDWriteFontCollection1,
+    bundled_color_fonts: Vec<BundledColorFont>,
     fonts: Vec<FontInfo>,
     font_to_font_id: HashMap<Font, FontId>,
     font_info_cache: HashMap<usize, FontId>,
@@ -212,6 +213,7 @@ impl DirectWriteTextSystem {
                 gpu_state,
                 system_font_collection,
                 custom_font_collection,
+                bundled_color_fonts: Vec::new(),
                 fonts: Vec::new(),
                 font_to_font_id: HashMap::default(),
                 font_info_cache: HashMap::default(),
@@ -318,6 +320,8 @@ impl DirectWriteState {
                         &components.factory,
                         &this.system_font_collection,
                         &components.system_ui_font_name,
+                        &this.bundled_color_fonts,
+                        &this.custom_font_collection,
                     )
                 })?;
 
@@ -382,22 +386,40 @@ impl DirectWriteState {
         }
         let set = unsafe { components.builder.CreateFontSet()? };
         let collection = unsafe { components.factory.CreateFontCollectionFromFontSet(&set)? };
+        self.bundled_color_fonts = unsafe { bundled_color_fonts(&collection, &components.locale) };
         self.custom_font_collection = collection;
 
         Ok(())
     }
 
     fn generate_font_fallbacks(
-        fallbacks: &FontFallbacks,
+        fallbacks: Option<&FontFallbacks>,
         factory: &IDWriteFactory5,
         system_font_collection: &IDWriteFontCollection1,
+        bundled_color_fonts: &[BundledColorFont],
+        custom_font_collection: &IDWriteFontCollection1,
     ) -> Result<Option<IDWriteFontFallback>> {
-        let fallback_list = fallbacks.fallback_list();
-        if fallback_list.is_empty() {
+        let fallback_list = fallbacks.map_or(&[][..], FontFallbacks::fallback_list);
+        if fallback_list.is_empty() && bundled_color_fonts.is_empty() {
             return Ok(None);
         }
         unsafe {
             let builder = factory.CreateFontFallbackBuilder()?;
+            // Riseonly 0131: a color font the app bundled (add_fonts) answers for its own code
+            // points before the system fallback, so emoji come from the app's set, not Segoe UI Emoji.
+            if !bundled_color_fonts.is_empty() {
+                let custom: IDWriteFontCollection = custom_font_collection.cast()?;
+                for bundled in bundled_color_fonts {
+                    builder.AddMapping(
+                        &bundled.ranges,
+                        &[bundled.family.as_ptr()],
+                        &custom,
+                        None,
+                        None,
+                        1.0,
+                    )?;
+                }
+            }
             let font_set = &system_font_collection.GetFontSet()?;
             let mut unicode_ranges = Vec::new();
             for family_name in fallback_list {
@@ -466,6 +488,8 @@ impl DirectWriteState {
         factory: &IDWriteFactory5,
         system_font_collection: &IDWriteFontCollection1,
         system_ui_font_name: &SharedString,
+        bundled_color_fonts: &[BundledColorFont],
+        custom_font_collection: &IDWriteFontCollection1,
     ) -> Option<FontInfo> {
         const SYSTEM_UI_FONT_NAME: &str = ".SystemUIFont";
         let family = if family == SYSTEM_UI_FONT_NAME {
@@ -492,11 +516,15 @@ impl DirectWriteState {
                 let font_face = unsafe { font_face_ref.CreateFontFace().log_err()? };
                 let direct_write_features =
                     unsafe { Self::generate_font_features(factory, features).log_err()? };
-                let fallbacks = fallbacks.as_ref().and_then(|fallbacks| {
-                    Self::generate_font_fallbacks(fallbacks, factory, system_font_collection)
-                        .log_err()
-                        .flatten()
-                });
+                let fallbacks = Self::generate_font_fallbacks(
+                    fallbacks.as_ref(),
+                    factory,
+                    system_font_collection,
+                    bundled_color_fonts,
+                    custom_font_collection,
+                )
+                .log_err()
+                .flatten();
                 let font_info = FontInfo {
                     font_family_h: font_family_h.clone(),
                     font_face,
@@ -1724,6 +1752,50 @@ fn font_weight_to_dwrite(weight: FontWeight) -> DWRITE_FONT_WEIGHT {
 
 fn font_weight_from_dwrite(value: DWRITE_FONT_WEIGHT) -> FontWeight {
     FontWeight(value.0 as f32)
+}
+
+/// Riseonly 0131: a color font (COLR) the app added, with the code points it covers.
+struct BundledColorFont {
+    family: HSTRING,
+    ranges: Vec<DWRITE_UNICODE_RANGE>,
+}
+
+unsafe fn bundled_color_fonts(collection: &IDWriteFontCollection1, locale: &HSTRING) -> Vec<BundledColorFont> {
+    let mut fonts: Vec<BundledColorFont> = Vec::new();
+    let Some(set) = (unsafe { collection.GetFontSet() }).log_err() else {
+        return fonts;
+    };
+    for index in 0..unsafe { set.GetFontCount() } {
+        let face = unsafe { set.GetFontFaceReference(index).and_then(|reference| reference.CreateFontFace()) };
+        let Some(face) = face.log_err() else {
+            continue;
+        };
+        if !unsafe { face.IsColorFont() }.as_bool() {
+            continue;
+        }
+        let Some(names) = (unsafe { face.GetFamilyNames() }).log_err() else {
+            continue;
+        };
+        let Some(family) = get_name(names, locale).log_err() else {
+            continue;
+        };
+        let family = HSTRING::from(family);
+        if fonts.iter().any(|font| font.family == family) {
+            continue;
+        }
+        let mut count = 0;
+        unsafe { face.GetUnicodeRanges(None, &mut count) }.ok();
+        if count == 0 {
+            continue;
+        }
+        let mut ranges = vec![DWRITE_UNICODE_RANGE::default(); count as usize];
+        if unsafe { face.GetUnicodeRanges(Some(&mut ranges), &mut count) }.log_err().is_none() {
+            continue;
+        }
+        ranges.truncate(count as usize);
+        fonts.push(BundledColorFont { family, ranges });
+    }
+    fonts
 }
 
 fn get_font_names_from_collection(

@@ -93,7 +93,7 @@ fn search_list_column(width: Pixels, fills_height: bool, content: AnyElement) ->
     let column = div().relative().w_full().max_w(width).child(content);
     let column = if fills_height { column.h_full() } else { column };
     let row = div().w_full().flex().flex_row().justify_center().child(column);
-    let row = if fills_height { row.h_full() } else { row };
+    let row = if fills_height { row.h_full().wheel_into_children() } else { row };
     row.into_any_element()
 }
 

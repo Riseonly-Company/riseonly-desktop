@@ -24,7 +24,8 @@ if [ -n "${PAYLOAD:-}" ]; then
     cp "$PAYLOAD/riseonly" "$PAYLOAD/riseonly-web-view-helper" "$target/$profile/"
     chmod +x "$target/$profile/riseonly" "$target/$profile/riseonly-web-view-helper"
 else
-    env -u RISE_ENV cargo build --locked --profile "$profile" -p riseonly
+    env -u RISE_ENV cargo build --locked --timings --profile "$profile" -p riseonly
+    mkdir -p timings && cp "$target/cargo-timings/cargo-timing.html" "timings/linux-$arch.html"
     env -u RISE_ENV cargo build --locked --profile "$profile" -p riseonly-web-view-helper --features helper
     rm -rf "payload/linux-$arch"
     mkdir -p "payload/linux-$arch"

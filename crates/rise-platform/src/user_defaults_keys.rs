@@ -3,6 +3,7 @@ pub const ENERGY_SAVING: &str = "riseonly.energy_saving.v1";
 pub const MEDIA_VIEWER_LOOP_ENABLED: &str = "riseonly.media_viewer.loop.enabled.v1";
 pub const SHORTS_AUTOSCROLL_ENABLED: &str = "riseonly.shorts.autoscroll.enabled.v1";
 pub const LAUNCH_ANIMATION_ENABLED: &str = "riseonly.launch.animation.enabled.v1";
+pub const LAUNCH_ANIMATION_PLAYED_BUILD: &str = "riseonly.launch.animation.playedBuild.v1";
 pub const TAB_BAR_SWIPE_BROWSE_ENABLED: &str = "riseonly.tab_bar.swipe_browse.enabled.v1";
 pub const TAB_BAR_SETTINGS_SLOT: &str = "riseonly.tab_bar.settings_slot.v1";
 pub const TAB_BAR_RAIL_ORDER: &str = "riseonly.tab_bar.rail_order.v1";
@@ -119,6 +120,7 @@ pub const ONBOARDING_SLIDES_SEEN: &str = "riseonly.onboarding.slides_seen.v1";
 
 pub const RTC_AUDIO_SOFTWARE_NOISE_SUPPRESSION: &str = "rtc.audio.softwareNoiseSuppression";
 pub const RTC_AUDIO_INPUT_SENSITIVITY: &str = "rtc.audio.inputSensitivity";
+pub const RTC_AUDIO_INPUT_GAIN: &str = "rtc.audio.inputGain";
 
 pub const STORY_STEALTH_ENABLED: &str = "story.stealth.enabled";
 
@@ -148,6 +150,7 @@ pub const DESKTOP_MUSIC_VOLUME: &str = "riseonly.desktop.music.volume.v1";
 pub const DESKTOP_RTC_AUDIO_INPUT_DEVICE: &str = "riseonly.desktop.rtc.audio.input_device.v1";
 pub const DESKTOP_RTC_AUDIO_OUTPUT_DEVICE: &str = "riseonly.desktop.rtc.audio.output_device.v1";
 pub const DESKTOP_CALL_IN_SEPARATE_WINDOW: &str = "riseonly.desktop.call.separate_window.v1";
+pub const DESKTOP_RTC_STREAMER_MODE: &str = "riseonly.desktop.rtc.streamer_mode.v1";
 pub const DESKTOP_NOTIFICATION_BANNER_POSITION: &str = "riseonly.desktop.notification_banner.position.v1";
 pub const DESKTOP_PANE_ORDER: &str = "riseonly.desktop.pane_order.v1";
 pub const FORUM_COLLAPSED_SECTIONS: &str = "riseonly.forum.collapsed_sections.v1";

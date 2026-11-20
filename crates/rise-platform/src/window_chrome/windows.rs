@@ -1,11 +1,14 @@
 use super::window_chrome::*;
 use crate::gpui_shim::PlatformSupport;
 
-use ::windows::Win32::Foundation::{HWND, POINT, RECT};
+use ::windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use ::windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use ::windows::Win32::Graphics::Gdi::ClientToScreen;
 use ::windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
-use ::windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SM_CYCAPTION};
+use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+use ::windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowRect, HTCAPTION, IsZoomed, PostMessageW, SC_MAXIMIZE, SC_MOVE, SC_RESTORE, SM_CYCAPTION, WM_SYSCOMMAND,
+};
 use ::windows::core::BOOL;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -15,6 +18,42 @@ pub(super) fn round_window_corner(_window: &gpui::Window) -> PlatformSupport {
 
 pub(super) fn place_traffic_lights(_window: &gpui::Window, _chrome: &WindowChrome) -> PlatformSupport {
     PlatformSupport::Unsupported
+}
+
+pub(super) fn start_titlebar_move(window: &gpui::Window) -> PlatformSupport {
+    let Some(hwnd) = window_hwnd(window) else {
+        return PlatformSupport::Unsupported;
+    };
+    unsafe {
+        let _ = ReleaseCapture();
+    }
+    post_system_command(hwnd, SC_MOVE | HTCAPTION)
+}
+
+pub(super) fn toggle_maximize(window: &gpui::Window) -> PlatformSupport {
+    let Some(hwnd) = window_hwnd(window) else {
+        return PlatformSupport::Unsupported;
+    };
+    let command = if unsafe { IsZoomed(hwnd) }.as_bool() { SC_RESTORE } else { SC_MAXIMIZE };
+    post_system_command(hwnd, command)
+}
+
+fn window_hwnd(window: &gpui::Window) -> Option<HWND> {
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return None;
+    };
+    Some(HWND(win32.hwnd.get() as *mut core::ffi::c_void))
+}
+
+fn post_system_command(hwnd: HWND, command: u32) -> PlatformSupport {
+    match unsafe { PostMessageW(Some(hwnd), WM_SYSCOMMAND, WPARAM(command as usize), LPARAM(0)) } {
+        Ok(()) => PlatformSupport::Performed,
+        Err(error) => {
+            tracing::warn!(target: "riseonly", %error, command, "PostMessageW(WM_SYSCOMMAND) refused");
+            PlatformSupport::Unsupported
+        }
+    }
 }
 
 pub(super) fn set_system_controls_appearance(

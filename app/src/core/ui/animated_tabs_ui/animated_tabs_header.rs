@@ -5,8 +5,7 @@ use std::rc::Rc;
 use gpui::{
     App, Background, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Path,
     Pixels, Point, RenderOnce, ScrollHandle, ScrollWheelEvent, SharedString, StatefulInteractiveElement, TextRun,
-    TouchPhase, WHEEL_LINE_HEIGHT, WeakEntity, Window, canvas, linear_color_stop, linear_gradient, point,
-    wheel_glides, white,
+    WHEEL_LINE_HEIGHT, WeakEntity, Window, canvas, linear_color_stop, linear_gradient, point, white,
 };
 use rise_core::foundation::foundation_date::RiseClock;
 use rise_theme::theme::theme_store::ThemeStore;
@@ -68,7 +67,6 @@ struct AnimatedTabsHeaderState {
     outer_width: f32,
     scroll_handle: ScrollHandle,
     strip_scroll: Animated<f32>,
-    scroll_gesture_start: Option<f32>,
     user_scrolled: bool,
 }
 
@@ -80,7 +78,6 @@ impl AnimatedTabsHeaderState {
             scroll_handle: ScrollHandle::new(),
             strip_scroll: Animated::new(0.0),
             user_scrolled: false,
-            scroll_gesture_start: None,
         }
     }
 }
@@ -277,7 +274,6 @@ impl AnimatedTabsHeader {
         let step = viewport * 0.75;
         let target = if leading { (current - step).max(0.0) } else { (current + step).min(max_x) };
         state.user_scrolled = true;
-        state.scroll_gesture_start = None;
         state.strip_scroll.jump(current);
         state.strip_scroll.set_in(target, AnimatedTabsMetrics::release_animation(), RiseClock::monotonic(), cx);
         cx.notify();
@@ -449,7 +445,7 @@ impl RenderOnce for AnimatedTabsHeader {
                 let offset = state.read(cx).strip_scroll.frame_value(now, window);
                 scroll_handle.set_offset(point(px(-offset), px(0.0)));
             } else {
-                let settle_tabs = tabs.clone();
+                let settle_tabs = tabs;
                 state.update(cx, |state, _| {
                     if state.user_scrolled {
                         return;
@@ -468,7 +464,6 @@ impl RenderOnce for AnimatedTabsHeader {
             }
 
             let snap_state = state.clone();
-            let snap_tabs = tabs;
             let strip_owner = AnimatedTabsPagerAxisOwner::ScrollView(scroll_handle.clone());
             let strip = div()
                 .id("animated-tabs-header-scroll")
@@ -479,71 +474,44 @@ impl RenderOnce for AnimatedTabsHeader {
                 .overflow_x_scroll()
                 .restrict_scroll_to_axis()
                 .track_scroll(&scroll_handle)
-                .on_scroll_wheel(move |event: &ScrollWheelEvent, window, cx| {
+                .on_scroll_wheel(move |event: &ScrollWheelEvent, _window, cx| {
                     if !event.delta.precise() {
-                        let glides = wheel_glides(&event.delta);
-                        let line = if glides { WHEEL_LINE_HEIGHT } else { window.line_height() };
-                        let delta = event.delta.pixel_delta(line);
-                        let wheel = f32::from(delta.y);
-                        if f32::from(delta.x) == 0.0 && wheel != 0.0 {
-                            let handled = snap_state.update(cx, |state, cx| {
-                                let max_x = f32::from(state.scroll_handle.max_offset().x);
-                                if max_x <= 0.0 {
-                                    return false;
-                                }
-                                state.user_scrolled = true;
-                                state.scroll_gesture_start = None;
-                                let now = RiseClock::monotonic();
-                                let shown = -f32::from(state.scroll_handle.offset().x);
-                                if !glides {
-                                    let next = (shown - wheel).clamp(0.0, max_x);
-                                    state.strip_scroll.jump(next);
-                                    state.scroll_handle.set_offset(point(px(-next), px(0.0)));
-                                    cx.notify();
-                                    return true;
-                                }
-                                let from =
-                                    if state.strip_scroll.is_running(now) { *state.strip_scroll.target() } else { shown };
-                                let next = (from - wheel).clamp(0.0, max_x);
-                                if !state.strip_scroll.is_running(now) {
-                                    state.strip_scroll.jump(shown);
-                                }
-                                state.strip_scroll.set_in(next, ease_out(STRIP_WHEEL_GLIDE_SECONDS), now, cx);
-                                cx.notify();
-                                true
-                            });
-                            if handled {
-                                cx.stop_propagation();
-                            }
+                        let delta = event.delta.pixel_delta(WHEEL_LINE_HEIGHT);
+                        let amount = f32::from(delta.y);
+                        if f32::from(delta.x) != 0.0 || amount == 0.0 {
                             return;
                         }
-                    }
-                    snap_state.update(cx, |state, cx| {
-                        state.user_scrolled = true;
-                        let offset = -f32::from(state.scroll_handle.offset().x);
-                        match event.touch_phase {
-                            TouchPhase::Started => state.scroll_gesture_start = Some(offset),
-                            TouchPhase::Ended => {
-                                let Some(start) = state.scroll_gesture_start.take() else { return };
-                                let behavior = AnimatedTabsStripSnapBehavior {
-                                    tab_edges: Self::tab_leading_edges(&snap_tabs, &state.tab_widths),
-                                    snaps_to_tabs: !right_to_left,
-                                };
-                                let viewport = f32::from(state.scroll_handle.bounds().size.width);
-                                let content_width = viewport + f32::from(state.scroll_handle.max_offset().x);
-                                let target = behavior.update_target(offset, start, viewport, content_width);
-                                if (target - offset).abs() > 0.5 {
-                                    state.strip_scroll.jump(offset);
-                                    state.strip_scroll.set_in(
-                                        target,
-                                        AnimatedTabsMetrics::release_animation(),
-                                        RiseClock::monotonic(),
-                                        cx,
-                                    );
-                                    cx.notify();
-                                }
+                        let handled = snap_state.update(cx, |state, cx| {
+                            let max_x = f32::from(state.scroll_handle.max_offset().x);
+                            if max_x <= 0.0 {
+                                return false;
                             }
-                            TouchPhase::Moved | TouchPhase::Cancelled => {}
+                            state.user_scrolled = true;
+                            let now = RiseClock::monotonic();
+                            let shown = -f32::from(state.scroll_handle.offset().x);
+                            let from = if state.strip_scroll.is_running(now) { *state.strip_scroll.target() } else { shown };
+                            let next = (from - amount).clamp(0.0, max_x);
+                            if !state.strip_scroll.is_running(now) {
+                                state.strip_scroll.jump(shown);
+                            }
+                            state.strip_scroll.set_in(next, ease_out(STRIP_WHEEL_GLIDE_SECONDS), now, cx);
+                            cx.notify();
+                            true
+                        });
+                        if handled {
+                            cx.stop_propagation();
+                        }
+                        return;
+                    }
+                    if f32::from(event.delta.pixel_delta(WHEEL_LINE_HEIGHT).x) == 0.0 {
+                        return;
+                    }
+                    snap_state.update(cx, |state, _| {
+                        state.user_scrolled = true;
+                        let now = RiseClock::monotonic();
+                        if state.strip_scroll.is_running(now) {
+                            let shown = -f32::from(state.scroll_handle.offset().x);
+                            state.strip_scroll.jump(shown);
                         }
                     });
                 })
@@ -1129,31 +1097,6 @@ impl RenderOnce for AnimatedTabsLiveHeader {
         .shows_pill_background(self.shows_pill_background)
         .suppresses_tap(Rc::new(move |cx| tap_state.read(cx).suppresses_tab_taps()))
         .force_scrollable(self.force_scrollable)
-    }
-}
-
-struct AnimatedTabsStripSnapBehavior {
-    tab_edges: Vec<f32>,
-    snaps_to_tabs: bool,
-}
-
-impl AnimatedTabsStripSnapBehavior {
-    fn update_target(&self, target: f32, start: f32, viewport: f32, content_width: f32) -> f32 {
-        let max_x = (content_width - viewport).max(0.0);
-        if viewport <= 0.0 || max_x <= 0.0 {
-            return target;
-        }
-        let proposed = target.max(start - viewport).max(0.0).min(start + viewport).min(max_x);
-        if !self.snaps_to_tabs || self.tab_edges.is_empty() {
-            return proposed;
-        }
-        let mut best = max_x;
-        for &edge in &self.tab_edges {
-            if edge < max_x && (edge - proposed).abs() < (best - proposed).abs() {
-                best = edge;
-            }
-        }
-        best
     }
 }
 

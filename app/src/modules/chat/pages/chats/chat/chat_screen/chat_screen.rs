@@ -26,6 +26,7 @@ use rise_ui::bottom_sheet_ui::bottom_sheet_metrics::BottomSheetMetrics;
 use rise_ui::bottom_sheet_ui::modal_sheet_surface::ModalSheetMetrics;
 use rise_ui::input_ui::input_actions::MoveUp;
 use rise_ui::keyboard_dismiss::{KeyboardDismissModifiers, RISE_INPUT_PICKER_DISMISS_REQUESTED, ScreenFocus};
+use crate::core::ui::hold_context_menu_ui::hold_context_menu_presenter::HoldContextMenuPresenter;
 use rise_ui::liquid_chrome::LiquidChromeModifiers;
 use rise_ui::liquid_glass_button::{LiquidGlassButton, LiquidGlassButtonShape};
 use rise_ui::native_confirm_alert::{NativeConfirmAlert, NativeConfirmAlertAction};
@@ -410,6 +411,7 @@ pub struct ChatScreen {
     pub(super) inline_candidates_answered_query: Option<String>,
     pub(super) inline_composer_expanded: bool,
     pub(super) inline_composer_interactive_height: Option<f32>,
+    pub(super) inline_composer_highlight: Option<usize>,
     pub(super) inline_invocation_exclusion_tag: Option<String>,
     pub(super) inline_user_mentions: Vec<ChatComposerUserMention>,
     pub(super) inline_user_mentions_anchor_text: String,
@@ -553,7 +555,10 @@ impl ChatScreen {
             let Some(screen) = typing_target.upgrade() else {
                 return;
             };
-            if screen.update(cx, |screen, cx| screen.type_into_composer(&event.keystroke, window, cx)) {
+            let taken = screen.update(cx, |screen, cx| {
+                screen.take_orphan_escape(event, window, cx) || screen.type_into_composer(&event.keystroke, window, cx)
+            });
+            if taken {
                 cx.stop_propagation();
             }
         }));
@@ -650,6 +655,7 @@ impl ChatScreen {
             inline_candidates_answered_query: None,
             inline_composer_expanded: false,
             inline_composer_interactive_height: None,
+            inline_composer_highlight: None,
             inline_invocation_exclusion_tag: None,
             inline_user_mentions: Vec::new(),
             inline_user_mentions_anchor_text: String::new(),
@@ -2279,6 +2285,29 @@ impl ChatScreen {
         if self.handle_escape(window, cx) {
             cx.stop_propagation();
         }
+    }
+
+    fn take_orphan_escape(&mut self, event: &KeystrokeEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let keystroke = &event.keystroke;
+        if keystroke.key != "escape"
+            || keystroke.modifiers.modified()
+            || !self.is_on_screen
+            || self.media_viewer_covers_feed
+            || !self.focus_handle.is_in_rendered_frame(window)
+            || ScreenFocus::top_sheet(window, cx).is_some()
+            || HoldContextMenuPresenter::has_active_request(cx)
+        {
+            return false;
+        }
+        let selecting = self.state.is_message_selection_active;
+        let orphaned = !self.focus_handle.contains_focused(window, cx)
+            && (ScreenFocus::is_idle(window, cx)
+                || window.focused(cx).is_none_or(|focused| !focused.is_in_rendered_frame(window)));
+        if !(selecting || orphaned) || !self.handle_escape(window, cx) {
+            return false;
+        }
+        ScreenFocus::claim(&self.focus_handle, window, cx);
+        true
     }
 
     /// closes the selection, the search, the picker panel or the reply bar in that order
