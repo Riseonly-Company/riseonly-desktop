@@ -341,8 +341,17 @@ def main():
             for p in PLATFORMS:
                 out[f"{p}_archs"] = json.dumps([t.split("-", 1)[1] for t in targets if t.startswith(f"{p}-")] or archs(p, labels))
             shipped = already_shipped(version, targets)
-            if shipped:
+            if shipped and not kept:
                 sys.exit(f"::error::{version} is already in production for {', '.join(shipped)}: pick other platforms or change the sources")
+            if shipped:
+                # why: the same sources rerun after one platform failed, so only the missing ones build and join the version
+                targets = [t for t in targets if t not in shipped]
+                if not targets:
+                    sys.exit(f"::error::{version} of these sources is already in production for every target")
+                print(f"::notice::{', '.join(shipped)} already ship {version}, building {', '.join(targets)}")
+                picked = [p for p in PLATFORMS if any(t.startswith(f"{p}-") for t in targets)]
+                for p in PLATFORMS:
+                    out[f"{p}_archs"] = json.dumps([t.split("-", 1)[1] for t in targets if t.startswith(f"{p}-")])
         out.update({
             "run": "true",
             "platforms": json.dumps(picked),
