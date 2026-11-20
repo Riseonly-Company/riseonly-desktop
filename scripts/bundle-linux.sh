@@ -129,20 +129,22 @@ if [ -n "$(linked_ffmpeg "$EXE")" ]; then
     FALLBACK_LIBS+=(libva.so.2 libva-drm.so.2 libdrm.so.2)
 fi
 for soname in "${FALLBACK_LIBS[@]}"; do
-    lib=$(ldconfig -p | awk -v n="$soname" -v tag="(libc6,$LDCONFIG_TAG" '$1 == n && index($0, tag) { print $NF; exit }')
+    lib=$(ldconfig -p | awk -v n="$soname" -v tag="(libc6,$LDCONFIG_TAG" '$1 == n && index($0, tag) { if (!found) print $NF; found = 1 }')
     [ -n "$lib" ] || { echo "the bundle falls back to $soname and the build machine has none" >&2; exit 1; }
     mkdir -p "$LIBS/fallback/$soname"
     cp -L "$lib" "$LIBS/fallback/$soname/$soname"
     echo "fallback $soname"
 done
 
+# why: grep -q closes the pipe early and pipefail turns readelf's SIGPIPE into exit 141
 for soname in libuv.so.1; do
-    readelf -d "$EXE" | grep -q "(NEEDED).*\[$soname\]" || continue
-    lib=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }')
+    dynamic="$(readelf -d "$EXE")"
+    [[ "$dynamic" == *"(NEEDED)"*"[$soname]"* ]] || continue
+    lib=$(ldconfig -p | awk -v n="$soname" '$1 == n { if (!found) print $NF; found = 1 }')
     [ -n "$lib" ] || { echo "the binary needs $soname and the build machine has none" >&2; exit 1; }
     mkdir -p "$LIBS"
     cp -L "$lib" "$LIBS/$soname"
-    readelf -d "$EXE" | grep -q 'ORIGIN/../lib/riseonly' || patchelf --add-rpath '$ORIGIN/../lib/riseonly' "$EXE"
+    [[ "$dynamic" == *'ORIGIN/../lib/riseonly'* ]] || patchelf --add-rpath '$ORIGIN/../lib/riseonly' "$EXE"
     echo "bundled $soname"
 done
 
