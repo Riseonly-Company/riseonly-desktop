@@ -254,12 +254,11 @@ pub const fn titlebar_height(host: HostOs) -> f32 {
 }
 
 /// how far a screen keeps its own controls below the window top edge, given the shell strip height
-/// macos is zero, the lights sit over the rail
-/// windows and linux under csd put buttons and a drag area in the strip, ssd titlebar is outside
+/// macos and windows are zero, the lights sit over the rail
+/// linux under csd puts buttons and a drag area in the strip, ssd titlebar is outside
 pub const fn controls_band_height(host: HostOs, granted: DecorationMode, strip_height: f32) -> f32 {
     match host {
-        HostOs::MacOs => 0.0,
-        HostOs::Windows => strip_height,
+        HostOs::MacOs | HostOs::Windows => 0.0,
         HostOs::Linux => match granted {
             DecorationMode::ClientSide => strip_height,
             DecorationMode::ServerSide => 0.0,
@@ -287,10 +286,8 @@ pub const fn cover_top_insets(
         return CoverTopInsets { frame_top: 0.0, safe_top: 0.0 };
     }
     match host {
-        HostOs::MacOs => CoverTopInsets { frame_top: 0.0, safe_top: strip_height },
-        HostOs::Windows | HostOs::Linux => {
-            CoverTopInsets { frame_top: controls_band_height(host, granted, strip_height), safe_top: 0.0 }
-        }
+        HostOs::MacOs | HostOs::Windows => CoverTopInsets { frame_top: 0.0, safe_top: strip_height },
+        HostOs::Linux => CoverTopInsets { frame_top: controls_band_height(host, granted, strip_height), safe_top: 0.0 },
     }
 }
 
@@ -593,7 +590,13 @@ pub const fn titlebar_double_click_action(
 ) -> TitlebarDoubleClick {
     match host {
         HostOs::MacOs => TitlebarDoubleClick::ForwardToOs,
-        HostOs::Windows => TitlebarDoubleClick::Nothing,
+        HostOs::Windows => {
+            if offered.maximize && resizable {
+                TitlebarDoubleClick::ToggleMaximize
+            } else {
+                TitlebarDoubleClick::Nothing
+            }
+        }
         HostOs::Linux => {
             if granted.app_draws_window_frame() && offered.maximize && resizable {
                 TitlebarDoubleClick::ToggleMaximize
@@ -618,7 +621,7 @@ pub fn titlebar_double_click(window: &gpui::Window, chrome: &WindowChrome) -> Pl
     );
     match action {
         TitlebarDoubleClick::ForwardToOs => window.titlebar_double_click(),
-        TitlebarDoubleClick::ToggleMaximize => window.zoom_window(),
+        TitlebarDoubleClick::ToggleMaximize => return super::os::toggle_maximize(window),
         TitlebarDoubleClick::Nothing => return PlatformSupport::Unsupported,
     }
     PlatformSupport::Performed
@@ -630,18 +633,26 @@ pub const fn app_owns_titlebar_drag(host: HostOs) -> bool {
     matches!(host, HostOs::MacOs)
 }
 
-/// whether a drag on the strip has to go to the compositor as an interactive move
+/// whether a drag on the strip has to go to the window system as an interactive move
 pub const fn app_starts_window_move(host: HostOs, granted: DecorationMode) -> bool {
-    matches!(host, HostOs::Linux) && granted.app_draws_window_frame()
+    match host {
+        HostOs::MacOs => false,
+        HostOs::Windows => true,
+        HostOs::Linux => granted.app_draws_window_frame(),
+    }
+}
+
+/// true where the strip is told to the os as caption area, only where no column runs under it
+pub const fn strip_is_caption_area(host: HostOs) -> bool {
+    !matches!(host, HostOs::Windows)
 }
 
 pub fn start_titlebar_move(window: &gpui::Window) -> PlatformSupport {
-    if !app_starts_window_move(HostOs::current(), granted_decorations(window)) {
+    let host = HostOs::current();
+    if !app_starts_window_move(host, granted_decorations(window)) && !app_owns_titlebar_drag(host) {
         return PlatformSupport::Unsupported;
     }
-
-    window.start_window_move();
-    PlatformSupport::Performed
+    super::os::start_titlebar_move(window)
 }
 
 /// whether a secondary click on the strip opens the compositor window menu
@@ -856,7 +867,7 @@ mod tests {
         let mac = cover_top_insets(HostOs::MacOs, DecorationMode::ServerSide, 46.0, false);
         assert_eq!(mac, CoverTopInsets { frame_top: 0.0, safe_top: 46.0 });
         let windows = cover_top_insets(HostOs::Windows, DecorationMode::ServerSide, 46.0, false);
-        assert_eq!(windows, CoverTopInsets { frame_top: 46.0, safe_top: 0.0 });
+        assert_eq!(windows, CoverTopInsets { frame_top: 0.0, safe_top: 46.0 });
         let csd = cover_top_insets(HostOs::Linux, DecorationMode::ClientSide, 46.0, false);
         assert_eq!(csd, CoverTopInsets { frame_top: 46.0, safe_top: 0.0 });
         let ssd = cover_top_insets(HostOs::Linux, DecorationMode::ServerSide, 46.0, false);
@@ -870,7 +881,7 @@ mod tests {
         let strip = 46.0;
         for granted in [DecorationMode::ServerSide, DecorationMode::ClientSide] {
             assert_eq!(controls_band_height(HostOs::MacOs, granted, strip), 0.0);
-            assert_eq!(controls_band_height(HostOs::Windows, granted, strip), strip);
+            assert_eq!(controls_band_height(HostOs::Windows, granted, strip), 0.0);
         }
         assert_eq!(controls_band_height(HostOs::Linux, DecorationMode::ClientSide, strip), strip);
         assert_eq!(controls_band_height(HostOs::Linux, DecorationMode::ServerSide, strip), 0.0);
@@ -1478,13 +1489,15 @@ mod tests {
     }
 
     #[test]
-    fn macos_forwards_and_windows_leaves_the_double_click_to_the_os() {
+    fn macos_forwards_and_windows_toggles_maximize_from_the_app_strip() {
         let offered = all_offered();
         let server = DecorationMode::ServerSide;
         let mac = titlebar_double_click_action(HostOs::MacOs, server, offered, true);
         assert_eq!(mac, TitlebarDoubleClick::ForwardToOs);
         let windows = titlebar_double_click_action(HostOs::Windows, server, offered, true);
-        assert_eq!(windows, TitlebarDoubleClick::Nothing);
+        assert_eq!(windows, TitlebarDoubleClick::ToggleMaximize);
+        let fixed = titlebar_double_click_action(HostOs::Windows, server, offered, false);
+        assert_eq!(fixed, TitlebarDoubleClick::Nothing);
     }
 
     #[test]
@@ -1495,9 +1508,11 @@ mod tests {
         assert!(!app_starts_window_move(HostOs::Linux, DecorationMode::ServerSide));
         assert!(!shows_window_menu(HostOs::Linux, DecorationMode::ServerSide, offered));
         for host in [HostOs::MacOs, HostOs::Windows] {
-            assert!(!app_starts_window_move(host, DecorationMode::ClientSide), "{host:?}");
             assert!(!shows_window_menu(host, DecorationMode::ClientSide, offered), "{host:?}");
         }
+        assert!(!app_starts_window_move(HostOs::MacOs, DecorationMode::ClientSide));
+        assert!(app_starts_window_move(HostOs::Windows, DecorationMode::ServerSide));
+        assert!(!strip_is_caption_area(HostOs::Windows));
     }
 
     #[test]

@@ -678,6 +678,7 @@ impl GiftsInteractionsStore {
                 content: Some(instance.name.clone()),
                 r#type: NotifierType::Success,
                 position: NotifierPosition::Top,
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,

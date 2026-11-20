@@ -18,8 +18,8 @@ use rise_platform::user_defaults_keys::CHAT_WALLPAPER_CHAT_BACKDROP_SIZE;
 use rise_energy::rise_energy_saving::{RiseEnergySavingFeature, RiseEnergySavingStore};
 use rise_theme::theme::theme_environment::theme_store;
 use rise_theme::{RiseThemeAppearance, alpha};
-use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyle, ScrollChromeShadowStyleAnchor, ScrollChromeShadowUi};
-use rise_ui::scroll_edge_blur_ui::{ScrollEdgeBlurFalloff, ScrollEdgeBlurUi};
+use rise_ui::scroll_chrome_shadow_ui::{ScrollChromeShadowStyleAnchor, ScrollChromeShadowUi};
+use rise_ui::scroll_edge_blur_ui::HeaderEdgeBlur;
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::content_mode::ContentMode;
 use rise_ui::swiftui::environment::reduce_motion;
@@ -408,11 +408,7 @@ pub struct ChatEdgeShadows {
 }
 
 impl ChatEdgeShadows {
-    const SHADOW_EXTENT: f32 = 66.0;
-    const TOP_BLUR_FADE: f32 = 20.0;
-    const PEAK_OPACITY: f64 = 0.5;
     const BOTTOM_SHADOW_SCALE: f32 = 0.6;
-    const TOP_SHADOW_SCALE: f32 = 0.5;
 
     pub fn new(top_inset: f32, bottom_inset: f32) -> Self {
         Self {
@@ -426,60 +422,19 @@ impl ChatEdgeShadows {
         self.bottom_extension = bottom_extension;
         self
     }
-
-    fn style(anchor: ScrollChromeShadowStyleAnchor, color: Hsla) -> ScrollChromeShadowStyle {
-        ScrollChromeShadowStyle {
-            anchor,
-            peak_opacity: Self::PEAK_OPACITY,
-            color,
-            mid_location: 0.58,
-            mid_opacity_factor: 0.68,
-            top_plateau_end: 0.16,
-            top_plateau_opacity_factor: 0.97,
-            ..ScrollChromeShadowStyle::default()
-        }
-    }
 }
 
 impl RenderOnce for ChatEdgeShadows {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let top_shadow_height = (self.top_inset.max(0.0) + Self::SHADOW_EXTENT) * Self::TOP_SHADOW_SCALE;
-        let bottom_shadow_height = (self.bottom_inset.max(0.0) + Self::SHADOW_EXTENT) * Self::BOTTOM_SHADOW_SCALE;
+        let bottom_shadow_height = HeaderEdgeBlur::shadow_height(self.bottom_inset, Self::BOTTOM_SHADOW_SCALE);
         let is_dark = theme_store(cx).read(cx).resolved_appearance() == RiseThemeAppearance::Dark;
         let color = if is_dark { black() } else { white() };
         let chrome_bottom = list_shell_safe_area_insets(cx).top.max(0.0).max(self.top_inset);
-        let blur_bottom = chrome_bottom + Self::TOP_BLUR_FADE;
 
         pass_through()
             .relative()
             .size_full()
-            .child(
-                pass_through()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(blur_bottom))
-                    .max_h_full()
-                    .child(
-                        ScrollEdgeBlurUi::new()
-                            .solid_end(ScrollEdgeBlurFalloff::DEFAULT_SOLID_END)
-                            .fit_height(blur_bottom),
-                    ),
-            )
-            .child(
-                pass_through()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(top_shadow_height))
-                    .max_h_full()
-                    .child(ScrollChromeShadowUi::new(Self::style(
-                        ScrollChromeShadowStyleAnchor::FromTop,
-                        color,
-                    ))),
-            )
+            .child(pass_through().absolute().inset_0().child(HeaderEdgeBlur::new(chrome_bottom)))
             .child(
                 pass_through()
                     .absolute()
@@ -488,9 +443,8 @@ impl RenderOnce for ChatEdgeShadows {
                     .right_0()
                     .h(px(bottom_shadow_height))
                     .max_h_full()
-                    .child(ScrollChromeShadowUi::new(Self::style(
+                    .child(ScrollChromeShadowUi::new(HeaderEdgeBlur::shadow_style(
                         ScrollChromeShadowStyleAnchor::FromBottom,
-                        color,
                     ))),
             )
             .child(
@@ -501,7 +455,7 @@ impl RenderOnce for ChatEdgeShadows {
                     .top(relative(1.0))
                     .h(px(self.bottom_extension))
                     .min_h_full()
-                    .bg(alpha(color, Self::PEAK_OPACITY as f32)),
+                    .bg(alpha(color, HeaderEdgeBlur::SHADOW_PEAK_OPACITY as f32)),
             )
     }
 }

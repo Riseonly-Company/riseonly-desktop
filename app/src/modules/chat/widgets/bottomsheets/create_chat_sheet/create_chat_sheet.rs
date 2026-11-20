@@ -194,6 +194,7 @@ impl CreateChatSheet {
         .dismisses_on_backdrop_tap(false)
         .full_page_allows_swipe_dismiss(false)
         .full_page_shows_drag_indicator(false)
+        .full_page_hides_footer(true)
         .sheet_background(Some(background))
         .on_did_dismiss(move |_: &mut Window, cx: &mut App| {
             dismissed_flow.update(cx, |flow, cx| flow.clear_creation_result(cx));

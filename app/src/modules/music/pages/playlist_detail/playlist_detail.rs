@@ -25,7 +25,7 @@ use rise_ui::secondary_text::SecondaryText;
 use rise_ui::swiftui::linear_gradient::LinearGradient;
 use rise_ui::swiftui::page_refresh::PageRefreshKeys;
 use rise_ui::swiftui::prelude::*;
-use rise_ui::swiftui::scroll_view::scroll_view;
+use rise_ui::swiftui::scroll_view::{ListScrollbar, scroll_view};
 use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_ui::swiftui::transition::UnitPoint;
 
@@ -1397,6 +1397,8 @@ impl RenderOnce for PlaylistDetailContent {
         });
 
         let background = theme.bg._100;
+        let scrollbar =
+            ListScrollbar::new(named_child(&parts.id, "scrollbar"), list_state.clone()).top_inset(parts.top_inset);
         let parts = Rc::new(parts);
         div()
             .relative()
@@ -1409,6 +1411,7 @@ impl RenderOnce for PlaylistDetailContent {
                 })
                 .size_full(),
             )
+            .child(scrollbar)
             .when(self.hold_is_active, |content| content.child(div().absolute().inset_0().occlude()))
     }
 }

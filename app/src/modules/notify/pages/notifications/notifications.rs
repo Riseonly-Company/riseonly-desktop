@@ -153,6 +153,7 @@ impl RenderOnce for NotificationsBody {
             .flex()
             .flex_row()
             .justify_center()
+            .wheel_into_children()
             .bg(theme.bg._100)
             .when(!neighbours_mounted, |body| {
                 body.on_hover(move |hovered, _, cx| {

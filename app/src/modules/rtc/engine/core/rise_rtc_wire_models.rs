@@ -76,6 +76,7 @@ impl RiseRTCWireModel for Participant {
             updated_at_ms: self.updated_at_ms,
             lease_expires_at_ms: self.lease_expires_at_ms,
             order_sequence: self.order_sequence,
+            watching_user_id: self.watching_user_id.clone(),
             profile: self.profile.as_ref().map(RiseRTCWireModel::model),
         }
     }

@@ -5,7 +5,9 @@ use futures::channel::mpsc;
 use gpui::{App, AppContext, Context, Entity, WeakEntity};
 use rise_canon::RiseEvent;
 use rise_core::foundation::foundation_character::int_from_string;
+use rise_core::foundation::foundation_calendar::{Calendar, CalendarComponent};
 use rise_core::foundation::foundation_date::{Date, RiseClock};
+use rise_i18n::date_format::date_formatter::DateFormatter;
 use rise_i18n::date_format::relative_date_time_formatter::{RelativeDateTimeFormatter, UnitsStyle};
 use rise_i18n::language_store::Locale;
 use rise_i18n::{FormatArg, tr, tr_plural_with};
@@ -330,11 +332,37 @@ impl PresenceServicesStore {
             return format!("{prefix} {}", tr("chat_status_just_now"));
         }
 
-        let mut formatter = RelativeDateTimeFormatter::new();
+        if delta < 3_600.0 {
+            let mut formatter = RelativeDateTimeFormatter::new();
+            formatter.set_locale(Locale::app_locale().identifier());
+            formatter.set_units_style(UnitsStyle::Full);
+            let relative = formatter.localized_string_for(&date, &now);
+            return format!("{prefix} {relative}");
+        }
+        format!("{prefix} {}", Self::seen_at_text(&date, &now))
+    }
+
+    /// like telegram, today at 14:30 or yesterday at 9:05 or 12 november at 18:00, the year only when its another
+    fn seen_at_text(date: &Date, now: &Date) -> String {
+        let calendar = Calendar::current();
+        let format = if calendar.is_date_in_today(date) {
+            "date_today_at_format"
+        } else if calendar.is_date_in_yesterday(date) {
+            "date_yesterday_at_format"
+        } else if calendar.is_date_equal_to(date, now, CalendarComponent::Year) {
+            "date_day_month_at_format"
+        } else {
+            "date_day_month_year_at_format"
+        };
+        let mut formatter = DateFormatter::new();
         formatter.set_locale(Locale::app_locale().identifier());
-        formatter.set_units_style(UnitsStyle::Full);
-        let relative = formatter.localized_string_for(&date, &now);
-        format!("{prefix} {relative}")
+        formatter.set_date_format(tr(format));
+        let text = formatter.string_from(date);
+        let mut chars = text.chars();
+        match chars.next() {
+            Some(first) => first.to_lowercase().chain(chars).collect(),
+            None => text,
+        }
     }
 
     pub fn int_value(any: Option<&Value>) -> Option<i64> {

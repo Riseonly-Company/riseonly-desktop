@@ -29,7 +29,10 @@ use rise_ui::message_bubble_geometry::{
 use rise_ui::swiftui::animated::Animated;
 use rise_ui::swiftui::environment::reduce_motion;
 use rise_ui::swiftui::motion::spring;
-use rise_ui::swiftui::text_selection::{TextSelection, mark_selectable_text_press};
+use rise_ui::swiftui::text_selection::{
+    TextDragAxis, TextSelection, mark_selectable_text_press, mark_text_glyph_press, mark_text_press_swiped, selectable_text_took_press,
+    text_drag_axis,
+};
 use rise_ui::swiftui::transition::TransitionModifiers;
 use rise_ui::view_anchor_probe::{ViewAnchorProbe, ViewAnchorProbeExt};
 use rise_ui::view_screen_snapshot::ViewScreenSource;
@@ -77,6 +80,13 @@ const INCOMING_BORDER_WIDTH: f32 = 0.5;
 
 pub type RiseNativeTextMessageCanDoubleTap = Rc<dyn Fn(&App) -> bool>;
 pub type RiseNativeTextMessageDoubleTap = Rc<dyn Fn(&mut Window, &mut App)>;
+type TextSwipeHandler = Rc<dyn Fn(TextSwipe, &mut Window, &mut App)>;
+
+#[derive(Clone, Copy)]
+enum TextSwipe {
+    Moved(f32),
+    Ended,
+}
 
 /// x of a bubble in its row, own bubbles hug the trailing edge so their distance from it is
 /// known before layout
@@ -162,6 +172,10 @@ struct RiseNativeTextMessageBubbleSource {
     can_double_tap: Option<RiseNativeTextMessageCanDoubleTap>,
     selection: Rc<RefCell<TextSelection>>,
     swept: Rc<Cell<bool>>,
+    pressed_text: Rc<Cell<bool>>,
+    drag_press: Rc<Cell<Option<Point<Pixels>>>>,
+    drag_axis: Rc<Cell<Option<TextDragAxis>>>,
+    on_swipe: Option<TextSwipeHandler>,
     focus_handle: FocusHandle,
 }
 
@@ -179,6 +193,10 @@ impl RiseNativeTextMessageBubbleSource {
             can_double_tap: None,
             selection: Rc::new(RefCell::new(TextSelection::default())),
             swept: Rc::new(Cell::new(false)),
+            pressed_text: Rc::new(Cell::new(false)),
+            drag_press: Rc::new(Cell::new(None)),
+            drag_axis: Rc::new(Cell::new(None)),
+            on_swipe: None,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -290,15 +308,22 @@ impl RiseNativeTextMessageBubbleSource {
         origin: &Rc<Cell<Point<Pixels>>>,
         selection: &Rc<RefCell<TextSelection>>,
         swept: &Rc<Cell<bool>>,
+        pressed_text: &Rc<Cell<bool>>,
+        drag: (&Rc<Cell<Option<Point<Pixels>>>>, &Rc<Cell<Option<TextDragAxis>>>),
+        on_swipe: Option<TextSwipeHandler>,
         focus_handle: &FocusHandle,
         can_double_tap: Option<RiseNativeTextMessageCanDoubleTap>,
         window: &mut Window,
     ) {
+        let (drag_press, drag_axis) = (drag.0.clone(), drag.1.clone());
         window.on_mouse_event({
             let hitbox = hitbox.clone();
             let layout = prepared_layout.clone();
             let selection = selection.clone();
             let swept = swept.clone();
+            let pressed_text = pressed_text.clone();
+            let drag_press = drag_press.clone();
+            let drag_axis = drag_axis.clone();
             let focus = focus_handle.clone();
             let origin = origin.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
@@ -306,6 +331,7 @@ impl RiseNativeTextMessageBubbleSource {
                     return;
                 }
                 if !hitbox.is_hovered(window) {
+                    pressed_text.set(false);
                     if selection.borrow_mut().clear() {
                         window.refresh();
                     }
@@ -316,9 +342,22 @@ impl RiseNativeTextMessageBubbleSource {
                 }
                 mark_selectable_text_press(event.position, cx);
                 swept.set(false);
-                let click_count =
-                    if can_double_tap.as_ref().is_some_and(|can| can(cx)) { 1 } else { event.click_count };
-                let index = text_index_at(&layout, event.position - origin.get());
+                drag_press.set(Some(event.position));
+                drag_axis.set(None);
+                let local = event.position - origin.get();
+                let on_text = selection_highlight_rects(&layout, 0..layout.seed.text.len())
+                    .iter()
+                    .any(|line| line.contains(&local));
+                pressed_text.set(on_text);
+                if on_text {
+                    mark_text_glyph_press(event.position, cx);
+                }
+                let click_count = if !on_text && can_double_tap.as_ref().is_some_and(|can| can(cx)) {
+                    1
+                } else {
+                    event.click_count
+                };
+                let index = text_index_at(&layout, local);
                 let mut selection = selection.borrow_mut();
                 selection.press(&layout.seed.text, index, click_count, event.modifiers.shift);
                 if !selection.is_empty() {
@@ -333,13 +372,53 @@ impl RiseNativeTextMessageBubbleSource {
             let selection = selection.clone();
             let focus = focus_handle.clone();
             let origin = origin.clone();
+            let drag_press = drag_press.clone();
+            let drag_axis = drag_axis.clone();
+            let on_swipe = on_swipe.clone();
             move |event: &MouseMoveEvent, phase, window, cx| {
-                if phase != DispatchPhase::Bubble || !selection.borrow().is_dragging() {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if drag_axis.get() == Some(TextDragAxis::Swipe) {
+                    if let (Some(press), Some(on_swipe)) = (drag_press.get(), on_swipe.as_ref())
+                        && event.pressed_button == Some(MouseButton::Left)
+                    {
+                        on_swipe(TextSwipe::Moved(f32::from(event.position.x - press.x)), window, cx);
+                    }
+                    return;
+                }
+                if !selection.borrow().is_dragging() {
                     return;
                 }
                 if event.pressed_button != Some(MouseButton::Left) {
                     selection.borrow_mut().release();
                     return;
+                }
+                if drag_axis.get().is_none()
+                    && let Some(press) = drag_press.get()
+                {
+                    match text_drag_axis(press, event.position) {
+                        None => return,
+                        Some(TextDragAxis::Select) => drag_axis.set(Some(TextDragAxis::Select)),
+                        Some(TextDragAxis::Neither) => {
+                            drag_axis.set(Some(TextDragAxis::Neither));
+                            selection.borrow_mut().release();
+                            return;
+                        }
+                        Some(TextDragAxis::Swipe) => {
+                            drag_axis.set(Some(TextDragAxis::Swipe));
+                            mark_text_press_swiped(press, cx);
+                            let mut selection = selection.borrow_mut();
+                            selection.release();
+                            selection.clear();
+                            drop(selection);
+                            window.refresh();
+                            if let Some(on_swipe) = on_swipe.as_ref() {
+                                on_swipe(TextSwipe::Moved(f32::from(event.position.x - press.x)), window, cx);
+                            }
+                            return;
+                        }
+                    }
                 }
                 if HoldContextMenuPresenter::has_active_request(cx) {
                     selection.borrow_mut().release();
@@ -360,9 +439,16 @@ impl RiseNativeTextMessageBubbleSource {
 
         window.on_mouse_event({
             let selection = selection.clone();
-            move |event: &MouseUpEvent, phase, _window, _cx| {
-                if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                    selection.borrow_mut().release();
+            move |event: &MouseUpEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                    return;
+                }
+                selection.borrow_mut().release();
+                drag_press.set(None);
+                if drag_axis.replace(None) == Some(TextDragAxis::Swipe)
+                    && let Some(on_swipe) = on_swipe.as_ref()
+                {
+                    on_swipe(TextSwipe::Ended, window, cx);
                 }
             }
         });
@@ -478,6 +564,10 @@ impl Render for RiseNativeTextMessageBubbleSource {
                 let layout = prepared_layout.clone();
                 let selection = self.selection.clone();
                 let swept = self.swept.clone();
+                let pressed_text = self.pressed_text.clone();
+                let drag_press = self.drag_press.clone();
+                let drag_axis = self.drag_axis.clone();
+                let on_swipe = self.on_swipe.clone();
                 let focus_handle = self.focus_handle.clone();
                 let can_double_tap = self.can_double_tap.clone();
                 let allows_text_selection = self.allows_text_selection;
@@ -498,6 +588,9 @@ impl Render for RiseNativeTextMessageBubbleSource {
                         &origin,
                         &selection,
                         &swept,
+                        &pressed_text,
+                        (&drag_press, &drag_axis),
+                        on_swipe,
                         &focus_handle,
                         can_double_tap,
                         window,
@@ -600,6 +693,8 @@ pub struct RiseNativeTextMessageCell {
     reply_armed: bool,
     reply_offset: Animated<f32>,
     reply_hint_alpha: Animated<f32>,
+    reply_pulls_right: bool,
+    row_drag: Rc<Cell<(Option<Point<Pixels>>, Option<TextDragAxis>)>>,
     selection_translation_x: f32,
     press_scale: Animated<f32>,
     bubble_alpha: f32,
@@ -639,6 +734,8 @@ impl RiseNativeTextMessageCell {
             reply_armed: false,
             reply_offset: Animated::new(0.0),
             reply_hint_alpha: Animated::new(0.0),
+            reply_pulls_right: false,
+            row_drag: Rc::default(),
             selection_translation_x: 0.0,
             press_scale: Animated::new(1.0),
             bubble_alpha: 1.0,
@@ -729,6 +826,10 @@ impl RiseNativeTextMessageCell {
             (theme.border._200.opacity(0.45), INCOMING_BORDER_WIDTH)
         };
         let shadow_opacity = if is_own { OWN_SHADOW_OPACITY } else { INCOMING_SHADOW_OPACITY };
+        let swiping_cell = cx.weak_entity();
+        let on_swipe: TextSwipeHandler = Rc::new(move |swipe: TextSwipe, window: &mut Window, cx: &mut App| {
+            let _ = swiping_cell.update(cx, |cell, cx| cell.handle_text_swipe(swipe, window, cx));
+        });
         self.bubble_view.update(cx, |bubble, cx| {
             let changes_message = bubble
                 .prepared_layout
@@ -746,6 +847,7 @@ impl RiseNativeTextMessageCell {
             bubble.shadow_opacity = shadow_opacity;
             bubble.allows_text_selection = allows_text_selection;
             bubble.can_double_tap = Some(can_double_tap);
+            bubble.on_swipe = Some(on_swipe);
             cx.notify();
         });
         cx.notify();
@@ -773,6 +875,7 @@ impl RiseNativeTextMessageCell {
             {
                 if self.reply_pan_should_begin(delta, cx) {
                     self.reply_pan_state = ReplyPanState::Active;
+                    self.reply_pulls_right = false;
                     cancel_enclosing_scroll_pan_for_current_touch(cx);
                 } else {
                     self.reply_pan_state = ReplyPanState::Idle;
@@ -784,11 +887,35 @@ impl RiseNativeTextMessageCell {
             }
             return;
         }
+        self.finish_reply_pan(matches!(event.touch_phase, TouchPhase::Ended), window, cx);
+    }
+
+    fn handle_text_swipe(&mut self, swipe: TextSwipe, window: &mut Window, cx: &mut Context<Self>) {
+        match swipe {
+            TextSwipe::Moved(dx) => {
+                if self.reply_pan_state == ReplyPanState::Idle {
+                    let pulls = dx < 0.0 && self.allows_reply && !HoldContextMenuPresenter::has_active_request(cx);
+                    if !pulls {
+                        return;
+                    }
+                    self.reply_pan_state = ReplyPanState::Active;
+                    self.reply_pulls_right = false;
+                }
+                if self.reply_pan_state == ReplyPanState::Active {
+                    self.reply_translation_x = dx;
+                    self.update_reply_pull(cx);
+                }
+            }
+            TextSwipe::Ended => self.finish_reply_pan(true, window, cx),
+        }
+    }
+
+    fn finish_reply_pan(&mut self, completed: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.reply_pan_state != ReplyPanState::Active {
             self.reply_pan_state = ReplyPanState::Idle;
             return;
         }
-        let should_reply = self.reply_armed && matches!(event.touch_phase, TouchPhase::Ended);
+        let should_reply = self.reply_armed && completed;
         self.reply_pan_state = ReplyPanState::Idle;
         self.reply_armed = false;
         let now = RiseClock::monotonic();
@@ -802,13 +929,14 @@ impl RiseNativeTextMessageCell {
     }
 
     fn update_reply_pull(&mut self, cx: &mut Context<Self>) {
-        let pull = f32::min(f32::max(0.0, -self.reply_translation_x), REPLY_MAXIMUM_PULL);
+        let towards = if self.reply_pulls_right { self.reply_translation_x } else { -self.reply_translation_x };
+        let pull = f32::min(f32::max(0.0, towards), REPLY_MAXIMUM_PULL);
         let damped = if pull <= REPLY_ARMED_PULL {
             pull
         } else {
             REPLY_ARMED_PULL + (pull - REPLY_ARMED_PULL) * REPLY_DAMPING_PAST_ARMED
         };
-        self.reply_offset.jump(-damped);
+        self.reply_offset.jump(if self.reply_pulls_right { damped } else { -damped });
         self.reply_hint_alpha.jump(f32::min(1.0, pull / REPLY_ARMED_PULL));
         let next_armed = pull >= REPLY_ARMED_PULL;
         if next_armed != self.reply_armed {
@@ -1066,6 +1194,7 @@ impl RiseNativeTextMessageCell {
         let tapped = this.clone();
         let can_double_tap = self.can_double_tap.clone();
         let double_tap_handler = self.on_double_tap.clone();
+        let pressed_text = self.bubble_view.read(cx).pressed_text.clone();
         HoldGesturePlate::new((id, "plate"))
             .context_click_across_row(true)
             .on_anticipate(Rc::new(move |_: &ViewAnchorProbe, _: &mut Window, cx: &mut App| {
@@ -1098,7 +1227,9 @@ impl RiseNativeTextMessageCell {
             .on_tap(Rc::new(move |location: Point<Pixels>, window: &mut Window, cx: &mut App| {
                 Self::handle_tap(&tapped, location, window, cx);
             }))
-            .can_double_tap(Rc::new(move |cx: &App| can_double_tap.as_ref().is_some_and(|can| can(cx))))
+            .can_double_tap(Rc::new(move |cx: &App| {
+                !pressed_text.get() && can_double_tap.as_ref().is_some_and(|can| can(cx))
+            }))
             .on_double_tap(double_tap_handler.map(|on_double_tap| {
                 let handler: Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App)> =
                     Rc::new(move |_: Point<Pixels>, window: &mut Window, cx: &mut App| on_double_tap(window, cx));
@@ -1245,14 +1376,65 @@ impl Render for RiseNativeTextMessageCell {
         let side_tap_view = self.bubble_tap_view.clone();
         let side_can_double_tap = self.can_double_tap.clone();
         let side_double_tap = self.on_double_tap.clone();
+        let press_drag = self.row_drag.clone();
+        let tracked_drag = self.row_drag.clone();
+        let swiping_cell = cx.weak_entity();
+        let row_drag_tracker = canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let (move_drag, move_cell) = (tracked_drag.clone(), swiping_cell.clone());
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    let (Some(press), axis) = move_drag.get() else {
+                        return;
+                    };
+                    if phase != DispatchPhase::Bubble || event.pressed_button != Some(MouseButton::Left) {
+                        return;
+                    }
+                    let axis = match axis {
+                        Some(axis) => axis,
+                        None => match text_drag_axis(press, event.position) {
+                            None => return,
+                            Some(TextDragAxis::Swipe) => {
+                                move_drag.set((Some(press), Some(TextDragAxis::Swipe)));
+                                TextDragAxis::Swipe
+                            }
+                            Some(_) => {
+                                move_drag.set((None, None));
+                                return;
+                            }
+                        },
+                    };
+                    if axis == TextDragAxis::Swipe {
+                        let dx = f32::from(event.position.x - press.x);
+                        let _ = move_cell.update(cx, |cell, cx| cell.handle_text_swipe(TextSwipe::Moved(dx), window, cx));
+                    }
+                });
+                let (up_drag, up_cell) = (tracked_drag.clone(), swiping_cell.clone());
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                        return;
+                    }
+                    let (press, axis) = up_drag.replace((None, None));
+                    if press.is_some() && axis == Some(TextDragAxis::Swipe) {
+                        let _ = up_cell.update(cx, |cell, cx| cell.handle_text_swipe(TextSwipe::Ended, window, cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0();
 
         div()
             .id(("rise-native-text-message-cell", entity_id.as_u64()))
             .relative()
             .size_full()
             .on_scroll_wheel(cx.listener(Self::handle_reply_pan))
+            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                let on_text = selectable_text_took_press(event.position, cx);
+                press_drag.set(if on_text { (None, None) } else { (Some(event.position), None) });
+            })
             .on_mouse_up(MouseButton::Left, move |event: &MouseUpEvent, window: &mut Window, cx: &mut App| {
-                if event.click_count < 2 || side_tap_view.bounds().is_some_and(|bounds| bounds.contains(&event.position)) {
+                if event.click_count < 2 || event.click_count % 2 != 0 || side_tap_view.bounds().is_some_and(|bounds| bounds.contains(&event.position)) {
                     return;
                 }
                 let (Some(can_double_tap), Some(on_double_tap)) = (&side_can_double_tap, &side_double_tap) else {
@@ -1263,10 +1445,12 @@ impl Render for RiseNativeTextMessageCell {
                 }
             })
             .child(layout_recorder)
+            .child(row_drag_tracker)
             .child(
                 div()
                     .absolute()
-                    .right(px(MessageSizes::row_side_inset()))
+                    .when(!self.reply_pulls_right, |hint| hint.right(px(MessageSizes::row_side_inset())))
+                    .when(self.reply_pulls_right, |hint| hint.left(px(MessageSizes::row_side_inset())))
                     .top(px(top_padding + (bubble_height - REPLY_HINT_SIZE) * 0.5))
                     .size(px(REPLY_HINT_SIZE))
                     .opacity(reply_hint_alpha)

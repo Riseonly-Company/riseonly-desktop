@@ -300,8 +300,7 @@ impl MessageBubble {
             .on_reaction(on_reaction)
             .on_message_action(on_action)
             .on_open_sender_profile(on_open_sender_profile)
-            .prepared_text(self.prepared_text.clone())
-            .can_double_tap(Some(self.can_double_tap.clone()));
+            .prepared_text(self.prepared_text.clone());
         if matches!(kind, MessageContentKind::Sticker | MessageContentKind::VideoNote) {
             return content.into_any_element();
         }

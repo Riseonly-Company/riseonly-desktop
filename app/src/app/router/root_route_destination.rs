@@ -142,7 +142,7 @@ use crate::modules::moderation::pages::report_detail::ReportDetail;
 use crate::modules::moderation::pages::reports_queue::ReportsQueue;
 use crate::core::ui::qr_code::rise_qr_code_page::RiseQRCodePage;
 use crate::core::ui::qr_code::rise_qr_scanner_page::RiseQRScannerPage;
-use crate::modules::rtc::media::rise_rtc_audio_settings::RiseRTCAudioSettingsScreen;
+use crate::modules::rtc::media::rise_rtc_audio_settings::{RiseRTCAudioSettingsScreen, RiseRTCStreamSettingsScreen};
 use crate::modules::rtc::pages::rise_rtc_group_voice_settings_screen::RiseRTCGroupVoiceSettingsScreen;
 use crate::modules::rtc::pages::rise_rtc_room_screen::RiseRTCRoomScreen;
 use crate::modules::user::pages::profile::settings::customization_settings::settings::secondary_text_color_settings::secondary_text_color_settings::SecondaryTextColorSettings;
@@ -398,6 +398,7 @@ fn route_content(
         RootRoute::ProfileSettings => ProfileSettings::new().into_any_element(),
         RootRoute::Achievements { user_id } => Achievements::new(user_id.clone()).into_any_element(),
         RootRoute::RtcAudioSettings => held(screen, cx, RiseRTCAudioSettingsScreen::new),
+        RootRoute::RtcStreamSettings => held(screen, cx, RiseRTCStreamSettingsScreen::new),
         RootRoute::QuickReactionSettings => QuickReactionSettings::new().into_any_element(),
         RootRoute::PremiumBadgeSettings => PremiumBadgeSettings::new().into_any_element(),
         RootRoute::SocialLinksEditor => SocialLinksEditor::new().into_any_element(),

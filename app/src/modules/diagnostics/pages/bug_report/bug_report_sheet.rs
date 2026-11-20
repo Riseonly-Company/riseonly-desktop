@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, ElementId, Entity, ExternalPaths, FontWeight, ImageFormat, IntoElement, KeyDownEvent,
-    PromptButton, PromptLevel, Render, RenderOnce, SharedString, Subscription, Window, white,
+    PromptButton, PromptLevel, Render, RenderOnce, SharedString, Subscription, Window, canvas, white,
 };
 use rise_canon::{RiseBugReportPlatform, RiseBugReportStatus, RiseBugReportSurface, RiseFeedbackKind, RiseGuideAnchor};
 use rise_core::foundation::foundation_url::Url;
@@ -29,8 +29,18 @@ use rise_ui::swiftui::environment_values::IsEnabledKey;
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::progress_view::progress_view_value;
 
+use rise_ui::message_bubble_geometry::MessageBubbleRadii;
+use rise_ui::window_screen_frame_reader::MediaCellScreenFrameRegistry;
+
+use crate::core::media_viewer::media_viewer_open::MediaViewerOpen;
+use crate::core::media_viewer::media_viewer_presentation_state::{
+    MediaViewerGalleryScope, MediaViewerPresentationHandlers, media_viewer_presentation,
+};
+use crate::core::media_viewer::media_viewer_types::{
+    MediaViewerChrome, MediaViewerGalleryItem, MediaViewerGalleryItemKind, MediaViewerHeroSkin,
+};
 use crate::core::ui::bottom_sheet_ui::bottom_sheet_pages_ui::BottomSheetPagesUi;
-use crate::core::ui::clever_image_ui::{CleverImageUi, ContentMode};
+use crate::core::ui::clever_image_ui::{CleverImageCachePolicy, CleverImageUi, ContentMode};
 use crate::core::ui::input_field_accessory::InputFieldAccessory;
 use crate::core::ui::input_ui::InputUi;
 use rise_ui::layer_keys::LayerKeysExt;
@@ -43,7 +53,9 @@ use crate::modules::diagnostics::engine::core::rise_bug_report_upload::{
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_actions::bug_report_types::{
     BugReportDraft, BugReportDraftKind, BugReportSheetPage, BugReportSubmissionState,
 };
-use crate::modules::diagnostics::stores::diagnostics::diagnostics_actions::bug_report_wire_types::BugReportRecord;
+use crate::modules::diagnostics::stores::diagnostics::diagnostics_actions::bug_report_wire_types::{
+    BugReportAttachmentURL, BugReportRecord,
+};
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_interactions::bug_report_interactions::BugReportInteractionsStore;
 use crate::modules::diagnostics::stores::diagnostics::diagnostics_services::bug_report_services::BugReportServicesStore;
 use crate::modules::media_picker::api::media_picker_result::{MediaPickerItem, MediaPickerItemKind, MediaPickerResult};
@@ -51,6 +63,7 @@ use crate::modules::media_picker::export::dropped_video_probe::DroppedVideoProbe
 use crate::modules::media_picker::ui::media_picker_session::MediaPickerSession;
 
 const ESCAPE_KEY: &str = "escape";
+const THUMBNAIL_RADIUS: f32 = 10.0;
 const PASTE_KEY: &str = "v";
 const CHECK_MARK: &str = "\u{2713}";
 
@@ -740,11 +753,12 @@ impl BugReportFormPage {
         can_attach_more: bool,
         theme: &AppTheme,
     ) -> AnyElement {
-        let thumbnails = draft
-            .screenshots
-            .iter()
-            .chain(draft.video.iter())
-            .map(|attachment| self.attachment_thumbnail(attachment, is_sending, read_only, theme));
+        let attachments: Vec<&BugReportAttachment> = draft.screenshots.iter().chain(draft.video.iter()).collect();
+        let gallery: Rc<Vec<MediaViewerGalleryItem>> =
+            Rc::new(attachments.iter().filter_map(|attachment| self.viewer_item(attachment)).collect());
+        let thumbnails = attachments
+            .into_iter()
+            .map(|attachment| self.attachment_thumbnail(attachment, &gallery, is_sending, read_only, theme));
         div()
             .flex()
             .flex_col()
@@ -781,9 +795,100 @@ impl BugReportFormPage {
             .into_any_element()
     }
 
+    fn viewer_registry_id(&self, attachment: &BugReportAttachment) -> String {
+        format!("{}-preview-{}", self.id("attachment"), attachment.id)
+    }
+
+    fn viewer_item(&self, attachment: &BugReportAttachment) -> Option<MediaViewerGalleryItem> {
+        let uploaded = || {
+            attachment
+                .uploaded
+                .as_ref()
+                .and_then(|uploaded| BugReportAttachmentURL::absolute(&uploaded.file_url))
+        };
+        let local = || attachment.url.as_ref().map(|url| url.absolute_string().to_owned());
+        let poster = attachment.preview_url.as_ref().map(|url| url.absolute_string().to_owned());
+        let (kind, source) = match attachment.kind {
+            BugReportAttachmentKind::Screenshot => {
+                (MediaViewerGalleryItemKind::Image, poster.clone().or_else(local).or_else(uploaded)?)
+            }
+            BugReportAttachmentKind::Video => (MediaViewerGalleryItemKind::Video, local().or_else(uploaded)?),
+        };
+        let is_local = source.to_lowercase().starts_with("file://");
+        let registry_id = self.viewer_registry_id(attachment);
+        Some(MediaViewerGalleryItem {
+            id: registry_id.clone(),
+            kind,
+            url: source,
+            thumbnail_url: poster,
+            width: 0.0,
+            height: 0.0,
+            duration: attachment.duration_ms.map(|duration| duration as f64 / 1000.0),
+            sender_id: String::new(),
+            sender_name: String::new(),
+            sender_logo: None,
+            created_at: 0.0,
+            caption_title: String::new(),
+            caption: String::new(),
+            message_id: String::new(),
+            index_in_message: 0,
+            media_item_id: registry_id.clone(),
+            uses_fit_letterbox: true,
+            frame_registry_id: registry_id,
+            is_own: true,
+            can_delete: false,
+            can_save: false,
+            can_forward: false,
+            can_reply: false,
+            can_show_in_context: false,
+            can_delete_for_me: false,
+            can_delete_for_everyone: false,
+            can_set_as_main: false,
+            is_album_row: false,
+            display_source_override: None,
+            persist_media_to_disk: !is_local,
+            deletes_from_favourites: false,
+            post_download: None,
+            image_cache_policy: if is_local { CleverImageCachePolicy::MemoryOnly } else { CleverImageCachePolicy::Standard },
+        })
+    }
+
+    fn open_preview(gallery: Rc<Vec<MediaViewerGalleryItem>>, index: usize, cx: &mut App) {
+        let Some(item) = gallery.get(index) else {
+            return;
+        };
+        let registry_id = item.frame_registry_id.clone();
+        let hero_skin = MediaViewerHeroSkin {
+            display_source: item.thumbnail_url.clone().unwrap_or_else(|| item.url.clone()),
+            uses_fit_foreground: false,
+            media_tail: None,
+            source_media_radii: Some(MessageBubbleRadii::uniform(px(THUMBNAIL_RADIUS))),
+        };
+        let source_frame = MediaCellScreenFrameRegistry::frame(&registry_id).unwrap_or_default();
+        let presenter = media_viewer_presentation(cx);
+        let items = gallery.as_ref().clone();
+        cx.spawn(async move |cx| {
+            MediaViewerOpen::present(
+                presenter,
+                items,
+                index,
+                source_frame,
+                registry_id,
+                hero_skin,
+                MediaViewerChrome { shows_bottom_bar: false, can_report: false, ..Default::default() },
+                MediaViewerGalleryScope::Complete,
+                MediaViewerPresentationHandlers::default(),
+                cx,
+            )
+            .await;
+        })
+        .detach();
+    }
+
     fn attachment_thumbnail(
         &self,
         attachment: &BugReportAttachment,
+        gallery: &Rc<Vec<MediaViewerGalleryItem>>,
         is_sending: bool,
         read_only: bool,
         theme: &AppTheme,
@@ -798,7 +903,7 @@ impl BugReportFormPage {
                 .into_any_element(),
             None => div().size_full().rounded_rect(10.0).bg(theme.bg._200).into_any_element(),
         };
-        let mut frame = div().relative().flex_none().size(px(72.0)).rounded_rect(10.0).overflow_hidden().child(preview);
+        let mut frame = div().relative().flex_none().size(px(72.0)).rounded_rect(THUMBNAIL_RADIUS).overflow_hidden().child(preview);
         if attachment.kind == BugReportAttachmentKind::Video {
             frame = frame.child(
                 div()
@@ -819,6 +924,27 @@ impl BugReportFormPage {
                     ),
             );
         }
+        let registry_id = self.viewer_registry_id(attachment);
+        let frame = match gallery.iter().position(|item| item.frame_registry_id == registry_id) {
+            Some(index) => {
+                let gallery = gallery.clone();
+                let frame_id = registry_id.clone();
+                frame
+                    .id(SharedString::from(registry_id))
+                    .cursor_pointer()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| MediaCellScreenFrameRegistry::set(&frame_id, bounds, None),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .on_click(move |_, _, cx| Self::open_preview(gallery.clone(), index, cx))
+                    .into_any_element()
+            }
+            None => frame.into_any_element(),
+        };
         if read_only {
             return div().relative().flex_none().size(px(72.0)).child(frame).into_any_element();
         }
@@ -829,21 +955,25 @@ impl BugReportFormPage {
             .size(px(72.0))
             .child(frame)
             .child(
-                plain(SharedString::from(format!("bug-report-remove-{}", attachment.id)))
+                div()
+                    .id(SharedString::from(format!("bug-report-remove-slot-{}", attachment.id)))
                     .absolute()
                     .top(px(4.0))
                     .right(px(4.0))
-                    .disabled(is_sending)
-                    .on_press(move |_: &mut Window, cx: &mut App| {
-                        interactions.update(cx, |interactions, cx| interactions.remove_attachment(&attachment_id, cx));
-                    })
+                    .occlude()
                     .child(
-                        div().rounded_full().bg(theme.bg._100).children(IconUi::sized(
-                            "xmark.circle.fill",
-                            px(18.0),
-                            theme.text.primary,
-                            true,
-                        )),
+                        plain(SharedString::from(format!("bug-report-remove-{}", attachment.id)))
+                            .disabled(is_sending)
+                            .on_press(move |_: &mut Window, cx: &mut App| {
+                                interactions
+                                    .update(cx, |interactions, cx| interactions.remove_attachment(&attachment_id, cx));
+                            })
+                            .child(div().rounded_full().bg(theme.bg._100).children(IconUi::sized(
+                                "xmark.circle.fill",
+                                px(18.0),
+                                theme.text.primary,
+                                true,
+                            ))),
                     ),
             )
             .into_any_element()

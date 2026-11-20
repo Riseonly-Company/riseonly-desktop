@@ -23,7 +23,7 @@ use rise_platform::accessibility::reduce_motion;
 use rise_ui::keyboard_dismiss::ScreenFocus;
 use rise_ui::swiftui::environment::{LayoutDirection, layout_direction};
 use rise_ui::swiftui::motion::Spring;
-use rise_ui::swiftui::text_selection::selectable_text_took_press;
+use rise_ui::swiftui::text_selection::{TextDragAxis, selectable_text_took_press, text_drag_axis, text_press_swiped};
 use rise_platform::display_cadence::maximum_frames_per_second;
 use rise_ui::hold_context_menu_ui::rise_strict_tap_gesture_recognizer::{
     RiseScrollMotionProbe, RiseStrictTapGestureRecognizer, RiseStrictTapGestureRecognizerState,
@@ -210,6 +210,7 @@ struct RiseManualListDragSelection {
     press: Point<Pixels>,
     pointer: Point<Pixels>,
     started: bool,
+    axis: Option<TextDragAxis>,
 }
 
 struct RiseManualListSelectionSweep {
@@ -1429,7 +1430,6 @@ impl RiseManualListView {
     const JUMP_SLIDE_ANIMATION_KEY: &'static str = "rise.jump.slide";
     const KEYBOARD_STICKY_ANIMATION_KEY: &'static str = "rise.keyboard.sticky";
     const READABLE_ROW_SHARE: f32 = 0.5;
-    const DRAG_SELECTION_SLOP: f32 = 3.0;
 
     pub fn inter_item_spacing(&self) -> Pixels {
         self.inter_item_spacing
@@ -2107,8 +2107,7 @@ impl RiseManualListView {
         });
         let main_tab_scroll_to_top_mount = {
             let list = cx.weak_entity();
-            let wheel_list = list.clone();
-            MainTabScrollToTopListMount::with_wheel(
+            MainTabScrollToTopListMount::new(
                 move |refreshes_feed, window, cx| {
                     let Some(entity) = list.upgrade() else {
                         return;
@@ -2120,9 +2119,6 @@ impl RiseManualListView {
                     entity.update(cx, |this, cx| {
                         this.smart_scroll_to_top(true, window, cx);
                     });
-                },
-                move |event, window, cx| {
-                    let _ = wheel_list.update(cx, |this, cx| this.handle_scroll_wheel(event, window, cx));
                 },
             )
         };
@@ -2878,6 +2874,20 @@ impl RiseManualListView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.smart_scroll_to_item_focused(id, None, direction, animated, window, cx)
+    }
+
+    /// like centered but a row taller than the viewport lands on the point at focus of its height
+    /// so a found word deep in a long message ends up on screen
+    pub fn smart_scroll_to_item_focused(
+        &mut self,
+        id: &str,
+        focus: Option<f32>,
+        direction: RiseManualListTransactionJumpAnimationDirection,
+        animated: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(item) = self.item_by_id.get(id).cloned() else {
             return false;
         };
@@ -2895,7 +2905,20 @@ impl RiseManualListView {
         let visible_height =
             (self.bounds.size.height - self.viewport_insets.top - self.viewport_insets.bottom).max(px(1.0));
         let item_height = px(item.borrow().content.height);
-        let viewport_offset = self.viewport_insets.top + ((visible_height - item_height) * 0.5).max(Pixels::ZERO);
+        let focus = focus.filter(|focus| focus.is_finite()).map(|focus| focus.clamp(0.0, 1.0));
+        let viewport_offset = match focus {
+            Some(focus) if item_height > visible_height => {
+                let focus_y = absolute_min_y + item_frame.size.height * focus;
+                let margin = visible_height * 0.2;
+                if focus_y >= visible_top + margin && focus_y <= visible_bottom - margin {
+                    return !self.is_user_scrolling() && !self.is_applying_transaction;
+                }
+                let wanted = self.viewport_insets.top + visible_height * 0.35 - item_frame.size.height * focus;
+                let lowest = self.viewport_insets.top + visible_height - item_frame.size.height;
+                wanted.max(lowest).min(self.viewport_insets.top)
+            }
+            _ => self.viewport_insets.top + ((visible_height - item_height) * 0.5).max(Pixels::ZERO),
+        };
         self.smart_scroll(
             RiseManualListViewProgrammaticScrollTarget::Item { id: id.to_string(), viewport_offset },
             direction,
@@ -8301,6 +8324,7 @@ impl RiseManualListView {
             press: position,
             pointer: position,
             started: false,
+            axis: None,
         });
     }
 
@@ -8316,12 +8340,25 @@ impl RiseManualListView {
         if drag.started {
             return;
         }
-        if selectable_text_took_press(drag.press, cx) {
-            drag.text = true;
-            self.text_sweep_moved(window, cx);
+        let axis = match drag.axis {
+            Some(axis) => axis,
+            None => {
+                let Some(axis) = text_drag_axis(drag.press, position) else {
+                    return;
+                };
+                drag.axis = Some(axis);
+                axis
+            }
+        };
+        if axis != TextDragAxis::Select {
             return;
         }
-        if (position.y - drag.press.y).abs() < px(Self::DRAG_SELECTION_SLOP) {
+        if selectable_text_took_press(drag.press, cx) {
+            if text_press_swiped(drag.press, cx) {
+                return;
+            }
+            drag.text = true;
+            self.text_sweep_moved(window, cx);
             return;
         }
         drag.started = true;

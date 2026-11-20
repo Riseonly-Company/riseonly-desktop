@@ -10,7 +10,7 @@ use crate::{
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformImageUploader,
+    AtlasKey, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformImageUploader,
     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
     Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
@@ -720,7 +720,7 @@ pub(crate) struct CursorStyleRequest {
     pub(crate) style: CursorStyle,
 }
 
-#[derive(Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub(crate) struct HitTest {
     pub(crate) ids: SmallVec<[HitboxId; 8]>,
     pub(crate) hover_hitbox_count: usize,
@@ -831,6 +831,9 @@ pub struct Hitbox {
     /// Inserted or replayed under a hidden element (Riseonly 0050): it keeps its bounds for the
     /// views that read them, but the mouse never finds it.
     pub(crate) hidden: bool,
+    /// Riseonly 0129: the area of the element's children relative to `bounds.origin`, set by
+    /// `InteractiveElement::wheel_into_children`; a wheel over the rest of the hitbox scrolls there.
+    pub(crate) wheel_area: Option<Bounds<Pixels>>,
 }
 
 impl Hitbox {
@@ -1609,6 +1612,51 @@ impl Frame {
         hit_test
     }
 
+    /// Riseonly 0129: where a wheel at `position` goes when the front-most hitbox under it with a
+    /// wheel area (`InteractiveElement::wheel_into_children`) does not have the pointer over its
+    /// children: the nearest point inside them, kept clear of their side edges. None otherwise.
+    pub(crate) fn wheel_redirect(
+        &self,
+        position: Point<Pixels>,
+        hit_test: &HitTest,
+    ) -> Option<Point<Pixels>> {
+        let areas: SmallVec<[(HitboxId, Bounds<Pixels>); 4]> = self
+            .hitboxes
+            .iter()
+            .filter(|hitbox| !hitbox.hidden)
+            .filter_map(|hitbox| {
+                hitbox.wheel_area.map(|area| {
+                    (
+                        hitbox.id,
+                        Bounds {
+                            origin: hitbox.bounds.origin + area.origin,
+                            size: area.size,
+                        },
+                    )
+                })
+            })
+            .collect();
+        if areas.is_empty() {
+            return None;
+        }
+        let area = hit_test.ids.iter().find_map(|id| {
+            areas
+                .iter()
+                .find(|(area_id, _)| area_id == id)
+                .map(|(_, area)| *area)
+        })?;
+        if area.contains(&position)
+            || area.size.width <= px(0.)
+            || area.size.height <= px(1.)
+        {
+            return None;
+        }
+        let inset = (area.size.width / 2.).min(px(24.));
+        let min = point(area.left() + inset, area.top());
+        let max = point(area.right() - inset, area.bottom() - px(1.));
+        Some(position.clamp(&min, &max))
+    }
+
     pub(crate) fn focus_path(&self) -> SmallVec<[FocusId; 8]> {
         self.focus
             .map(|focus_id| self.dispatch_tree.focus_path(focus_id))
@@ -1743,6 +1791,9 @@ pub struct Window {
     pub(crate) hidden_dropped_deferred: u64,
     /// Images dropped from the sprite atlas so far; a parked paint may point at their tiles.
     pub(crate) image_drops: u64,
+    /// Atlas keys of dropped images, removed when the next frame starts: the frame on screen may
+    /// still draw their tiles and is presented again without a draw while input runs fast (Riseonly 0128).
+    pending_image_drops: Vec<AtlasKey>,
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) focus: Option<FocusId>,
     focus_enabled: bool,
@@ -2528,6 +2579,7 @@ impl Window {
             hidden_depth: 0,
             hidden_dropped_deferred: 0,
             image_drops: 0,
+            pending_image_drops: Vec::new(),
             activation_observers: SubscriberSet::new(),
             focus: None,
             focus_enabled: true,
@@ -3635,6 +3687,7 @@ impl Window {
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         self.draw_count += 1;
+        self.flush_image_drops();
         // Drain unconditionally so a stale first-invalidation timestamp can't
         // leak into a later frame across enable/disable of frame tracing.
         let frame_dirty = self.invalidator.take_frame_dirty();
@@ -7380,7 +7433,7 @@ impl Window {
         self.sprite_atlas.image_uploader()
     }
 
-    /// Removes an image from the sprite atlas.
+    /// Removes an image from the sprite atlas when the next frame starts (Riseonly 0128).
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         self.image_drops += 1;
         for frame_index in 0..data.frame_count() {
@@ -7389,10 +7442,19 @@ impl Window {
                 frame_index,
             };
 
-            self.sprite_atlas.remove(&params.clone().into());
+            self.pending_image_drops.push(params.into());
+        }
+        if self.pending_image_drops.len() > MAX_PENDING_IMAGE_DROPS {
+            self.flush_image_drops();
         }
 
         Ok(())
+    }
+
+    fn flush_image_drops(&mut self) {
+        for key in self.pending_image_drops.drain(..) {
+            self.sprite_atlas.remove(&key);
+        }
     }
 
     /// Returns whether every frame of an image is present in the sprite atlas.
@@ -7515,9 +7577,27 @@ impl Window {
             behavior,
             layer: self.hitbox_layer,
             hidden: self.hidden_depth > 0,
+            wheel_area: None,
         };
         self.next_frame.hitboxes.push(hitbox.clone());
         hitbox
+    }
+
+    /// Riseonly 0129: a wheel over `hitbox` outside `area` (window coordinates) scrolls what lies
+    /// at the nearest point of `area`, as if the pointer were there.
+    pub(crate) fn set_hitbox_wheel_area(&mut self, hitbox: &Hitbox, area: Bounds<Pixels>) {
+        if let Some(entry) = self
+            .next_frame
+            .hitboxes
+            .iter_mut()
+            .rev()
+            .find(|entry| entry.id == hitbox.id)
+        {
+            entry.wheel_area = Some(Bounds {
+                origin: area.origin - hitbox.bounds.origin,
+                size: area.size,
+            });
+        }
     }
 
     /// Set a hitbox which will act as a control area of the platform window.
@@ -8004,6 +8084,39 @@ impl Window {
             return;
         }
 
+        // Riseonly 0129: a wheel over the margin of a width capped column (an element with
+        // `wheel_into_children`) is dispatched at the nearest point of the column, with the hit
+        // test of that point, so the column scrolls from anywhere in its box. Hover and the
+        // pointer position are given back right after.
+        let mut redirected_wheel = None;
+        let mut held_pointer = None;
+        if let Some(wheel) = event.downcast_ref::<crate::ScrollWheelEvent>() {
+            let mut position = wheel.position;
+            let mut redirected_hit_test: Option<HitTest> = None;
+            for _ in 0..4 {
+                let current = redirected_hit_test.as_ref().unwrap_or(&self.mouse_hit_test);
+                let Some(next) = self.rendered_frame.wheel_redirect(position, current) else {
+                    break;
+                };
+                position = next;
+                redirected_hit_test = Some(self.rendered_frame.hit_test(position));
+            }
+            if let Some(hit_test) = redirected_hit_test {
+                held_pointer = Some((
+                    mem::replace(&mut self.mouse_hit_test, hit_test),
+                    mem::replace(&mut self.mouse_position, position),
+                ));
+                redirected_wheel = Some(crate::ScrollWheelEvent {
+                    position,
+                    ..wheel.clone()
+                });
+            }
+        }
+        let event: &dyn Any = match redirected_wheel.as_ref() {
+            Some(wheel) => wheel,
+            None => event,
+        };
+
         let mut mouse_listeners = mem::take(&mut self.rendered_frame.mouse_listeners);
 
         // Capture phase, events bubble from back to front. Handlers for this phase are used for
@@ -8028,6 +8141,11 @@ impl Window {
         }
 
         self.rendered_frame.mouse_listeners = mouse_listeners;
+
+        if let Some((hit_test, position)) = held_pointer {
+            self.mouse_hit_test = hit_test;
+            self.mouse_position = position;
+        }
 
         if cx.has_active_drag() {
             if event.is::<MouseMoveEvent>() {
@@ -9671,6 +9789,9 @@ pub fn outline(
         border_style,
     }
 }
+
+/// Dropped images a window that draws no frame holds before it frees them anyway (Riseonly 0128).
+const MAX_PENDING_IMAGE_DROPS: usize = 4096;
 
 /// Segments each rounded corner of a transformed quad is tessellated into.
 const TRANSFORMED_CORNER_SEGMENTS: usize = 8;

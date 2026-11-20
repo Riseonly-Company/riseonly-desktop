@@ -33,6 +33,10 @@ jobs:
       macos_archs: ${{ steps.plan.outputs.macos_archs }}
       macos_runner: ${{ steps.plan.outputs.macos_runner }}
       macos_local: ${{ steps.plan.outputs.macos_local }}
+      linux_runners: ${{ steps.plan.outputs.linux_runners }}
+      linux_local: ${{ steps.plan.outputs.linux_local }}
+      windows_runner: ${{ steps.plan.outputs.windows_runner }}
+      windows_local: ${{ steps.plan.outputs.windows_local }}
       environment: ${{ steps.plan.outputs.environment }}
       profile: ${{ steps.plan.outputs.profile }}
       version: ${{ steps.plan.outputs.version }}
@@ -63,6 +67,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MACOS_RUNNER: ${{ vars.DESKTOP_MACOS_RUNNER }}
+          MACOS_LOCAL: ${{ vars.DESKTOP_MACOS_LOCAL }}
+          LINUX_LOCAL: ${{ vars.DESKTOP_LINUX_LOCAL }}
+          WINDOWS_LOCAL: ${{ vars.DESKTOP_WINDOWS_LOCAL }}
+          LINUX_ARM_RUNNER: ${{ vars.DESKTOP_LINUX_ARM_RUNNER }}
           DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
           STAGING_RELEASES: ${{ vars.DESKTOP_STAGING_RELEASES }}
         run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
@@ -70,7 +78,7 @@ jobs:
   linux:
     needs: plan
     if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true'
-    runs-on: ${{ matrix.arch == 'aarch64' && fromJSON(vars.DESKTOP_LINUX_ARM_RUNNER || '"ubuntu-24.04-arm"') || fromJSON('["self-hosted", "linux", "x64", "riseonly-desktop-linux"]') }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.linux_runners)[matrix.arch] }}
     strategy:
       fail-fast: false
       matrix:
@@ -104,7 +112,7 @@ jobs:
           path: riseonly-tools
           persist-credentials: false
       - name: no files of an earlier run, the vendored sources stay so nothing compiles again
-        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
       - if: env.PAYLOAD_RUN != ''
         name: the build of this tree from an earlier release
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -113,14 +121,14 @@ jobs:
           path: riseonly-desktop/payload
           run-id: ${{ env.PAYLOAD_RUN }}
           github-token: ${{ github.token }}
-      - if: matrix.arch == 'aarch64'
+      - if: matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true'
         name: room for the toolchain image and the target dir on the hosted runner
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h /
       - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
         env:
-          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && format('{0}/desktop-ci', runner.temp) || '' }}
+          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true' && format('{0}/desktop-ci', runner.temp) || '' }}
           DESKTOP_CI_MEMORY: 14g
           DESKTOP_CI_JOBS: 3
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
@@ -128,7 +136,7 @@ jobs:
         run: |
           rm -rf riseonly-desktop/dist
           (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
-          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
+          bash riseonly-desktop/scripts/ci/run-build.sh linux "${{ matrix.arch }}" "${{ fromJSON(needs.plan.outputs.linux_local)[matrix.arch] }}"
       - if: env.PAYLOAD_RUN == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -142,11 +150,18 @@ jobs:
           path: riseonly-desktop/dist/linux/
           retention-days: 30
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-linux-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
 
   windows:
     needs: [plan, linux]
     if: always() && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true' && needs.linux.result != 'failure' && needs.linux.result != 'cancelled'
-    runs-on: [self-hosted, linux, x64, riseonly-desktop-windows]
+    runs-on: ${{ fromJSON(needs.plan.outputs.windows_runner) }}
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -181,7 +196,7 @@ jobs:
           path: riseonly-tools
           persist-credentials: false
       - name: no files of an earlier run, the vendored sources stay so nothing compiles again
-        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
       - if: env.PAYLOAD_RUN != ''
         name: the build of this tree from an earlier release
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -200,7 +215,7 @@ jobs:
         run: |
           rm -rf riseonly-desktop/dist
           (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
-          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
+          bash riseonly-desktop/scripts/ci/run-build.sh windows "${{ matrix.arch }}" "${{ needs.plan.outputs.windows_local }}"
       - if: env.PAYLOAD_RUN == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -214,6 +229,13 @@ jobs:
           path: riseonly-desktop/dist/windows/
           retention-days: 30
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-windows-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
 
   macos:
     needs: plan
@@ -257,7 +279,7 @@ jobs:
           persist-credentials: false
       - if: env.MACOS_LOCAL == 'true'
         name: no files of an earlier run on the team Mac
-        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
       - if: env.PAYLOAD_RUN != ''
         name: the build of this tree from an earlier release
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -325,6 +347,13 @@ jobs:
           path: riseonly-desktop/dist/macos/
           retention-days: 30
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-macos-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
 
   publish:
     needs: [plan, linux, windows, macos]

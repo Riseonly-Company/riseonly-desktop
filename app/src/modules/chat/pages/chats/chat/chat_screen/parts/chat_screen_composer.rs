@@ -8,7 +8,7 @@ use rise_i18n::tr;
 use rise_platform::haptics::selection_changed;
 use rise_theme::AppTheme;
 use rise_theme::theme::theme_store::ThemeStore;
-use rise_ui::input_ui::input_actions::MoveUp;
+use rise_ui::input_ui::input_actions::{MoveDown, MoveUp};
 use rise_ui::keyboard_dismiss::KeyboardDismissModifiers;
 use rise_ui::liquid_glass_button::{LiquidGlassButton, LiquidGlassButtonShape};
 use rise_ui::native_confirm_alert::{NativeConfirmAlert, NativeConfirmAlertAction};
@@ -1411,7 +1411,11 @@ impl ChatScreen {
                 });
             })
             .on_paste(move |window, cx| Self::handle_composer_paste(&paste_screen, window, cx))
-            .on_send(Self::act(this.clone(), |screen, window, cx| screen.handle_send_button(window, cx)))
+            .on_send(Self::act(this.clone(), |screen, window, cx| {
+                if !screen.confirm_inline_highlight(window, cx) {
+                    screen.handle_send_button(window, cx);
+                }
+            }))
             .on_cancel(Self::act(this.clone(), |screen, window, cx| {
                 let _ = screen.handle_escape(window, cx);
             }));
@@ -1426,8 +1430,18 @@ impl ChatScreen {
                     .capture_action({
                         let this = this.clone();
                         move |_: &MoveUp, window: &mut Window, cx: &mut App| {
-                            let handled = this.update(cx, |screen, cx| screen.edit_last_own_message(window, cx)).unwrap_or(false);
+                            let handled = this
+                                .update(cx, |screen, cx| screen.move_inline_highlight(-1, cx) || screen.edit_last_own_message(window, cx))
+                                .unwrap_or(false);
                             if handled {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
+                    .capture_action({
+                        let this = this.clone();
+                        move |_: &MoveDown, _: &mut Window, cx: &mut App| {
+                            if this.update(cx, |screen, cx| screen.move_inline_highlight(1, cx)).unwrap_or(false) {
                                 cx.stop_propagation();
                             }
                         }

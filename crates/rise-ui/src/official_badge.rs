@@ -1,6 +1,8 @@
-use gpui::{App, Hsla, IntoElement, Pixels, RenderOnce, Rgba, Styled, Window, div, px};
+use gpui::{App, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, Rgba, Styled, Window, div, px};
+use rise_i18n::tr;
 
 use crate::icon_ui::IconUi;
+use crate::swiftui::tooltip_label::TooltipLabelModifiers;
 
 const OFFICIAL_BADGE_SYMBOL: &str = "checkmark.seal.fill";
 
@@ -44,9 +46,11 @@ impl OfficialBadge {
 
 impl RenderOnce for OfficialBadge {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        match IconUi::sized(OFFICIAL_BADGE_SYMBOL, self.size, self.color, true) {
-            Some(seal) => seal.into_any_element(),
-            None => div().size(self.size).into_any_element(),
-        }
+        div()
+            .id("official-badge")
+            .flex_none()
+            .size(self.size)
+            .tooltip_label(tr("desktop_badge_verified_hint"))
+            .children(IconUi::sized(OFFICIAL_BADGE_SYMBOL, self.size, self.color, true))
     }
 }

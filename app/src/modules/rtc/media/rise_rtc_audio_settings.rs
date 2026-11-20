@@ -1,32 +1,36 @@
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, BoxShadow, Context, Entity, FocusHandle, FontWeight, Global, Hsla, IntoElement, KeyDownEvent,
-    RenderOnce, SharedString, Subscription, Task, WeakEntity, Window, black, container_query, point, white,
+    AnyElement, App, AppContext, BoxShadow, Context, ElementId, Entity, FocusHandle, FontWeight, Global, Hsla,
+    IntoElement, KeyDownEvent, RenderOnce, SharedString, Subscription, Task, WeakEntity, Window, black, container_query,
+    point, white,
 };
-use rise_canon::RiseLimits;
+use rise_canon::{RiseLimits, RisePrivacyAudience, RisePrivacyRule};
 use rise_canon::rise_response::user::GetCallAudioSettings;
 use rise_engine::CancellationError;
 use rise_i18n::tr;
 use rise_media::rtc_media::{
     self, AudioDevice, AudioProcessingOptions, AudioProcessingSettings, MediaIntent, MicrophoneTestState, RtcUnavailable,
-    SENSITIVITY_EPSILON, gate_engaged, input_meter_level, is_locally_speaking, perform,
+    INPUT_GAIN_DEFAULT, SENSITIVITY_EPSILON, gate_engaged, input_meter_level, is_locally_speaking, normalize_input_gain,
+    perform,
 };
 use rise_platform::HostOs;
 use rise_platform::user_defaults::UserDefaults;
 use rise_platform::user_defaults_keys::{
-    DESKTOP_RTC_AUDIO_INPUT_DEVICE, DESKTOP_RTC_AUDIO_OUTPUT_DEVICE, RTC_AUDIO_INPUT_SENSITIVITY,
-    RTC_AUDIO_SOFTWARE_NOISE_SUPPRESSION,
+    DESKTOP_RTC_AUDIO_INPUT_DEVICE, DESKTOP_RTC_AUDIO_OUTPUT_DEVICE, DESKTOP_RTC_STREAMER_MODE, RTC_AUDIO_INPUT_GAIN,
+    RTC_AUDIO_INPUT_SENSITIVITY, RTC_AUDIO_SOFTWARE_NOISE_SUPPRESSION,
 };
 use rise_theme::AppTheme;
 use rise_ui::IconUi;
+use rise_ui::bottom_sheet_ui::bottom_sheet_backdrop::backdrop_blur_layer;
 use rise_ui::button_ui::ButtonUi;
 use rise_ui::context_menu_ui::{ContextMenuItem, ContextMenuUi};
 use rise_ui::grouped_btns::GroupedCardMetrics;
 use rise_ui::liquid_chrome::LiquidChrome;
-use rise_ui::main_text::MainText;
+use rise_ui::main_text::{MainText, TextAlignT};
 use rise_ui::swiftui::prelude::*;
 use rise_ui::swiftui::scroll_view::scroll_view;
 use rise_ui::swiftui::slider::slider;
@@ -47,6 +51,11 @@ use crate::core::widgets::navigations::main_tab_bar_settings::RiseTabBarPlatform
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::rtc::media::rise_rtc_live_kit_audio_coordinator::RiseRTCLiveKitAudioCoordinator;
 use crate::modules::rtc::media::rise_rtc_live_kit_media_controller::RiseRTCLiveKitMediaController;
+use crate::modules::rtc::media::rise_rtc_media_presentation::RiseRTCMediaPresentation;
+use crate::modules::user::shared::privacy_mock::PrivacySettingsWireDTORules;
+use crate::modules::user::stores::user::user_actions::user_actions::UserActionsStore;
+use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
+use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
 use crate::modules::user::engine::core::rise_user_debug_trace::RiseUserDebugTrace;
 use crate::modules::user::engine::core::rise_user_rpc::RiseUserRPC;
 use crate::modules::user::engine::rise_user_domain::RiseUserActionExecutor;
@@ -55,6 +64,7 @@ use crate::modules::user::engine::rise_user_domain::RiseUserActionExecutor;
 pub struct RiseRTCAudioProcessingSettings {
     pub software_noise_suppression: bool,
     pub input_sensitivity: f64,
+    pub input_gain: f64,
 }
 
 impl RiseRTCAudioProcessingSettings {
@@ -72,6 +82,7 @@ impl From<RiseRTCAudioProcessingSettings> for AudioProcessingSettings {
         Self {
             software_noise_suppression: settings.software_noise_suppression,
             input_sensitivity: settings.input_sensitivity,
+            input_gain: settings.input_gain,
         }
     }
 }
@@ -79,12 +90,14 @@ impl From<RiseRTCAudioProcessingSettings> for AudioProcessingSettings {
 pub struct RiseRTCAudioSettingsStore {
     software_noise_suppression: bool,
     input_sensitivity: f64,
+    input_gain: f64,
     input_device: Option<String>,
     output_device: Option<String>,
     input_devices: Vec<AudioDevice>,
     output_devices: Vec<AudioDevice>,
     devices_generation: u64,
     devices_task: Option<Task<()>>,
+    streamer_mode: bool,
     defaults: UserDefaults,
 }
 
@@ -104,19 +117,39 @@ impl RiseRTCAudioSettingsStore {
         } else {
             defaults.double(RTC_AUDIO_INPUT_SENSITIVITY).max(0.0).min(1.0)
         };
+        let input_gain = Self::stored_input_gain(&defaults);
         let input_device = defaults.string(DESKTOP_RTC_AUDIO_INPUT_DEVICE).filter(|id| !id.is_empty());
         let output_device = defaults.string(DESKTOP_RTC_AUDIO_OUTPUT_DEVICE).filter(|id| !id.is_empty());
+        let streamer_mode = defaults.bool(DESKTOP_RTC_STREAMER_MODE);
         Self {
             software_noise_suppression,
             input_sensitivity,
+            input_gain,
             input_device,
             output_device,
             input_devices: Vec::new(),
             output_devices: Vec::new(),
             devices_generation: 0,
             devices_task: None,
+            streamer_mode,
             defaults,
         }
+    }
+
+    pub fn streamer_mode(&self) -> bool {
+        self.streamer_mode
+    }
+
+    pub fn set_streamer_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.streamer_mode == enabled {
+            return;
+        }
+        self.streamer_mode = enabled;
+        self.defaults.set(DESKTOP_RTC_STREAMER_MODE, enabled);
+        if enabled {
+            UserInteractionsStore::shared(cx).update(cx, |store, cx| store.ensure_privacy_loaded(cx));
+        }
+        cx.notify();
     }
 
     pub fn software_noise_suppression(&self) -> bool {
@@ -125,6 +158,32 @@ impl RiseRTCAudioSettingsStore {
 
     pub fn input_sensitivity(&self) -> f64 {
         self.input_sensitivity
+    }
+
+    pub fn input_gain(&self) -> f64 {
+        self.input_gain
+    }
+
+    fn stored_input_gain(defaults: &UserDefaults) -> f64 {
+        if defaults.object(RTC_AUDIO_INPUT_GAIN).is_none() {
+            return INPUT_GAIN_DEFAULT;
+        }
+        normalize_input_gain(defaults.double(RTC_AUDIO_INPUT_GAIN))
+    }
+
+    /// mic volume, 1 is the voice as captured and 2 doubles it
+    pub fn set_input_gain(&mut self, value: f64, cx: &mut Context<Self>) {
+        let normalized = normalize_input_gain(value);
+        if (self.input_gain - normalized).abs() <= 0.005 {
+            return;
+        }
+        self.input_gain = normalized;
+        self.defaults.set(RTC_AUDIO_INPUT_GAIN, normalized);
+        cx.notify();
+        if !RiseCallAudioOwnership::is_call_active() && !rtc_media::microphone_test_state().is_active() {
+            return;
+        }
+        let _ = self.apply_to_audio_engine();
     }
 
     pub fn input_device(&self) -> Option<&str> {
@@ -148,6 +207,7 @@ impl RiseRTCAudioSettingsStore {
         RiseRTCAudioProcessingSettings {
             software_noise_suppression: self.software_noise_suppression,
             input_sensitivity: self.input_sensitivity,
+            input_gain: self.input_gain,
         }
     }
 
@@ -544,6 +604,172 @@ impl RiseRTCInputNoiseGate {
     }
 }
 
+/// categories shown again during the current share, a new share hides them again
+#[derive(Default)]
+struct RiseRTCStreamerReveals(HashSet<RisePrivacyRule>);
+
+impl Global for RiseRTCStreamerReveals {}
+
+/// streamer mode, own profile data the privacy settings keep from others stays covered while the screen is shared
+pub enum RiseRTCStreamerMode {}
+
+impl RiseRTCStreamerMode {
+    const VEIL_BLUR: f32 = 18.0;
+    const VEIL_MIN_HEIGHT: f32 = 280.0;
+
+    pub fn is_live(cx: &mut App) -> bool {
+        if !RiseRTCAudioSettingsStore::shared(cx).read(cx).streamer_mode() {
+            return false;
+        }
+        let Some(user_id) =
+            AuthServicesStore::shared(cx).read(cx).active_account_id().filter(|id| !id.is_empty()).map(str::to_owned)
+        else {
+            return false;
+        };
+        RiseRTCMediaPresentation::shared(cx).read(cx).screen_share_track(&user_id).is_some()
+    }
+
+    /// own data under this rule is covered now, an unknown audience counts as private until the settings load
+    pub fn conceals(rule: RisePrivacyRule, cx: &mut App) -> bool {
+        if !Self::is_live(cx) || cx.try_global::<RiseRTCStreamerReveals>().is_some_and(|shown| shown.0.contains(&rule)) {
+            return false;
+        }
+        let optimistic = UserServicesStore::shared(cx).read(cx).optimistic_privacy().cloned();
+        let privacy = optimistic.or_else(|| UserActionsStore::shared(cx).read(cx).get_privacy_sai.data());
+        privacy.is_none_or(|privacy| privacy.audience(rule) != RisePrivacyAudience::All)
+    }
+
+    pub fn reveal(rule: RisePrivacyRule, cx: &mut App) {
+        cx.default_global::<RiseRTCStreamerReveals>().0.insert(rule);
+        cx.refresh_windows();
+    }
+
+    pub(crate) fn share_started(cx: &mut App) {
+        if let Some(shown) = cx.try_global::<RiseRTCStreamerReveals>()
+            && !shown.0.is_empty()
+        {
+            cx.set_global(RiseRTCStreamerReveals::default());
+        }
+        if RiseRTCAudioSettingsStore::shared(cx).read(cx).streamer_mode() {
+            UserInteractionsStore::shared(cx).update(cx, |store, cx| store.ensure_privacy_loaded(cx));
+            cx.refresh_windows();
+        }
+    }
+
+    pub(crate) fn share_ended(cx: &mut App) {
+        if RiseRTCAudioSettingsStore::shared(cx).read(cx).streamer_mode() {
+            cx.refresh_windows();
+        }
+    }
+
+    /// small show action for a covered row
+    pub fn reveal_button(id: impl Into<ElementId>, rule: RisePrivacyRule, theme: &AppTheme) -> AnyElement {
+        div()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                ButtonUi::new(id)
+                    .background_color(theme.primary._100)
+                    .height(30.0)
+                    .fit_content(true)
+                    .padding_horizontal(14.0)
+                    .on_press(move |_, cx| Self::reveal(rule, cx))
+                    .child(MainText::new(tr("desktop_streamer_mode_show")).px(13.0).font_weight(FontWeight::SEMIBOLD)),
+            )
+            .into_any_element()
+    }
+
+    pub fn veil(id: impl Into<ElementId>, rule: RisePrivacyRule, content: AnyElement, cx: &mut App) -> AnyElement {
+        if !Self::conceals(rule, cx) {
+            return content;
+        }
+        let id = id.into();
+        let theme = rise_ui::theme(cx).clone();
+        let blur = backdrop_blur_layer(Self::VEIL_BLUR, cx);
+        let dim = if blur.is_some() { 0.45 } else { 0.96 };
+        div()
+            .relative()
+            .size_full()
+            .min_h(px(Self::VEIL_MIN_HEIGHT))
+            .child(content)
+            .child(
+                div()
+                    .id(id.clone())
+                    .absolute()
+                    .inset_0()
+                    .block_mouse_except_scroll()
+                    .children(blur)
+                    .child(div().absolute().inset_0().bg(theme.bg._100.opacity(dim)))
+                    .child(
+                        vstack(12.0)
+                            .absolute()
+                            .top(px(48.0))
+                            .left_0()
+                            .right_0()
+                            .px(px(24.0))
+                            .items_center()
+                            .children(IconUi::sized("eye.slash", px(28.0), theme.text.secondary, false))
+                            .child(
+                                MainText::new(tr("desktop_streamer_mode_hidden"))
+                                    .px(15.0)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .tac(TextAlignT::Center),
+                            )
+                            .child(Self::reveal_button(ElementId::NamedChild(std::sync::Arc::new(id), "show".into()), rule, &theme)),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
+pub struct RiseRTCStreamSettingsScreen {
+    _settings: Subscription,
+}
+
+impl RiseRTCStreamSettingsScreen {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let store = RiseRTCAudioSettingsStore::shared(cx);
+        let settings = cx.observe(&store, |_, _, cx| cx.notify());
+        Self { _settings: settings }
+    }
+}
+
+impl Render for RiseRTCStreamSettingsScreen {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let navigation_store = env::<NavigationStoreKey>(cx);
+        let theme = rise_ui::theme(cx).clone();
+        let shell_insets = list_shell_safe_area_insets(cx);
+        let store = RiseRTCAudioSettingsStore::shared(cx);
+        let enabled = store.read(cx).streamer_mode();
+        let toggle = RiseRTCAudioSettingsContent::settings_toggle(
+            "rtc-streamer-mode",
+            tr("desktop_streamer_mode_title"),
+            tr("desktop_streamer_mode_description"),
+            enabled,
+            &theme,
+            move |enabled, _, cx| store.update(cx, |store, cx| store.set_streamer_mode(enabled, cx)),
+        );
+        let body = scroll_view("rtc-stream-settings-scroll")
+            .shows_indicators(false)
+            .list_shell_scroll_under_chrome(cx)
+            .bg(theme.bg._100)
+            .child(
+                div().w_full().pt(px(14.0)).pb(px(shell_insets.bottom.max(8.0) + 12.0)).child(
+                    div()
+                        .w_full()
+                        .px(px(GroupedCardMetrics::HORIZONTAL_PADDING))
+                        .child(GroupedCardMetrics::SHAPE.round(vstack(0.0).w_full().bg(theme.bg._200).child(toggle)))
+                        .frame_max_width(Alignment::Leading),
+                ),
+            );
+        SettingsWrapperUi::new(tr("desktop_settings_streams_title"), move |_, cx| {
+            if let Some(navigation_store) = navigation_store.as_ref() {
+                navigation_store.update(cx, |navigation_store, cx| navigation_store.pop(cx));
+            }
+        })
+        .content(body)
+    }
+}
+
 pub struct RiseRTCAudioSettingsScreen {
     _settings: Subscription,
 }
@@ -691,11 +917,23 @@ impl RenderOnce for RiseRTCAudioSettingsContent {
                 ),
             )
             .child(RiseRTCAppVolumeCard {
+                id: "rtc-input-gain",
+                title: tr("rtc_input_gain"),
+                description: tr("rtc_input_gain_description"),
+                read: || RiseRTCAudioSettingsStore::stored_input_gain(&UserDefaults::standard()) as f32,
+                write: |value, cx| {
+                    RiseRTCAudioSettingsStore::shared(cx).update(cx, |store, cx| store.set_input_gain(f64::from(value), cx));
+                },
+                max: rtc_media::INPUT_GAIN_MAX as f32,
+                theme: theme.clone(),
+            })
+            .child(RiseRTCAppVolumeCard {
                 id: "rtc-app-volume",
                 title: tr("rtc_app_volume_title"),
                 description: tr("desktop_rtc_app_volume_description"),
                 read: RiseCallAppVolume::level,
                 write: |value, _| RiseCallAppVolume::set_level(value),
+                max: 1.0,
                 theme: theme.clone(),
             })
             .child(RiseRTCAppVolumeCard {
@@ -704,6 +942,7 @@ impl RenderOnce for RiseRTCAudioSettingsContent {
                 description: tr("desktop_rtc_music_volume_description"),
                 read: MusicOutputVolume::level,
                 write: MusicOutputVolume::set_level,
+                max: 1.0,
                 theme: theme.clone(),
             })
             .child(
@@ -899,6 +1138,7 @@ struct RiseRTCAppVolumeCard {
     description: String,
     read: fn() -> f32,
     write: fn(f32, &mut App),
+    max: f32,
     theme: AppTheme,
 }
 
@@ -942,7 +1182,7 @@ impl RenderOnce for RiseRTCAppVolumeCard {
                             .child(spacer_min_w(8.0))
                             .child(
                                 div().flex_none().child(
-                                    MainText::new(RiseFormat::percent(current))
+                                    MainText::new(format!("{}%", (current * 100.0).round() as i64))
                                         .px(12.0)
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .color(theme.primary._100),
@@ -961,7 +1201,7 @@ impl RenderOnce for RiseRTCAppVolumeCard {
                                     cx.notify();
                                 },
                             ),
-                            0.0..=1.0,
+                            0.0..=f64::from(self.max),
                         )
                         .tint(theme.primary._100),
                     ),

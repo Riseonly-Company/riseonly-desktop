@@ -783,6 +783,13 @@ impl RTCInteractionsStore {
         self.actions.update(cx, |actions, cx| actions.set_camera(enabled, position, cx))
     }
 
+    pub fn set_stream_watch(&mut self, target_user_id: String, watching: bool, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
+        if self.sandbox_owns_active_call(cx) || self.sandbox_owns_active_room(cx) {
+            return Task::ready(Ok(()));
+        }
+        self.actions.update(cx, |actions, cx| actions.set_stream_watch(target_user_id, watching, cx))
+    }
+
     pub fn set_screen_share(
         &mut self,
         enabled: bool,
@@ -892,9 +899,52 @@ impl RTCInteractionsStore {
             Ok(ids) => ids,
             Err(error) => return Task::ready(Err(error.into())),
         };
-        self.actions.update(cx, |actions, cx| {
-            actions.start_direct_call(callee_id, chat_id, media_mode, None, cx)
+        self.after_leaving_voice_room(cx, move |store, cx| {
+            store.actions.update(cx, |actions, cx| actions.start_direct_call(callee_id, chat_id, media_mode, None, cx))
         })
+    }
+
+    /// one voice at a time like discord, a call in dms takes this account out of the voice chat it sits in
+    /// the room is left on the server first so nobody sees the person in both places
+    fn after_leaving_voice_room<T: 'static>(
+        &mut self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) -> Task<anyhow::Result<T>> + 'static,
+    ) -> Task<anyhow::Result<T>> {
+        let leave = self.leave_voice_room_for_call(cx);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            leave.await;
+            this.update(cx, then)?.await
+        })
+    }
+
+    fn leave_voice_room_for_call(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        if self.sandbox_owns_active_room(cx) {
+            return Task::ready(());
+        }
+        let Some(room_id) = self
+            .service
+            .read(cx)
+            .active_room(cx)
+            .filter(|room| room.config.mode != RiseRTCRoomMode::DirectCall)
+            .map(|room| room.config.room_id.clone())
+        else {
+            return Task::ready(());
+        };
+        let presented = self
+            .service
+            .read(cx)
+            .room_presentation_target()
+            .filter(|target| target.room_id().as_deref() == Some(room_id.as_str()))
+            .cloned();
+        if let Some(target) = presented {
+            RiseRTCNavigationGate::mark_self_in_voice_channel(&target, false, cx);
+            self.service.update(cx, |service, cx| {
+                service.dismiss_room_presentation(cx);
+                cx.notify();
+            });
+        }
+        self.leave_room_expected_room_id(&room_id, cx)
     }
 
     pub fn request_system_outgoing_call(
@@ -915,8 +965,10 @@ impl RTCInteractionsStore {
             Ok(ids) => ids,
             Err(error) => return Task::ready(Err(error.into())),
         };
-        self.actions.update(cx, |actions, cx| {
-            actions.request_system_outgoing_call_action(callee_id, chat_id, display_name, avatar_url, has_video, cx)
+        self.after_leaving_voice_room(cx, move |store, cx| {
+            store.actions.update(cx, |actions, cx| {
+                actions.request_system_outgoing_call_action(callee_id, chat_id, display_name, avatar_url, has_video, cx)
+            })
         })
     }
 
@@ -949,10 +1001,10 @@ impl RTCInteractionsStore {
             Ok(server_call_id) => server_call_id,
             Err(error) => return Task::ready(Err(error.into())),
         };
-        let answer = self.actions.update(cx, |actions, cx| {
-            actions.request_system_call_answer_action(server_call_id, cx)
-        });
-        cx.spawn(async move |_: WeakEntity<Self>, _: &mut AsyncApp| Ok(answer.await))
+        self.after_leaving_voice_room(cx, move |store, cx| {
+            let answer = store.actions.update(cx, |actions, cx| actions.request_system_call_answer_action(server_call_id, cx));
+            cx.spawn(async move |_: WeakEntity<Self>, _: &mut AsyncApp| Ok(answer.await))
+        })
     }
 
     pub fn request_system_call_muted_call_uuid(
@@ -998,8 +1050,8 @@ impl RTCInteractionsStore {
             Ok(ids) => ids,
             Err(error) => return Task::ready(Err(error.into())),
         };
-        self.actions.update(cx, |actions, cx| {
-            actions.answer_call(call_id, display_name, installation_id, cx)
+        self.after_leaving_voice_room(cx, move |store, cx| {
+            store.actions.update(cx, |actions, cx| actions.answer_call(call_id, display_name, installation_id, cx))
         })
     }
 

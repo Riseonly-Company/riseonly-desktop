@@ -74,6 +74,8 @@ use crate::modules::bot::stores::bot::bot_interactions::bot_interactions::BotInt
 use crate::modules::bot::stores::bot::bot_services::bot_services::BotServicesStore;
 use crate::modules::chat::components::chat::chat_logo::ChatLogo;
 use crate::modules::chat::components::chat::chat_title_row::ChatTitleRow;
+use crate::core::ui::premium_badge::BadgeInfoPrompt;
+use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_media_grid_prefs::ChatProfileMediaGridPrefs;
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_tab::{ChatProfileTab, ChatProfileTabExt};
 use crate::modules::chat::components::tabs::chat_profile_tabs::chat_profile_tabs::{
@@ -119,6 +121,7 @@ use crate::modules::user::stores::user::user_actions::user_contact_wire_types::S
 use crate::modules::user::stores::user::user_actions::user_wire_types::{
     ProfileViewerPrivacy, UserGetProfileByTagGatewayDTOExt,
 };
+use crate::modules::user::components::profile_top::profile_top::BANNER_HEIGHT as PROFILE_BANNER_HEIGHT;
 use crate::modules::user::components::user_block_scope_dialog::UserBlockAndReport;
 use crate::modules::user::stores::user::user_interactions::user_interactions::UserInteractionsStore;
 use crate::modules::user::stores::user::user_services::user_services::UserServicesStore;
@@ -1395,19 +1398,9 @@ impl ChatProfileBody {
         ChatProfilePeerBanner::picture(Some(&bot.banner_url))
     }
 
-    /// a person header carries their banner and avatar frame, a bot carries its banner
-    /// groups and channels have neither
     fn header(self: &Rc<Self>, chat: &ChatInfo, theme: &AppTheme, window: &mut Window, cx: &mut App) -> AnyElement {
         let peer_id = self.gifts_peer_user_id.clone();
         let cover = self.header_cover(chat, peer_id.as_deref(), cx);
-        let lift = if cover.is_some() { ChatProfilePeerBanner::PICTURE_LIFT } else { 0.0 };
-
-        let now = RiseClock::monotonic();
-        let lift_state = window.use_keyed_state(child_id(&self.id, "header-lift"), cx, move |_, _| Animated::new(lift));
-        let lifted = lift_state.update(cx, |animated, cx| {
-            animated.set_in(lift, ease_out(HEADER_LIFT_ANIMATION_DURATION), now, cx);
-            animated.frame_value(now, window)
-        });
 
         let topic_title = self.topic_title(cx);
         let name_missing = topic_title.is_none() && Self::chat_name_missing(chat);
@@ -1427,10 +1420,19 @@ impl ChatProfileBody {
                         .title_px(23.0)
                         .fav_px(23.0)
                         .icon_size(15.0)
-                        .font_weight(FontWeight::BOLD),
+                        .font_weight(FontWeight::BOLD)
+                        .explains_badges(true),
                 )
                 .children(if chat.is_verified {
-                    IconUi::sized("checkmark.seal.fill", verified_side, theme.primary._100, true)
+                    IconUi::sized("checkmark.seal.fill", verified_side, theme.primary._100, true).map(|seal| {
+                        div()
+                            .id("chat-profile-verified-seal")
+                            .flex_none()
+                            .cursor_pointer()
+                            .tooltip_label(tr("desktop_badge_verified_hint"))
+                            .on_click(|_: &gpui::ClickEvent, window, cx| BadgeInfoPrompt::official(window, cx))
+                            .child(seal)
+                    })
                 } else {
                     None
                 })
@@ -1444,27 +1446,11 @@ impl ChatProfileBody {
             .tac(TextAlignT::Center)
             .color(if is_peer_online { theme.semantic.success_100 } else { theme.text.secondary });
 
-        let banner = (peer_id.is_some() || cover.is_some()).then(|| {
-            div().absolute().top_0().left_0().right_0().child(ChatProfilePeerBanner::new(
-                child_id(&self.id, "peer-banner"),
-                peer_id.clone(),
-                cover.clone(),
-                HEADER_TOP_PADDING,
-                lift + HEADER_AVATAR_SIZE / 2.0,
-            ))
-        });
-
-        div()
-            .relative()
-            .w_full()
-            .children(banner)
-            .child(
-                vstack(HEADER_AVATAR_SPACING)
+        let column = vstack(HEADER_AVATAR_SPACING)
                     .w_full()
                     .items_center()
                     .px(px(24.0))
-                    .pt(px(lifted))
-                    .child(self.chat_profile_avatar(chat, peer_id, cx))
+                    .child(self.chat_profile_avatar(chat, peer_id.clone(), cx))
                     .child(if name_missing {
                         vstack(3.0)
                             .items_center()
@@ -1486,9 +1472,16 @@ impl ChatProfileBody {
                             )
                     } else {
                         vstack(3.0).w_full().min_w_0().items_center().child(title_row).child(subtitle)
-                    }),
-            )
-            .into_any_element()
+                    });
+
+        ChatProfileHeaderLift {
+            id: child_id(&self.id, "header-lift"),
+            banner_id: child_id(&self.id, "peer-banner"),
+            peer_id,
+            cover,
+            column: column.into_any_element(),
+        }
+        .into_any_element()
     }
 
     fn chat_name_missing(chat: &ChatInfo) -> bool {
@@ -2320,6 +2313,36 @@ impl ChatProfileChromeBackdropPolicy {
 
     pub fn opacity(scrolled: f32) -> f32 {
         (scrolled / Self::FADE_IN_DISTANCE).clamp(0.0, 1.0)
+    }
+}
+
+#[derive(IntoElement)]
+struct ChatProfileHeaderLift {
+    id: ElementId,
+    banner_id: ElementId,
+    peer_id: Option<String>,
+    cover: Option<String>,
+    column: AnyElement,
+}
+
+impl RenderOnce for ChatProfileHeaderLift {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let reach = list_shell_floating_top_inset(cx).max(0.0) + HEADER_TOP_PADDING;
+        let lift = (PROFILE_BANNER_HEIGHT - reach - HEADER_AVATAR_SIZE / 2.0).max(ChatProfilePeerBanner::PICTURE_LIFT);
+        let now = RiseClock::monotonic();
+        let lift_state = window.use_keyed_state(self.id, cx, move |_, _| Animated::new(lift));
+        let lifted = lift_state.update(cx, |animated, cx| {
+            animated.set_in(lift, ease_out(HEADER_LIFT_ANIMATION_DURATION), now, cx);
+            animated.frame_value(now, window)
+        });
+        let banner = div().absolute().top_0().left_0().right_0().child(ChatProfilePeerBanner::new(
+            self.banner_id,
+            self.peer_id,
+            self.cover,
+            HEADER_TOP_PADDING,
+            lift + HEADER_AVATAR_SIZE / 2.0,
+        ));
+        div().relative().w_full().child(banner).child(div().w_full().pt(px(lifted)).child(self.column))
     }
 }
 

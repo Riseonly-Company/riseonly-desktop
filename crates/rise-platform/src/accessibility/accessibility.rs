@@ -21,6 +21,11 @@ pub const fn unavailable_by_default(host: HostOs) -> AccessibilityUnavailable {
     AccessibilityUnavailable::BranchNotWritten(host)
 }
 
+/// true where the system reduce motion switch also stops stickers, gifs and animated emoji
+pub const fn reduce_motion_stops_content_playback(host: HostOs) -> bool {
+    matches!(host, HostOs::MacOs)
+}
+
 /// where an os layer delivers each reduce transparency value it sees
 /// called on a system thread never main, and may repeat the last value
 pub type ReduceTransparencySink = Box<dyn Fn(bool) + Send + Sync>;

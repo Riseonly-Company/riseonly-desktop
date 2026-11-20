@@ -308,7 +308,7 @@ impl RiseonlyApp {
             cx,
         );
 
-        let is_launch_splash_presented = RiseLaunchPreferences::shared(cx).read(cx).animation_enabled();
+        let is_launch_splash_presented = RiseLaunchPreferences::shared(cx).read(cx).plays_at_launch();
         let scene = cx.new(|_| Self { is_launch_splash_presented });
         cx.set_global(RiseonlyAppScene(scene));
         RiseSystemTimeZoneBoundary::install(cx);

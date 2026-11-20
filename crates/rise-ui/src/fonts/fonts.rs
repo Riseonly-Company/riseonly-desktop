@@ -107,13 +107,15 @@ pub fn load_bundled_fonts(cx: &App) -> FontLoad {
     let mut bytes: Vec<Cow<'static, [u8]>> =
         Vec::with_capacity(BUNDLED_FACES.len() + BUNDLED_ITALIC_FACES.len());
 
-    for face in BUNDLED_FACES.iter().chain(BUNDLED_ITALIC_FACES.iter()) {
-        match source.load(face.asset_path) {
+    let emoji = rise_platform::font_fallback::bundled_emoji_face(rise_platform::HostOs::current());
+    let paths = BUNDLED_FACES.iter().chain(BUNDLED_ITALIC_FACES.iter()).map(|face| face.asset_path).chain(emoji);
+    for asset_path in paths {
+        match source.load(asset_path) {
             Ok(Some(data)) if !data.is_empty() => {
                 bytes.push(data);
-                report.loaded.push(face.asset_path);
+                report.loaded.push(asset_path);
             }
-            _ => report.missing.push(face.asset_path),
+            _ => report.missing.push(asset_path),
         }
     }
 

@@ -9,7 +9,7 @@ use std::time::Duration;
 use futures::channel::oneshot;
 use gpui::{
     App, BoxShadow, Entity, FocusHandle, FontWeight, Hsla, KeyDownEvent, Pixels, Point, Rgba, SharedString, Size,
-    Subscription, Task, Window, anchored, black, container_query, deferred, point, white,
+    Subscription, Task, Window, anchored, black, container_query, deferred, point, relative, white,
 };
 use rise_canon::{RiseGuideAnchor, RiseLimits};
 use rise_core::foundation::foundation_date::RiseClock;
@@ -2605,6 +2605,7 @@ impl ChatsActions {
         div()
             .relative()
             .w(px(228.0))
+            .max_w(relative(1.0))
             .h(px(PageHeaderMetrics::TOOLBAR_BUTTON_SIZE))
             .child(status)
             .children(forum)
@@ -4906,7 +4907,8 @@ impl RenderOnce for ChatsNetworkStatusTitle {
                         .child(
                             PremiumBadge::new()
                                 .emoji(title_state.badge_emoji.clone())
-                                .size(ChatsNetworkStatusTitleState::BADGE_SIZE),
+                                .size(ChatsNetworkStatusTitleState::BADGE_SIZE)
+                                .shows_hint(false),
                         )
                         .on_press(move |window, cx| {
                             let frame = tap_anchor

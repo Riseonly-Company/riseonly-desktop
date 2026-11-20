@@ -3,9 +3,13 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use rise_core::foundation::foundation_text::trimming_whitespaces_and_newlines;
+use rise_i18n::tr;
+use gpui::{PromptButton, PromptLevel};
+use crate::modules::user::stores::subscription::premium_gift_store::PremiumGiftStore;
 use rise_ui::main_text::{MainText, TextAlignT};
 use rise_ui::official_badge::OfficialBadge;
 use rise_ui::swiftui::lifecycle::use_task;
+use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 
 use crate::core::ui::custom_emoji_glyph::{CustomEmojiGlyph, CustomEmojiGlyphMetrics};
 use crate::core::ui::custom_emoji_resource_warmup::CustomEmojiResourceWarmup;
@@ -60,6 +64,45 @@ impl PremiumBadgeMetrics {
     pub const MAXIMUM_ASPECT: f32 = 1.6;
 }
 
+/// centered explanation of a verification or premium badge, opened by a click on someone's badge
+pub enum BadgeInfoPrompt {}
+
+impl BadgeInfoPrompt {
+    pub fn official(window: &mut Window, cx: &mut App) {
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &tr("verified_promo_badge"),
+            Some(tr("desktop_badge_verified_apply_hint").as_str()),
+            &[PromptButton::ok(tr("desktop_badge_verified_apply")), PromptButton::cancel(tr("ok"))],
+            cx,
+        );
+        cx.spawn(async move |cx| {
+            if matches!(answer.await, Ok(0)) {
+                cx.update(|cx| cx.open_url("https://riseonly.net/verification"));
+            }
+        })
+        .detach();
+    }
+
+    pub fn premium(window: &mut Window, cx: &mut App) {
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &tr("premium_badge_pack_title"),
+            Some(tr("desktop_badge_premium_hint").as_str()),
+            &[PromptButton::ok(tr("premium_upsell_cta")), PromptButton::cancel(tr("ok"))],
+            cx,
+        );
+        cx.spawn(async move |cx| {
+            if matches!(answer.await, Ok(0)) {
+                cx.update(|cx| {
+                    PremiumGiftStore::shared(cx).update(cx, |store, cx| store.present_for_self(cx));
+                });
+            }
+        })
+        .detach();
+    }
+}
+
 /// premium marker next to a user name
 /// subscribers may swap the default mark for a unicode grapheme or a custom emoji as ce:sticker_item_id
 /// same prefix as reactions unknown or unresolvable ones fall back to the default
@@ -69,6 +112,7 @@ pub struct PremiumBadge {
     pub emoji: Option<SharedString>,
     pub size: f32,
     pub animated: bool,
+    pub shows_hint: bool,
 }
 
 impl Default for PremiumBadge {
@@ -78,6 +122,7 @@ impl Default for PremiumBadge {
             emoji: None,
             size: 16.0,
             animated: true,
+            shows_hint: true,
         }
     }
 }
@@ -104,6 +149,11 @@ impl PremiumBadge {
 
     pub fn animated(mut self, animated: bool) -> Self {
         self.animated = animated;
+        self
+    }
+
+    pub fn shows_hint(mut self, shows_hint: bool) -> Self {
+        self.shows_hint = shows_hint;
         self
     }
 
@@ -178,6 +228,7 @@ impl RenderOnce for PremiumBadge {
             .flex_none()
             .flex()
             .items_center()
+            .when(self.shows_hint, |badge| badge.tooltip_label(tr("desktop_badge_premium_hint")))
             .child(content)
     }
 }

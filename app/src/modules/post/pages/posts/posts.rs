@@ -7,9 +7,9 @@ use futures::channel::mpsc;
 use futures::future::{FutureExt, LocalBoxFuture};
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, AsyncApp, AsyncWindowContext, Context, Entity, ListAlignment, ListOffset, ListScrollEvent,
-    KeystrokeEvent, ListState, RenderOnce, ScrollWheelEvent, SharedString, StyleRefinement, Subscription, Task, TextRun, WeakEntity,
+    KeystrokeEvent, ListState, RenderOnce, SharedString, StyleRefinement, Subscription, Task, TextRun, WeakEntity,
     Window, div,
-    list, point, prelude::*, px,
+    list, prelude::*, px,
 };
 use rise_canon::RiseGuideAnchor;
 use rise_core::foundation::foundation_uuid::Uuid;
@@ -133,7 +133,6 @@ pub struct Posts {
     settled_drag_progress: f32,
     page_width: f32,
     center_width: Option<f32>,
-    center_mid_x: Option<f32>,
     hold_context_menu: Entity<HoldContextMenuPresenter>,
     hold_menu_locked: bool,
     feed_owner_id: Uuid,
@@ -212,7 +211,6 @@ impl Posts {
             settled_drag_progress: 0.0,
             page_width: 0.0,
             center_width: None,
-            center_mid_x: None,
             hold_menu_locked: hold_context_menu.read(cx).active_request().is_some(),
             hold_context_menu,
             feed_owner_id: Uuid::new_v4(),
@@ -429,8 +427,6 @@ impl Render for Posts {
 
         let appear_view = weak.clone();
         let center_view = weak.clone();
-        let wheel_view = weak.clone();
-        let feed_width = f32::from(theme.feed.content_width);
         ListShellUi::new()
             .center_slot(div().w(px(bar_width)).child(header))
             .center_slot_self_styled(true)
@@ -475,18 +471,15 @@ impl Render for Posts {
                         .flex()
                         .flex_row()
                         .justify_center()
-                        .child(div().absolute().top_0().left_0().size_full().on_scroll_wheel(
-                            move |event: &ScrollWheelEvent, window, cx| {
-                                let Some(mid_x) = wheel_view.upgrade().and_then(|view| view.read(cx).center_mid_x) else {
-                                    return;
-                                };
-                                if (f32::from(event.position.x) - mid_x).abs() <= feed_width / 2.0 {
-                                    return;
-                                }
-                                MainTabScrollToTop::forward_wheel(point(px(mid_x), event.position.y), event, window, cx);
-                            },
-                        ))
-                        .child(div().h_full().w_full().max_w(theme.feed.content_width).child(pager))
+                        .child(
+                            div()
+                                .size_full()
+                                .flex()
+                                .flex_row()
+                                .justify_center()
+                                .wheel_into_children()
+                                .child(div().h_full().w_full().max_w(theme.feed.content_width).child(pager)),
+                        )
                         .child(
                             div()
                                 .absolute()
@@ -497,9 +490,7 @@ impl Render for Posts {
                         )
                         .child(measure(("posts-center-width", entity_id), move |bounds, window, cx| {
                             let width = f32::from(bounds.size.width);
-                            let mid_x = f32::from(bounds.center().x);
                             let _ = center_view.update(cx, |view, cx| {
-                                view.center_mid_x = Some(mid_x);
                                 if view.center_width == Some(width) {
                                     return;
                                 }

@@ -721,6 +721,13 @@ impl Interactivity {
         self.hitbox_behavior = HitboxBehavior::BlockMouseExceptScroll;
     }
 
+    /// Riseonly 0129: a wheel over this element outside the area of its children scrolls what lies
+    /// at the nearest point of that area, so a width capped column scrolls from its margins too.
+    /// The imperative API equivalent to [`InteractiveElement::wheel_into_children`].
+    pub fn wheel_into_children(&mut self) {
+        self.wheel_into_children = true;
+    }
+
     fn has_pinch_listeners(&self) -> bool {
         !self.pinch_listeners.is_empty()
     }
@@ -1204,6 +1211,14 @@ pub trait InteractiveElement: Sized {
     /// See [`Hitbox::is_hovered`] for details.
     fn block_mouse_except_scroll(mut self) -> Self {
         self.interactivity().block_mouse_except_scroll();
+        self
+    }
+
+    /// Riseonly 0129: a wheel over this element outside the area of its children scrolls what lies
+    /// at the nearest point of that area, so a width capped column scrolls from its margins too.
+    /// The fluent API equivalent to [`Interactivity::wheel_into_children`].
+    fn wheel_into_children(mut self) -> Self {
+        self.interactivity().wheel_into_children();
         self
     }
 
@@ -1894,6 +1909,12 @@ impl Element for Div {
             scroll_handle.scroll_to_active_item();
         }
 
+        if self.interactivity.wheel_into_children {
+            self.interactivity.children_area = (child_min.x <= child_max.x
+                && child_min.y <= child_max.y)
+                .then(|| Bounds::from_corners(child_min, child_max));
+        }
+
         self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -2070,6 +2091,8 @@ pub struct Interactivity {
     pub(crate) tooltip_show_delay: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
     pub(crate) hitbox_behavior: HitboxBehavior,
+    pub(crate) wheel_into_children: bool,
+    pub(crate) children_area: Option<Bounds<Pixels>>,
     pub(crate) tab_index: Option<isize>,
     pub(crate) tab_group: bool,
     pub(crate) tab_stop: bool,
@@ -2266,8 +2289,14 @@ impl Interactivity {
                     window.with_content_mask(
                         style.overflow_mask(bounds, window.rem_size()),
                         |window| {
-                            let hitbox = if self.should_insert_hitbox(&style, window, cx) {
-                                Some(window.insert_hitbox(bounds, self.hitbox_behavior))
+                            let hitbox = if self.should_insert_hitbox(&style, window, cx)
+                                || self.wheel_into_children
+                            {
+                                let hitbox = window.insert_hitbox(bounds, self.hitbox_behavior);
+                                if let Some(area) = self.children_area.filter(|_| self.wheel_into_children) {
+                                    window.set_hitbox_wheel_area(&hitbox, area);
+                                }
+                                Some(hitbox)
                             } else {
                                 None
                             };

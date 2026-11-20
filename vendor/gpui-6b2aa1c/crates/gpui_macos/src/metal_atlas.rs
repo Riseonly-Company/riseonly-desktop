@@ -24,8 +24,16 @@ impl MetalAtlas {
         })))
     }
 
-    pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
-        self.0.lock().texture(id).metal_texture.clone()
+    /// None once the texture was freed while a frame drawn before still names it (Riseonly 0128).
+    pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> Option<metal::Texture> {
+        let lock = self.0.lock();
+        let textures = match id.kind {
+            AtlasTextureKind::Monochrome => &lock.monochrome_textures,
+            AtlasTextureKind::Polychrome => &lock.polychrome_textures,
+            AtlasTextureKind::Subpixel => return None,
+        };
+        let texture = textures.textures.get(id.index as usize)?.as_ref()?;
+        Some(texture.metal_texture.0.clone())
     }
 }
 
@@ -393,7 +401,7 @@ mod tests {
         let tile_a2 = insert_tile(&atlas, &key_a, small);
 
         // The texture must actually exist — this would panic before the fix.
-        let _texture = atlas.metal_texture(tile_a2.texture_id);
+        assert!(atlas.metal_texture(tile_a2.texture_id).is_some());
     }
 
     #[test]

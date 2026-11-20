@@ -405,6 +405,7 @@ impl GuideSandbox {
             updated_at_ms: now,
             lease_expires_at_ms: now + lease_ms,
             order_sequence: 1,
+            watching_user_id: String::new(),
             profile: Some(viewer),
         }];
         if let Some(answered_at_ms) = scene.answered_at_ms
@@ -427,6 +428,7 @@ impl GuideSandbox {
                 updated_at_ms: now,
                 lease_expires_at_ms: now + lease_ms,
                 order_sequence: 2,
+                watching_user_id: String::new(),
                 profile: Some(self.panda_profile()),
             });
         }

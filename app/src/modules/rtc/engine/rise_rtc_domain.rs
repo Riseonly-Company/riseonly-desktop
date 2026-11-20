@@ -1300,6 +1300,12 @@ impl RiseRTCDomain {
             .await;
     }
 
+    pub async fn set_stream_watch(&self, target_user_id: &str, watching: bool) -> anyhow::Result<()> {
+        let credentials = self.require_credentials().await?;
+        self.repository.set_stream_watch(&credentials, target_user_id, watching).await?;
+        Ok(())
+    }
+
     /// toggles screen share, include_device_audio defaults to false and quality to balanced
     pub async fn set_screen_share(
         &self,

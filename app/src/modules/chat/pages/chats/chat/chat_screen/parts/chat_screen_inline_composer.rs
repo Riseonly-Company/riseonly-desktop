@@ -278,6 +278,7 @@ impl ChatScreen {
             context: self.inline_composer_context.clone(),
             candidates: self.inline_composer_candidates(cx),
             roles: self.inline_composer_roles(cx),
+            highlighted: self.inline_composer_highlight,
             commands: self.inline_composer_commands(cx),
             results,
             is_loading: self.inline_composer_panel_loading(cx),
@@ -409,6 +410,7 @@ impl ChatScreen {
         if next == previous {
             return;
         }
+        self.inline_composer_highlight = None;
         let should_collapse = Self::inline_composer_mode_key(&previous) != Self::inline_composer_mode_key(&next);
 
         let chat_id = self.resolved_chat_id(cx);
@@ -681,6 +683,101 @@ impl ChatScreen {
         self.inline_composer_context = ChatComposerInlineContext::Inactive;
         self.inline_composer_expanded = false;
         self.inline_composer_interactive_height = None;
+        self.inline_composer_highlight = None;
         cx.notify();
+    }
+
+    fn inline_highlight_results_order(results: &BotInlineResultsPage) -> Vec<usize> {
+        let visual = (0..results.results.len()).filter(|&index| results.results[index].is_visual());
+        let compact = (0..results.results.len()).filter(|&index| !results.results[index].is_visual());
+        visual.chain(compact).collect()
+    }
+
+    fn inline_highlight_row_count(&self, cx: &mut App) -> usize {
+        let chat = self.resolved_chat(cx);
+        let peer_blocked = self.viewer_has_blocked_peer(&chat, cx) || self.peer_restricts_viewer(&chat, cx);
+        if !self.inline_composer_panel_visible(peer_blocked, cx) {
+            return 0;
+        }
+        match &self.inline_composer_context {
+            ChatComposerInlineContext::Candidates { .. } => {
+                self.inline_composer_roles(cx).len() + self.inline_composer_candidates(cx).len()
+            }
+            ChatComposerInlineContext::Topics { .. } => self.inline_composer_topics(cx).len(),
+            ChatComposerInlineContext::GroupCommands { .. } => self.inline_composer_group_commands(cx).len(),
+            ChatComposerInlineContext::Bot { query, .. } => {
+                if is_blank(query) {
+                    self.inline_composer_commands(cx).map_or(0, |commands| commands.commands.len())
+                } else if ChatComposerInlineContext::command_awaiting_argument(query).is_some() {
+                    0
+                } else {
+                    self.inline_composer_results(cx).results.len()
+                }
+            }
+            ChatComposerInlineContext::Inactive => 0,
+        }
+    }
+
+    pub(in super::super) fn move_inline_highlight(&mut self, step: isize, cx: &mut Context<Self>) -> bool {
+        let count = self.inline_highlight_row_count(cx);
+        if count == 0 {
+            return false;
+        }
+        let next = match self.inline_composer_highlight {
+            Some(current) => current.min(count - 1).saturating_add_signed(step).min(count - 1),
+            None => 0,
+        };
+        if self.inline_composer_highlight != Some(next) {
+            self.inline_composer_highlight = Some(next);
+            cx.notify();
+        }
+        true
+    }
+
+    pub(in super::super) fn confirm_inline_highlight(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.inline_composer_highlight else {
+            return false;
+        };
+        if index >= self.inline_highlight_row_count(cx) {
+            self.inline_composer_highlight = None;
+            return false;
+        }
+        match self.inline_composer_context.clone() {
+            ChatComposerInlineContext::Candidates { .. } => {
+                let roles = self.inline_composer_roles(cx);
+                if let Some(role) = roles.get(index).cloned() {
+                    self.select_inline_role(&role, window, cx);
+                } else if let Some(candidate) = self.inline_composer_candidates(cx).get(index - roles.len()).cloned() {
+                    self.select_inline_candidate(&candidate, window, cx);
+                }
+            }
+            ChatComposerInlineContext::Topics { .. } => {
+                if let Some(topic) = self.inline_composer_topics(cx).get(index).cloned() {
+                    self.select_inline_topic(&topic, window, cx);
+                }
+            }
+            ChatComposerInlineContext::GroupCommands { .. } => {
+                if let Some(item) = self.inline_composer_group_commands(cx).get(index).cloned() {
+                    self.select_inline_group_command(&item, window, cx);
+                }
+            }
+            ChatComposerInlineContext::Bot { query, .. } => {
+                if is_blank(&query) {
+                    let command = self.inline_composer_commands(cx).and_then(|commands| commands.commands.get(index).cloned());
+                    if let Some(command) = command {
+                        self.select_inline_command(&command, window, cx);
+                    }
+                } else {
+                    let results = self.inline_composer_results(cx);
+                    let order = Self::inline_highlight_results_order(&results);
+                    if let Some(result) = order.get(index).and_then(|position| results.results.get(*position)).cloned() {
+                        self.send_inline_result(&result, window, cx);
+                    }
+                }
+            }
+            ChatComposerInlineContext::Inactive => return false,
+        }
+        self.inline_composer_highlight = None;
+        true
     }
 }

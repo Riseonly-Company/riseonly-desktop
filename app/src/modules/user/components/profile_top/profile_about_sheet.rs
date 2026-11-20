@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use gpui::{AnyElement, App, Context, ElementId, Entity, FontWeight, Hsla, Subscription, Window};
-use rise_canon::RiseLimits;
+use gpui::{AnyElement, App, Context, ElementId, Entity, FontWeight, Hsla, MouseButton, Subscription, Window};
+use rise_canon::{RiseLimits, RisePrivacyRule};
 use rise_core::foundation::foundation_text::{trimming_whitespaces, trimming_whitespaces_and_newlines};
 use rise_i18n::tr;
 use rise_platform::pasteboard::UIPasteboard;
@@ -15,10 +15,14 @@ use rise_ui::main_text::MainText;
 use rise_ui::settings_icon_palette::SettingsIconPalette;
 use rise_ui::skeleton_ui::{SkeletonBlock, SkeletonShimmerExt};
 use rise_ui::swiftui::button_style::plain;
+use rise_ui::swiftui::tooltip_label::TooltipLabelModifiers;
 use rise_ui::swiftui::prelude::*;
 
 use crate::app::router::navigation_store::{NavigationStore, NavigationStoreKey, NavigationStoreSettlingPush};
 use crate::app::router::navigation_types::RootRoute;
+use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
+use crate::modules::rtc::media::rise_rtc_audio_settings::RiseRTCStreamerMode;
+use crate::core::lib::canon_format::RiseFormat;
 use crate::core::lib::canon_rules::RiseLimitsCanonRules;
 use crate::core::lib::profile_field_formatting::{BirthdayFormatting, PhoneNumberFormatting};
 use crate::core::widgets::notifier::notifier_store::Notifier;
@@ -41,6 +45,7 @@ pub struct ProfileAboutSheet {
 struct ProfileAboutSheetState {
     available_width: Option<f32>,
     description_expanded: bool,
+    phone_revealed: bool,
     _presentation_observation: Subscription,
 }
 
@@ -51,6 +56,7 @@ struct ProfileAboutSheetActions {
     achievements_user_id: Option<String>,
     nav_store: Option<Entity<NavigationStore>>,
     description_expanded: Binding<bool>,
+    phone_revealed: Binding<bool>,
 }
 
 impl ProfileAboutSheetActions {
@@ -128,21 +134,28 @@ impl ProfileAboutSheet {
         let appearance = resolved_appearance(cx);
         let system = |color: UIColor, opacity: f32| -> Hsla { color.resolved_color(appearance).opacity(opacity) };
         let mut rows = Vec::new();
-        let earned = self.earned_achievements(cx);
-        let overflow = earned.len().saturating_sub(Self::achievements_preview_limit());
+        let is_own = AuthServicesStore::shared(cx).read(cx).effective_user_id_for_wire().as_deref()
+            == Some(self.profile.id.as_str());
+        let veiled = |rule: RisePrivacyRule, cx: &mut App| is_own && RiseRTCStreamerMode::conceals(rule, cx);
 
-        let open = actions.clone();
-        let mut achievements = GroupedBtn::new("achievements", tr("profile_achievements_row"))
-            .icon("trophy.fill")
-            .icon_background(SettingsIconPalette::achievements())
-            .callback(move |window, cx| open.open_achievements(window, cx));
-        if overflow > 0 {
-            achievements = achievements.trailing(format!("+{overflow}"));
+        if veiled(RisePrivacyRule::Achievements, cx) {
+            rows.push(Self::veiled_row("achievements", "trophy.fill", SettingsIconPalette::achievements(), tr("profile_achievements_row"), RisePrivacyRule::Achievements, &theme));
+        } else {
+            let earned = self.earned_achievements(cx);
+            let overflow = earned.len().saturating_sub(Self::achievements_preview_limit());
+            let open = actions.clone();
+            let mut achievements = GroupedBtn::new("achievements", tr("profile_achievements_row"))
+                .icon("trophy.fill")
+                .icon_background(SettingsIconPalette::achievements())
+                .callback(move |window, cx| open.open_achievements(window, cx));
+            if overflow > 0 {
+                achievements = achievements.trailing(format!("+{overflow}"));
+            }
+            if let Some(slot) = self.achievements_slot(&earned, actions, available_width, cx) {
+                achievements = achievements.expanded_slot(slot);
+            }
+            rows.push(achievements);
         }
-        if let Some(slot) = self.achievements_slot(&earned, actions, available_width, cx) {
-            achievements = achievements.expanded_slot(slot);
-        }
-        rows.push(achievements);
 
         let tag = trimming_whitespaces_and_newlines(&self.profile.tag);
         if !tag.is_empty() {
@@ -186,11 +199,16 @@ impl ProfileAboutSheet {
             .map(trimming_whitespaces_and_newlines)
             .filter(|description| !description.is_empty())
         {
-            rows.push(
-                GroupedBtn::new("description", description.to_owned())
-                    .show_chevron(false)
-                    .content_slot(self.description_row(description, actions, &theme)),
-            );
+            if veiled(RisePrivacyRule::Description, cx) {
+                let background = UIColor::system_indigo().resolved_color(theme.appearance).opacity(0.85);
+                rows.push(Self::veiled_row("description", "text.alignleft", background, tr("profile_field_description"), RisePrivacyRule::Description, &theme));
+            } else {
+                rows.push(
+                    GroupedBtn::new("description", description.to_owned())
+                        .show_chevron(false)
+                        .content_slot(self.description_row(description, actions, &theme)),
+                );
+            }
         }
 
         if let Some((date, age)) = self
@@ -201,15 +219,20 @@ impl ProfileAboutSheet {
             .filter(|hb| !hb.is_empty())
             .and_then(BirthdayFormatting::parse)
         {
-            let mut birthday = GroupedBtn::new("birthday", date)
-                .icon("gift.fill")
-                .icon_background(UIColor::system_pink().resolved_color(theme.appearance).opacity(0.9))
-                .pretitle(tr("profile_field_birthday"))
-                .show_chevron(false);
-            if let Some(age) = age {
-                birthday = birthday.trailing(age);
+            let background = UIColor::system_pink().resolved_color(theme.appearance).opacity(0.9);
+            if veiled(RisePrivacyRule::Hb, cx) {
+                rows.push(Self::veiled_row("birthday", "gift.fill", background, tr("profile_field_birthday"), RisePrivacyRule::Hb, &theme));
+            } else {
+                let mut birthday = GroupedBtn::new("birthday", date)
+                    .icon("gift.fill")
+                    .icon_background(background)
+                    .pretitle(tr("profile_field_birthday"))
+                    .show_chevron(false);
+                if let Some(age) = age {
+                    birthday = birthday.trailing(age);
+                }
+                rows.push(birthday);
             }
-            rows.push(birthday);
         }
 
         if let Some(gender) = Self::localized_gender(self.profile.gender.as_deref()) {
@@ -230,16 +253,20 @@ impl ProfileAboutSheet {
             .map(trimming_whitespaces_and_newlines)
             .filter(|phone| !phone.is_empty())
         {
-            let formatted = PhoneNumberFormatting::format(phone);
-            let copied = formatted.clone();
-            rows.push(
-                GroupedBtn::new("phone", formatted)
-                    .icon("phone.fill")
-                    .icon_background(UIColor::system_green().resolved_color(theme.appearance).opacity(0.85))
-                    .pretitle(tr("profile_field_phone"))
-                    .show_chevron(false)
-                    .callback(move |_, cx| Self::copy(&copied, cx)),
-            );
+            if is_own {
+                rows.push(Self::own_phone_row(phone, &actions.phone_revealed, &theme, cx));
+            } else {
+                let formatted = PhoneNumberFormatting::format(phone);
+                let copied = formatted.clone();
+                rows.push(
+                    GroupedBtn::new("phone", formatted)
+                        .icon("phone.fill")
+                        .icon_background(UIColor::system_green().resolved_color(theme.appearance).opacity(0.85))
+                        .pretitle(tr("profile_field_phone"))
+                        .show_chevron(false)
+                        .callback(move |_, cx| Self::copy(&copied, cx)),
+                );
+            }
         }
 
         let languages: Vec<&str> = self
@@ -352,6 +379,59 @@ impl ProfileAboutSheet {
         }
     }
 
+    fn own_phone_row(phone: &str, revealed: &Binding<bool>, theme: &AppTheme, cx: &App) -> GroupedBtn {
+        let is_revealed = revealed.get(cx);
+        let formatted = PhoneNumberFormatting::format(phone);
+        let shown = if is_revealed { formatted.clone() } else { RiseFormat::masked_phone(phone) };
+        let label = if is_revealed { tr("contact_phone_hide_action") } else { tr("contact_phone_show_action") };
+        let toggle = revealed.clone();
+        let eye = div()
+            .id("profile-about-phone-eye")
+            .aria_label(label.clone())
+            .tooltip_label(label)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                plain("profile-about-phone-eye-button")
+                    .size(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .on_press(move |window, cx| {
+                        let shows = toggle.get(cx);
+                        toggle.set(!shows, window, cx);
+                    })
+                    .children(IconUi::sized(
+                        if is_revealed { "eye.slash" } else { "eye" },
+                        px(15.0),
+                        theme.text.secondary,
+                        false,
+                    )),
+            );
+        let row = GroupedBtn::new("phone", shown)
+            .icon("phone.fill")
+            .icon_background(UIColor::system_green().resolved_color(theme.appearance).opacity(0.85))
+            .pretitle(tr("profile_field_phone"))
+            .show_chevron(false)
+            .trailing_slot(eye);
+        if is_revealed { row.callback(move |_, cx| Self::copy(&formatted, cx)) } else { row }
+    }
+
+    fn veiled_row(
+        id: &'static str,
+        icon: &'static str,
+        icon_background: Hsla,
+        pretitle: String,
+        rule: RisePrivacyRule,
+        theme: &AppTheme,
+    ) -> GroupedBtn {
+        GroupedBtn::new(id, tr("desktop_streamer_mode_hidden"))
+            .icon(icon)
+            .icon_background(icon_background)
+            .pretitle(pretitle)
+            .show_chevron(false)
+            .trailing_slot(RiseRTCStreamerMode::reveal_button(gpui::SharedString::from(format!("profile-about-{id}-show")), rule, theme))
+    }
+
     fn copy(value: &str, cx: &mut App) {
         UIPasteboard::general().set_string(value, cx);
         Notifier::copied(cx);
@@ -367,6 +447,7 @@ impl RenderOnce for ProfileAboutSheet {
             ProfileAboutSheetState {
                 available_width: None,
                 description_expanded: false,
+                phone_revealed: false,
                 _presentation_observation: cx.observe(&presentation, move |_, _, cx| {
                     cx.notify();
                     App::notify(cx, host);
@@ -384,6 +465,11 @@ impl RenderOnce for ProfileAboutSheet {
                 state.clone(),
                 |state: &ProfileAboutSheetState| state.description_expanded,
                 |state: &mut ProfileAboutSheetState, expanded, _| state.description_expanded = expanded,
+            ),
+            phone_revealed: Binding::entity(
+                state.clone(),
+                |state: &ProfileAboutSheetState| state.phone_revealed,
+                |state: &mut ProfileAboutSheetState, revealed, _| state.phone_revealed = revealed,
             ),
         };
         let rows = self.rows(&actions, available_width, cx);

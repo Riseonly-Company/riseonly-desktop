@@ -96,10 +96,10 @@ impl SteppedSliderScale {
         ((next - previous).abs() > EPSILON).then_some(next)
     }
 
-    /// one arrow key press, a step toward direction (-1 or 1) snapped as a drag would be
+    /// one arrow key press, exactly one step toward direction (-1 or 1), breakpoints pull only a drag
     pub fn stepped(&self, previous: f64, direction: f64) -> Option<f64> {
         let step = if self.step > EPSILON { self.step } else { self.span() / 100.0 };
-        let next = self.snap(self.quantize(previous + direction * step));
+        let next = self.quantize(previous + direction * step);
         ((next - previous).abs() > EPSILON).then_some(next)
     }
 }

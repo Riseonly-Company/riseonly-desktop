@@ -21,7 +21,7 @@ use crate::core::lib::sai::modules::sai_ws::rise_event_payload::RiseEventPayload
 use crate::core::lib::sai::modules::sai_ws::sai_ws_pending_registry::SaiWsResponseError;
 use crate::core::lib::sai::modules::sai_ws::sai_ws_request_options::{SaiWsCachePreferredLayer, SaiWsDiskCachePolicy};
 use crate::core::lib::sai::modules::sai_ws::sai_ws_response_cache::SaiWsResponseCache;
-use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
+use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierSendOptions, NotifierType};
 use crate::modules::auth::stores::auth_services::auth_services::AuthServicesStore;
 use crate::modules::chat::stores::chats::chat_actions::chat_types::{
     ChatInfo, ChatJoinPreview, ChatPerm, ChatPermExt, ChatType, InviteLink, JoinLinkSheetPhase, JoinLinkSheetState,
@@ -681,7 +681,7 @@ impl ChatServicesStore {
     fn send_join_request_toast(title: String, r#type: NotifierType, cx: &mut App) {
         Notifier::send(
             title,
-            NotifierSendOptions { r#type, position: NotifierPosition::Bottom, ..NotifierSendOptions::default() },
+            NotifierSendOptions { r#type, is_notification: true, ..NotifierSendOptions::default() },
             cx,
         );
     }

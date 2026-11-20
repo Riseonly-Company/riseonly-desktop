@@ -310,6 +310,7 @@ fn voice_chain_is_software_on_every_desktop() {
         let on = AudioProcessingSettings {
             software_noise_suppression: true,
             input_sensitivity: 0.0,
+            input_gain: INPUT_GAIN_DEFAULT,
         }
         .options_for(host);
         assert!(on.highpass_filter);
@@ -654,4 +655,37 @@ fn a_screen_share_sound_follows_its_own_volume() {
     let mut out = [0.0f32; 1];
     mixer.mix_into(&mut out, &playout);
     assert_eq!(out, [1.0], "a muted voice keeps the stream at its doubled level");
+}
+
+#[test]
+fn mic_gain_doubles_quiet_speech_and_bends_loud_peaks() {
+    let mut quiet = vec![1_000i16, -2_000, 4_000];
+    apply_input_gain(&mut quiet, 2.0);
+    assert_eq!(quiet, vec![2_000, -4_000, 8_000]);
+
+    let mut loud = vec![30_000i16, -30_000];
+    apply_input_gain(&mut loud, 2.0);
+    assert!(loud[0] > 30_000 && loud[0] <= i16::MAX);
+    assert!(loud[1] < -30_000);
+
+    let mut silent = vec![12_345i16];
+    apply_input_gain(&mut silent, 0.0);
+    assert_eq!(silent, vec![0]);
+
+    let mut unity = vec![12_345i16];
+    apply_input_gain(&mut unity, 1.0);
+    assert_eq!(unity, vec![12_345]);
+    assert_eq!(normalize_input_gain(f64::NAN), INPUT_GAIN_DEFAULT);
+    assert_eq!(normalize_input_gain(5.0), INPUT_GAIN_MAX);
+}
+
+#[test]
+fn far_end_tap_hands_out_whole_mono_frames() {
+    let tap = FarEndTap::default();
+    tap.push_stereo(&vec![0.5f32; FarEndTap::FRAME_SAMPLES * 2 + 20]);
+    let frames = tap.take_frames();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].len(), FarEndTap::FRAME_SAMPLES);
+    assert_eq!(frames[0][0], (0.5 * GATE_FULL_SCALE) as i16);
+    assert!(tap.take_frames().is_empty());
 }

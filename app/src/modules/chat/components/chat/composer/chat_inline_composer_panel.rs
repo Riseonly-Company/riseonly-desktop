@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, Context, ElementId, Entity, FontWeight, Hsla, IntoElement, Pixels, Point, RenderOnce, Render, ScrollDelta,
-    ScrollHandle, ScrollWheelEvent, SharedString, UniformListScrollHandle, Window, black, uniform_list, white,
+    ScrollHandle, ScrollStrategy, ScrollWheelEvent, SharedString, UniformListScrollHandle, Window, black, uniform_list, white,
 };
 use rise_canon::RiseGuideAnchor;
 use rise_core::foundation::foundation_date::RiseClock;
@@ -162,6 +162,7 @@ pub struct ChatInlineComposerPanel {
     pub context: ChatComposerInlineContext,
     pub candidates: Vec<BotMentionCandidateModel>,
     pub roles: Vec<ChatRole>,
+    pub highlighted: Option<usize>,
     pub commands: Option<BotInlineCommandsModel>,
     pub results: BotInlineResultsPage,
     pub is_loading: bool,
@@ -277,6 +278,7 @@ impl ChatInlineComposerPanel {
             && self.context == other.context
             && self.candidates == other.candidates
             && self.roles == other.roles
+            && self.highlighted == other.highlighted
             && self.commands == other.commands
             && self.results == other.results
             && self.is_loading == other.is_loading
@@ -303,6 +305,7 @@ struct ChatInlineComposerPanelState {
     visible_height: Animated<f32>,
     animates_next_height: bool,
     last_trace: Option<String>,
+    scrolled_highlight: Option<usize>,
 }
 
 impl ChatInlineComposerPanelState {
@@ -317,6 +320,7 @@ impl ChatInlineComposerPanelState {
             visible_height: Animated::new(0.0),
             animates_next_height: false,
             last_trace: None,
+            scrolled_highlight: None,
         }
     }
 
@@ -500,10 +504,10 @@ impl ChatInlineComposerPanelPass {
         match &self.panel.context {
             ChatComposerInlineContext::Candidates { .. } => self.candidates_content(window, cx),
             ChatComposerInlineContext::Topics { .. } => self.topics_content(cx),
-            ChatComposerInlineContext::GroupCommands { .. } => self.group_commands_content(),
+            ChatComposerInlineContext::GroupCommands { .. } => self.group_commands_content(cx),
             ChatComposerInlineContext::Bot { query, .. } => {
                 if trimming_whitespaces_and_newlines(query).is_empty() {
-                    self.commands_content()
+                    self.commands_content(cx)
                 } else if let Some(command) = ChatComposerInlineContext::command_awaiting_argument(query) {
                     ChatInlinePanelState::new(
                         child_id(&self.panel.id, "command-ready"),
@@ -581,6 +585,9 @@ impl ChatInlineComposerPanelPass {
         let row_count = role_count + panel.candidates.len() + usize::from(panel.candidates_has_more);
         let rows = self.clone();
         let scroll_handle = self.state.read(cx).candidates_scroll_handle.clone();
+        if let Some(index) = self.takes_highlight(cx).filter(|index| *index < row_count) {
+            scroll_handle.scroll_to_item(index, ScrollStrategy::Nearest);
+        }
         let list = uniform_list(child_id(&panel.id, "candidates"), row_count, move |range, _, _| {
             range.map(|index| rows.candidate_list_row(index)).collect::<Vec<_>>()
         })
@@ -604,14 +611,35 @@ impl ChatInlineComposerPanelPass {
             .into_any_element()
     }
 
+    fn highlighted_row(&self, position: usize, row: AnyElement) -> AnyElement {
+        if self.panel.highlighted != Some(position) {
+            return row;
+        }
+        div().w_full().bg(alpha(self.theme.text.primary, 0.08)).child(row).into_any_element()
+    }
+
+    fn takes_highlight(&self, cx: &mut App) -> Option<usize> {
+        let highlighted = self.panel.highlighted;
+        let changed = self.state.update(cx, |state, _| {
+            let changed = state.scrolled_highlight != highlighted;
+            state.scrolled_highlight = highlighted;
+            changed
+        });
+        if changed { highlighted } else { None }
+    }
+
     fn candidate_list_row(&self, index: usize) -> AnyElement {
         let panel = &self.panel;
         let role_count = panel.roles.len();
-        if index < role_count {
-            return self.role_row(index);
-        }
-        if index < role_count + panel.candidates.len() {
-            return self.candidate_row(index - role_count);
+        let row = if index < role_count {
+            Some(self.role_row(index))
+        } else if index < role_count + panel.candidates.len() {
+            Some(self.candidate_row(index - role_count))
+        } else {
+            None
+        };
+        if let Some(row) = row {
+            return self.highlighted_row(index, row);
         }
         div()
             .w_full()
@@ -721,8 +749,11 @@ impl ChatInlineComposerPanelPass {
         }
         let rows = self.clone();
         let scroll_handle = self.state.read(cx).candidates_scroll_handle.clone();
+        if let Some(index) = self.takes_highlight(cx).filter(|index| *index < panel.topics.len()) {
+            scroll_handle.scroll_to_item(index, ScrollStrategy::Nearest);
+        }
         let list = uniform_list(child_id(&panel.id, "topics"), panel.topics.len(), move |range, _, _| {
-            range.map(|index| rows.topic_row(index)).collect::<Vec<_>>()
+            range.map(|index| rows.highlighted_row(index, rows.topic_row(index))).collect::<Vec<_>>()
         })
         .track_scroll(&scroll_handle)
         .size_full()
@@ -799,7 +830,7 @@ impl ChatInlineComposerPanelPass {
             .into_any_element()
     }
 
-    fn group_commands_content(self: &Rc<Self>) -> AnyElement {
+    fn group_commands_content(self: &Rc<Self>, cx: &mut App) -> AnyElement {
         let panel = &self.panel;
         if panel.group_commands.is_empty() && panel.is_loading {
             return ChatInlinePanelState::new(
@@ -833,12 +864,15 @@ impl ChatInlineComposerPanelPass {
         }
         let shows_tag = ChatGroupBotCommands::bot_count(&panel.group_commands) > 1;
         let rows = self.clone();
+        let fresh = self.takes_highlight(cx);
         self.scroll_disabled_list(
             "group-commands",
             panel.group_commands.len(),
             52.0,
             Rc::new(move |index| rows.group_command_row(index, shows_tag)),
             2.0,
+            (0, fresh),
+            cx,
         )
     }
 
@@ -948,7 +982,7 @@ impl ChatInlineComposerPanelPass {
             .into_any_element()
     }
 
-    fn commands_content(self: &Rc<Self>) -> AnyElement {
+    fn commands_content(self: &Rc<Self>, cx: &mut App) -> AnyElement {
         let panel = &self.panel;
         let values = panel.commands.as_ref().map(|commands| commands.commands.clone()).unwrap_or_default();
         if values.is_empty() && panel.is_loading {
@@ -984,12 +1018,15 @@ impl ChatInlineComposerPanelPass {
         let values = Rc::new(values);
         let rows = self.clone();
         let row_values = values.clone();
+        let fresh = self.takes_highlight(cx);
         self.scroll_disabled_list(
             "commands",
             values.len(),
             48.0,
             Rc::new(move |index| rows.command_row(&row_values[index])),
             2.0,
+            (0, fresh),
+            cx,
         )
     }
 
@@ -1085,10 +1122,12 @@ impl ChatInlineComposerPanelPass {
         let compact: Vec<usize> =
             (0..results.results.len()).filter(|&index| !results.results[index].is_visual()).collect();
 
+        let fresh = self.takes_highlight(cx);
         let mut stack = vstack(0.).align(HorizontalAlignment::Leading).size_full();
         if !visual.is_empty() {
-            stack = stack.child(self.visual_results_row(&visual, cx));
+            stack = stack.child(self.visual_results_row(&visual, fresh, cx));
         }
+        let visual_count = visual.len();
         if !compact.is_empty() {
             let shows_progress = results.has_more && visual.is_empty();
             let compact = Rc::new(compact);
@@ -1114,6 +1153,8 @@ impl ChatInlineComposerPanelPass {
                     }
                 }),
                 0.0,
+                (visual_count, fresh),
+                cx,
             )));
         }
         stack.into_any_element()
@@ -1128,10 +1169,24 @@ impl ChatInlineComposerPanelPass {
         row_height: f32,
         row: Rc<dyn Fn(usize) -> AnyElement>,
         vertical_padding: f32,
+        highlight: (usize, Option<usize>),
+        cx: &mut App,
     ) -> AnyElement {
         let id = child_id(&self.panel.id, name.to_owned());
-        if self.is_expanded {
+        let (first_position, fresh) = highlight;
+        let highlighted = self.panel.highlighted.and_then(|position| position.checked_sub(first_position));
+        let pass = self.clone();
+        let row: Rc<dyn Fn(usize) -> AnyElement> =
+            Rc::new(move |index| pass.highlighted_row(first_position + index, row(index)));
+        if self.is_expanded || highlighted.is_some_and(|index| index < row_count) {
+            let handle = self.state.read(cx).candidates_scroll_handle.clone();
+            if let Some(index) =
+                fresh.and_then(|position| position.checked_sub(first_position)).filter(|index| *index < row_count)
+            {
+                handle.scroll_to_item(index, ScrollStrategy::Nearest);
+            }
             return uniform_list(id, row_count, move |range, _, _| range.map(|index| row(index)).collect::<Vec<_>>())
+                .track_scroll(&handle)
                 .size_full()
                 .py(gpui::px(vertical_padding))
                 .into_any_element();
@@ -1157,7 +1212,7 @@ impl ChatInlineComposerPanelPass {
             .into_any_element()
     }
 
-    fn visual_results_row(&self, visual: &[usize], cx: &App) -> AnyElement {
+    fn visual_results_row(&self, visual: &[usize], fresh: Option<usize>, cx: &App) -> AnyElement {
         let panel = &self.panel;
         let handle = self.state.read(cx).visual_scroll_handle.clone();
         let stride = VISUAL_CARD_SIZE + VISUAL_SPACING;
@@ -1166,6 +1221,18 @@ impl ChatInlineComposerPanelPass {
             _ => VISUAL_DEFAULT_VIEWPORT,
         };
         let end = (visual.len() as f32 * stride - viewport).max(0.0);
+        if let Some(position) = fresh.filter(|position| *position < visual.len()) {
+            let shown = (-f32::from(handle.offset().x) - VISUAL_PADDING).clamp(0.0, end);
+            let leading = position as f32 * stride;
+            let target = if leading < shown {
+                leading
+            } else if leading + VISUAL_CARD_SIZE > shown + viewport {
+                leading + VISUAL_CARD_SIZE - viewport + VISUAL_PADDING * 2.0
+            } else {
+                shown
+            };
+            handle.set_offset(gpui::point(gpui::px(-(target.clamp(0.0, end) + VISUAL_PADDING)), gpui::px(0.0)));
+        }
         let scrolled = (-f32::from(handle.offset().x) - VISUAL_PADDING).clamp(0.0, end);
         let first = ((scrolled / stride) as usize).saturating_sub(VISUAL_OVERSCAN).min(visual.len());
         let last = (first + (viewport / stride).ceil() as usize + VISUAL_OVERSCAN * 2).min(visual.len());
@@ -1185,7 +1252,15 @@ impl ChatInlineComposerPanelPass {
         if first > 0 {
             row = row.child(div().flex_none().w(gpui::px(first as f32 * stride - VISUAL_SPACING)).h(gpui::px(1.0)));
         }
-        row = row.children(visual[first..last].iter().map(|&index| div().flex_none().child(self.visual_result_card(index, cx))));
+        row = row.children(visual[first..last].iter().enumerate().map(|(offset, &index)| {
+            let ringed = panel.highlighted == Some(first + offset);
+            div()
+                .flex_none()
+                .when(ringed, |card| {
+                    card.rounded(gpui::px(10.0)).border_2().border_color(self.theme.primary._100)
+                })
+                .child(self.visual_result_card(index, cx))
+        }));
         let remaining = visual.len() - last;
         if remaining > 0 {
             row = row.child(div().flex_none().w(gpui::px(remaining as f32 * stride - VISUAL_SPACING)).h(gpui::px(1.0)));

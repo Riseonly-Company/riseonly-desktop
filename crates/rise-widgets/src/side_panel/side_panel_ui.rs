@@ -1,19 +1,21 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui::{
-    AnyView, App, Context, Div, Entity, EventEmitter, Global, IntoElement, KeyBinding,
-    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Render, SharedString, StyleRefinement, Window, actions, div,
+    AnyElement, AnyView, App, Context, Entity, EventEmitter, Global, IntoElement, KeyBinding,
+    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Render, SharedString, Window, actions, div,
     prelude::*,
 };
 use rise_theme::{AppTheme, PanelMetrics};
-use rise_ui::page_header_toolbar_button::{PageHeaderIconButton, PageHeaderMetrics};
-use rise_ui::scroll_edge_blur_ui::ScrollEdgeBlurUi;
+use rise_ui::page_header_toolbar_button::PageHeaderAction;
+use rise_ui::page_header_ui::{PanelChrome, PanelChromeKey, PanelChromeSlot};
+use rise_ui::swiftui::environment::env_scope;
 
 use super::panel_gestures::{self, ResizeOutcome};
 use super::side_panel_preferences::SidePanelPreferences;
 use crate::block_ui::BlockUi;
 
 pub const KEY_CONTEXT: &str = "SidePanel";
-
-const CLOSE_SYMBOL: &str = "xmark";
 
 actions!(rise_side_panel, [ToggleSidePanel, CloseSidePanel]);
 
@@ -67,11 +69,9 @@ pub struct SidePanelUi {
     drag: Option<ResizeDrag>,
     preferences: SidePanelPreferences,
     shows_close: bool,
-    header_leading: Option<AnyView>,
-    header_overlays: bool,
+    chrome_taken: Rc<Cell<bool>>,
     grip_trailing: bool,
     grip_outside: bool,
-    header_blurred: bool,
 }
 
 impl EventEmitter<SidePanelEvent> for SidePanelUi {}
@@ -100,11 +100,9 @@ impl SidePanelUi {
             drag: None,
             preferences,
             shows_close: true,
-            header_leading: None,
-            header_overlays: false,
+            chrome_taken: Rc::default(),
             grip_trailing: false,
             grip_outside: false,
-            header_blurred: false,
         }
     }
 
@@ -175,6 +173,7 @@ impl SidePanelUi {
 
         self.context = context;
         self.content = content;
+        self.chrome_taken = Rc::default();
         self.open = open;
         cx.notify();
         if changed {
@@ -184,6 +183,7 @@ impl SidePanelUi {
 
     pub fn set_content(&mut self, content: AnyView, cx: &mut Context<Self>) {
         self.content = content;
+        self.chrome_taken = Rc::default();
         cx.notify();
     }
 
@@ -225,30 +225,6 @@ impl SidePanelUi {
     pub fn end_resize(&mut self, cx: &mut Context<Self>) {
         let theme = rise_ui::theme(cx).clone();
         self.release(&theme, cx);
-    }
-
-    pub fn set_header_blurred(&mut self, blurred: bool, cx: &mut Context<Self>) {
-        if self.header_blurred == blurred {
-            return;
-        }
-        self.header_blurred = blurred;
-        cx.notify();
-    }
-
-    pub fn set_header_overlays(&mut self, header_overlays: bool, cx: &mut Context<Self>) {
-        if self.header_overlays == header_overlays {
-            return;
-        }
-        self.header_overlays = header_overlays;
-        cx.notify();
-    }
-
-    pub fn set_header_leading(&mut self, header_leading: Option<AnyView>, cx: &mut Context<Self>) {
-        if self.header_leading == header_leading {
-            return;
-        }
-        self.header_leading = header_leading;
-        cx.notify();
     }
 
     pub fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -331,45 +307,18 @@ impl SidePanelUi {
         }
     }
 
-    fn header(
-        shows_close: bool,
-        overlays: bool,
-        blurred: bool,
-        leading: Option<AnyView>,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        div()
-            .when(overlays, |header| header.absolute().top_0().left_0().right_0())
-            .when(overlays && blurred, |header| {
-                header.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .child(ScrollEdgeBlurUi::new().fit_height(PageHeaderMetrics::PANEL_STRIP_HEIGHT)),
-                )
-            })
-            .flex()
-            .flex_row()
-            .justify_end()
-            .flex_shrink_0()
-            .h(gpui::px(PageHeaderMetrics::PANEL_STRIP_HEIGHT))
-            .pt(gpui::px(PageHeaderMetrics::TOP_INSET))
-            .px(gpui::px(PageHeaderMetrics::BAR_EDGE_INSET))
-            .gap(gpui::px(PageHeaderMetrics::BUTTON_GAP))
-            .items_center()
-            .children(leading.map(|leading| {
-                div().flex_1().h_full().child(leading.cached(StyleRefinement::default().size_full()))
-            }))
-            .when(shows_close, |header| {
-                let panel = cx.entity().downgrade();
-                header.child(
-                    PageHeaderIconButton::new("side_panel.close", CLOSE_SYMBOL, move |_, cx| {
-                        let _ = panel.update(cx, |panel, cx| panel.set_open(false, cx));
-                    }),
-                )
-            })
+    fn content_with_chrome(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.shows_close {
+            return self.content.clone().into_any_element();
+        }
+        let panel = cx.entity().downgrade();
+        let close: PageHeaderAction = Rc::new(move |_, cx| {
+            let _ = panel.update(cx, |panel, cx| panel.set_open(false, cx));
+        });
+        let chrome = PanelChrome::new(self.chrome_taken.clone()).close(Some(close));
+        let row = chrome.row();
+        let page = env_scope::<PanelChromeKey>(Some(chrome)).child(self.content.clone());
+        PanelChromeSlot::new(self.chrome_taken.clone(), page, Some(row)).into_any_element()
     }
 }
 
@@ -385,9 +334,7 @@ impl Render for SidePanelUi {
         let collapses = self.drag.is_some() && self.width < theme.panel.dismiss_width();
         let release_theme = theme.clone();
         let release_out_theme = theme.clone();
-        let overlays = !self.shows_close || self.header_overlays;
-        let header = Self::header(self.shows_close, overlays, self.header_blurred, self.header_leading.clone(), cx);
-        let (flow_header, overlay_header) = if overlays { (None, Some(header)) } else { (Some(header), None) };
+        let content = self.content_with_chrome(cx);
 
         div()
             .flex()
@@ -424,15 +371,14 @@ impl Render for SidePanelUi {
                             panel.release(&release_out_theme, cx);
                         }),
                     )
-                    .children(flow_header)
                     .child(
                         div()
+                            .relative()
                             .flex_1()
                             .overflow_hidden()
                             .when(collapses, |content| content.opacity(0.4))
-                            .child(self.content.clone()),
+                            .child(content),
                     )
-                    .children(overlay_header)
                     .when(!self.grip_outside, |column| column.child(
                         div()
                             .id("side_panel.grip")

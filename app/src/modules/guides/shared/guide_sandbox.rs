@@ -2230,6 +2230,7 @@ impl GuideSandbox {
                 updated_at_ms: now,
                 lease_expires_at_ms: now + self.lease_ms(),
                 order_sequence: seat.order_sequence,
+                watching_user_id: String::new(),
                 profile: Some(seat.profile.clone()),
             })
             .collect();

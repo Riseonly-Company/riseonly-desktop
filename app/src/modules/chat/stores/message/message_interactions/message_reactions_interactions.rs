@@ -6,6 +6,7 @@ use crate::core::guides::guide_signal_bus::GuideSignalBus;
 use crate::core::lib::sai::core::utilities::sai_account_cache_scope::SaiAccountCacheScope;
 use crate::core::rise_engine_bridge::rise_transport_status::RiseTransportStatus;
 use crate::core::widgets::notifier::notifier_store::{Notifier, NotifierPosition, NotifierSendOptions, NotifierType};
+use crate::modules::chat::engine::messages::rise_message_realtime::RiseOwnReactionIntents;
 use crate::modules::chat::stores::chat_guide_sandbox_hooks::chat_guide_sandbox_hooks;
 use crate::modules::chat::stores::chat_stores_hooks::chat_stores_components_hooks;
 use crate::modules::chat::stores::chats::chat_services::chat_services::ChatServicesStore;
@@ -29,6 +30,7 @@ fn durable_reaction_key(scope: &str, message_id: &str) -> String {
 pub struct MessageReactionSendLane {
     pub sent: bool,
     pub wanted: bool,
+    pub server_message_id: String,
 }
 
 #[derive(Clone, Copy)]
@@ -134,6 +136,9 @@ impl MessageInteractionsStore {
         }
 
         self.apply_reaction_locally(adding, &scope, message_id, reaction, cx);
+        Self::actions(cx).update(cx, |actions, cx| {
+            actions.preview_reaction_action(chat_id, message_id, reaction, adding, topic_id, thread_root_id, cx);
+        });
         if adding {
             GuideSignalBus::emit(RiseGuideSignal::ReactionAdded);
         }
@@ -162,6 +167,7 @@ impl MessageInteractionsStore {
         let lane_key = reaction_park_key(&scope, message_id, reaction);
         if let Some(lane) = self.reaction_send_lanes.get_mut(&lane_key) {
             lane.wanted = adding;
+            RiseOwnReactionIntents::set(&lane.server_message_id, reaction, adding);
             return;
         }
         if !RiseTransportStatus::is_connected(cx)
@@ -170,11 +176,15 @@ impl MessageInteractionsStore {
             self.park_reaction(adding, chat_id, message_id, reaction, topic_id, thread_root_id, cx);
             return;
         }
+        let server_message_id = MessageServicesStore::shared(cx)
+            .update(cx, |store, cx| store.server_message_id(message_id, &scope, cx));
+        RiseOwnReactionIntents::set(&server_message_id, reaction, adding);
         self.reaction_send_lanes.insert(
             lane_key.clone(),
             MessageReactionSendLane {
                 sent: adding,
                 wanted: adding,
+                server_message_id,
             },
         );
         let target = ReactionTarget {
@@ -211,6 +221,7 @@ impl MessageInteractionsStore {
         let Some(lane) = self.reaction_send_lanes.remove(&target.lane_key) else {
             return;
         };
+        RiseOwnReactionIntents::clear(&lane.server_message_id, &target.reaction);
         let topic_id = target.topic_id.as_deref();
         let thread_root_id = target.thread_root_id.as_deref();
         if !SaiAccountCacheScope::is_current_account_epoch(

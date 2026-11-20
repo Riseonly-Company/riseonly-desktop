@@ -526,6 +526,17 @@ impl TrayController {
         .detach();
     }
 
+    /// login start as the os reports it, none where this os or build cant start the app at login
+    pub fn autostart_state(cx: &App) -> Option<AutostartState> {
+        cx.try_global::<Self>().and_then(|controller| controller.autostart_state)
+    }
+
+    pub fn set_autostart_enabled(enabled: bool, cx: &mut App) {
+        if Self::autostart_state(cx).is_some_and(|state| state.is_enabled() != enabled) {
+            Self::toggle_autostart(cx);
+        }
+    }
+
     fn toggle_autostart(cx: &mut App) {
         let Some((autostart, Some(current))) = cx
             .try_global::<Self>()
@@ -576,5 +587,6 @@ impl TrayController {
 
         cx.global_mut::<Self>().autostart_state = state;
         Self::sync_menu(cx);
+        cx.refresh_windows();
     }
 }

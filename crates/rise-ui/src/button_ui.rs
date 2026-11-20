@@ -130,6 +130,7 @@ impl RenderOnce for ButtonUiSurface {
         let colors = self.resolved_colors(crate::theme(cx));
 
         let row = hstack(self.gap)
+            .min_w_0()
             .padding_edges(EdgeSet::HORIZONTAL, self.padding_horizontal)
             .padding_edges(EdgeSet::VERTICAL, self.padding_vertical);
 

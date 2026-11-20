@@ -37,6 +37,7 @@ fn participant(role: RiseRTCParticipantRole, server_muted: bool, server_deafened
         updated_at_ms: 0,
         lease_expires_at_ms: 0,
         order_sequence: 0,
+        watching_user_id: String::new(),
         profile: None,
     }
 }

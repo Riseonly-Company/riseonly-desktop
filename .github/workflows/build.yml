@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.event.pull_request.number }}-${{ ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || contains(fromJSON('["build","tests","release-profile","macos","macos-silicon","macos-intel","macos-local","linux","linux-x64","linux-arm64","win","win-x64","win-arm64","env-dev","env-staging","env-prod"]'), github.event.label.name)) && 'build' || github.run_id }}
+  group: build-${{ github.event.pull_request.number }}-${{ ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || contains(fromJSON('["build","tests","release-profile","macos","macos-silicon","macos-intel","macos-local","linux-local","win-local","linux","linux-x64","linux-arm64","win","win-x64","win-arm64","env-dev","env-staging","env-prod"]'), github.event.label.name)) && 'build' || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -32,6 +32,10 @@ jobs:
       macos_archs: ${{ steps.plan.outputs.macos_archs }}
       macos_runner: ${{ steps.plan.outputs.macos_runner }}
       macos_local: ${{ steps.plan.outputs.macos_local }}
+      linux_runners: ${{ steps.plan.outputs.linux_runners }}
+      linux_local: ${{ steps.plan.outputs.linux_local }}
+      windows_runner: ${{ steps.plan.outputs.windows_runner }}
+      windows_local: ${{ steps.plan.outputs.windows_local }}
       tests: ${{ steps.plan.outputs.tests }}
       environment: ${{ steps.plan.outputs.environment }}
       profile: ${{ steps.plan.outputs.profile }}
@@ -62,6 +66,10 @@ jobs:
         name: Plan
         env:
           MACOS_RUNNER: ${{ vars.DESKTOP_MACOS_RUNNER }}
+          MACOS_LOCAL: ${{ vars.DESKTOP_MACOS_LOCAL }}
+          LINUX_LOCAL: ${{ vars.DESKTOP_LINUX_LOCAL }}
+          WINDOWS_LOCAL: ${{ vars.DESKTOP_WINDOWS_LOCAL }}
+          LINUX_ARM_RUNNER: ${{ vars.DESKTOP_LINUX_ARM_RUNNER }}
           STAGING_RELEASES: ${{ vars.DESKTOP_STAGING_RELEASES }}
         run: python3 scripts/ci/plan.py build | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -88,7 +96,7 @@ jobs:
   linux:
     needs: plan
     if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true'
-    runs-on: ${{ matrix.arch == 'aarch64' && fromJSON(vars.DESKTOP_LINUX_ARM_RUNNER || '"ubuntu-24.04-arm"') || fromJSON('["self-hosted", "linux", "x64", "riseonly-desktop-linux"]') }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.linux_runners)[matrix.arch] }}
     strategy:
       fail-fast: false
       matrix:
@@ -106,6 +114,7 @@ jobs:
         with:
           path: riseonly-desktop
           persist-credentials: false
+          clean: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
@@ -113,29 +122,35 @@ jobs:
           ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
           path: riseonly-tools
           persist-credentials: false
-      - if: matrix.arch == 'aarch64'
+      - if: matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true'
         name: room for the toolchain image and the target dir on the hosted runner
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h /
       - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} (${{ needs.plan.outputs.profile }})
         env:
-          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && format('{0}/desktop-ci', runner.temp) || '' }}
+          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true' && format('{0}/desktop-ci', runner.temp) || '' }}
           DESKTOP_CI_MEMORY: ${{ matrix.arch == 'aarch64' && '14g' || '' }}
         run: |
-          rm -rf riseonly-desktop/dist
-          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-linux-$PROFILE" bash scripts/ci/build-linux.sh
+          bash riseonly-desktop/scripts/ci/run-build.sh linux "${{ matrix.arch }}" "${{ fromJSON(needs.plan.outputs.linux_local)[matrix.arch] }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-linux-${{ matrix.arch }}
           path: riseonly-desktop/dist/linux/
           retention-days: 7
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-linux-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 7
+          if-no-files-found: ignore
 
   windows:
     needs: plan
     if: needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
-    runs-on: [self-hosted, linux, x64, riseonly-desktop-windows]
+    runs-on: ${{ fromJSON(needs.plan.outputs.windows_runner) }}
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -154,6 +169,7 @@ jobs:
         with:
           path: riseonly-desktop
           persist-credentials: false
+          clean: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.plan.outputs.tools_repo }}
@@ -165,14 +181,20 @@ jobs:
         env:
           WIN_ARCH: ${{ matrix.arch }}
         run: |
-          rm -rf riseonly-desktop/dist
-          bash riseonly-desktop/scripts/ci/in-toolchain.sh "target-windows-$PROFILE" bash scripts/ci/build-windows.sh
+          bash riseonly-desktop/scripts/ci/run-build.sh windows "${{ matrix.arch }}" "${{ needs.plan.outputs.windows_local }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-windows-${{ matrix.arch }}
           path: riseonly-desktop/dist/windows/
           retention-days: 7
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-windows-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 7
+          if-no-files-found: ignore
 
   macos:
     needs: plan
@@ -227,7 +249,7 @@ jobs:
       - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} (${{ needs.plan.outputs.profile }})
         working-directory: riseonly-desktop
         run: |
-          rm -rf dist
+          rm -rf dist timings
           if [ "$MACOS_LOCAL" = true ]; then
             [ "$MACOS_ARCH" != x86_64 ] || rustup target add x86_64-apple-darwin
             caffeinate -i /usr/bin/lockf -k /tmp/riseonly-desktop-build.lock bash scripts/ci/build-macos.sh
@@ -240,6 +262,13 @@ jobs:
           path: riseonly-desktop/dist/macos/
           retention-days: 7
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-macos-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 7
+          if-no-files-found: ignore
 
   tests:
     needs: plan

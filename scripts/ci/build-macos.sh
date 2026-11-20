@@ -50,7 +50,8 @@ else
         export CARGO_BUILD_JOBS=2
     fi
     echo "host: $cores cores, $memory_gb GB, cargo jobs ${CARGO_BUILD_JOBS:-$cores}"
-    env -u RISE_ENV cargo build --locked --profile "$profile" ${target_args[@]+"${target_args[@]}"} -p riseonly
+    env -u RISE_ENV cargo build --locked --timings --profile "$profile" ${target_args[@]+"${target_args[@]}"} -p riseonly
+    mkdir -p timings && cp "${CARGO_TARGET_DIR:-target}/cargo-timings/cargo-timing.html" "timings/macos-$arch.html"
     echo "swap after the build: $(sysctl -n vm.swapusage)"
     rm -rf "payload/macos-$arch"
     mkdir -p "payload/macos-$arch"

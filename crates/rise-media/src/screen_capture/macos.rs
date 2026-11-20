@@ -570,6 +570,7 @@ struct Route {
     frames: ScreenFrameSink,
     audio: Option<ScreenAudioSink>,
     ended: ScreenEndSink,
+    unread_audio_reported: std::sync::atomic::AtomicBool,
 }
 
 impl Route {
@@ -588,10 +589,16 @@ impl Route {
     }
 
     fn deliver_audio(&self, buffer: *mut CmSampleBuffer) {
-        if let Some(audio) = &self.audio
-            && let Some(block) = copy_audio(buffer)
-        {
-            audio(block);
+        let Some(audio) = &self.audio else {
+            return;
+        };
+        match copy_audio(buffer) {
+            Some(block) => audio(block),
+            None => {
+                if !self.unread_audio_reported.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(target: "riseonly", "screen share sound buffer was not linear float pcm, it is skipped");
+                }
+            }
         }
     }
 }
@@ -800,6 +807,8 @@ fn configuration(
         unsafe {
             let _: () = msg_send![&*configuration, setCapturesAudio: Bool::YES];
             let _: () = msg_send![&*configuration, setExcludesCurrentProcessAudio: Bool::YES];
+            let _: () = msg_send![&*configuration, setSampleRate: SYSTEM_AUDIO_SAMPLE_RATE as isize];
+            let _: () = msg_send![&*configuration, setChannelCount: SYSTEM_AUDIO_CHANNEL_COUNT as isize];
         }
     }
     Ok(configuration)
@@ -946,7 +955,7 @@ impl NativeScreenCapture {
         };
         let with_audio = audio.is_some();
         let configuration = configuration(source, options, with_audio)?;
-        let delegate = StreamDelegate::new(Route { frames, audio, ended });
+        let delegate = StreamDelegate::new(Route { frames, audio, ended, unread_audio_reported: Default::default() });
         let queue = sample_queue(c"rise.screen.capture")?;
         let stream_class = class(c"SCStream")?;
         let stream: Option<Retained<AnyObject>> = unsafe {

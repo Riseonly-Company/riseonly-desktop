@@ -759,3 +759,30 @@ uncovered and places them above it, so the rows scroll on under the header (emoj
 patches/0117-owned-surface-device-size.diff (Linux and Windows build): the off macOS arm of the surface element (0001)
 passed the owned frame size in logical pixels to ObjectFit::get_bounds, which takes the image size in device pixels, so
 gpui did not compile for any target but macOS. The frame width and height now go in as DevicePixels, as the macOS arm does.
+
+patches/0128-deferred-image-drops.diff (macOS crash in MetalAtlas::metal_texture): Window::drop_image freed atlas tiles
+at once, while the frame on screen could still draw them; gpui presents that frame again without a draw while input
+runs fast (typing), so a texture freed in between (the app frees unheld images every 2 s) aborted render_frame on an
+unwrap. drop_image now queues the keys and the next Window::draw removes them before it paints (at most 4096 wait), and
+the Metal, wgpu and DirectX renderers skip a sprite batch whose texture is gone instead of panicking.
+
+patches/0129-wheel-into-children.diff (#160, a width capped column scrolls from its margins): InteractiveElement::wheel_into_children
+gives the element a hitbox that keeps the area of its children (Hitbox::wheel_area, relative to the hitbox, so a replayed
+hitbox keeps it). A ScrollWheelEvent whose front-most such hitbox has the pointer outside that area is dispatched at the
+nearest point of the area (at least 24 px in from its side edges) with the hit test of that point, so the scroll views,
+lists and gesture gates of the column handle it as if the pointer were over them; nested columns follow up to 4 hops.
+The real hit test and pointer position are restored right after, so hover and cursor do not move.
+
+patches/0130-windows-virtual-file-drop.diff (#180, Windows drag and drop): the OLE drop target took only CF_HDROP, so
+an image dragged from a browser, mail client or messenger (virtual files: FileGroupDescriptorW plus FileContents per
+item, no CF_HDROP) got DROPEFFECT_NONE and nothing happened. DragEnter now reads only the descriptors and enters the
+drag with the paths the items will have under %TEMP%\riseonly-drop\<stamp>\; Drop streams each item's contents
+(HGLOBAL block or IStream in 64 KiB chunks, never the whole file in memory) into those paths before the drop is
+submitted, and removes riseonly-drop folders older than a day. Folders and unreadable items leave no file. DragOver
+and Drop answer DROPEFFECT_NONE when DragEnter found nothing to drop.
+
+patches/0131-windows-bundled-color-font-fallback.diff (#181, the Windows emoji set): DirectWrite fallback only looked
+families up in the system collection, so a color font the app added with add_fonts was never used for characters the
+primary font lacks; emoji always came from Segoe UI Emoji. add_fonts now records every color (COLR) face of the custom
+collection with its Unicode ranges, and each font's fallback maps those ranges to that family in the custom collection
+ahead of the requested fallbacks and the system fallback. Without a bundled color font nothing changes.

@@ -1170,6 +1170,7 @@ impl MusicPlayerState {
                 r#type: NotifierType::Info,
                 position: NotifierPosition::Top,
                 icon: NotifierIcon::System("person.2.fill".to_owned()),
+                is_notification: true,
                 ..NotifierSendOptions::default()
             },
             cx,
@@ -1496,6 +1497,7 @@ impl MusicPlayerState {
                         r#type: NotifierType::Error,
                         position: NotifierPosition::Top,
                         icon: NotifierIcon::System("lock.fill".to_owned()),
+                        is_notification: true,
                         ..NotifierSendOptions::default()
                     },
                     cx,
@@ -1510,6 +1512,7 @@ impl MusicPlayerState {
                         r#type: NotifierType::Success,
                         position: NotifierPosition::Top,
                         icon: NotifierIcon::System("lock.open.fill".to_owned()),
+                        is_notification: true,
                         ..NotifierSendOptions::default()
                     },
                     cx,
@@ -1557,6 +1560,7 @@ impl MusicPlayerState {
                         r#type: NotifierType::Info,
                         position: NotifierPosition::Top,
                         icon: NotifierIcon::System("person.badge.key.fill".to_owned()),
+                        is_notification: true,
                         ..NotifierSendOptions::default()
                     },
                     cx,
@@ -1597,6 +1601,7 @@ impl MusicPlayerState {
                         r#type: NotifierType::Info,
                         position: NotifierPosition::Top,
                         icon: NotifierIcon::System("person.crop.circle.badge.minus".to_owned()),
+                        is_notification: true,
                         ..NotifierSendOptions::default()
                     },
                     cx,
@@ -1666,6 +1671,7 @@ impl MusicPlayerState {
                         icon: NotifierIcon::System(
                             if revoked.is_empty() { "person.badge.key.fill" } else { "person.badge.minus" }.to_owned(),
                         ),
+                        is_notification: true,
                         ..NotifierSendOptions::default()
                     },
                     cx,
@@ -3387,6 +3393,7 @@ impl MusicPlayerState {
                     r#type: NotifierType::Info,
                     position: NotifierPosition::Top,
                     icon: NotifierIcon::System("person.2.slash".to_owned()),
+                    is_notification: true,
                     ..NotifierSendOptions::default()
                 },
                 cx,

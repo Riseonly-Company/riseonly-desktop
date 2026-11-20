@@ -5,14 +5,12 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, Context, CursorStyle, Entity, Global, HitboxBehavior, Hsla, IntoElement,
     KeyBinding, MouseButton, Pixels, Render, Subscription, WeakEntity, Window, WindowControlArea, WindowId, actions,
-    canvas, div, prelude::*, px, svg, transparent_black,
+    canvas, deferred, div, prelude::*, px, svg, transparent_black,
 };
 use rise_platform::HostOs;
 use rise_platform::gpui_shim::supports_native_menu_bar;
-use rise_platform::materials::{WindowsBuild, windows_build};
 use rise_platform::window_chrome::{
-    self, CaptionButton, CaptionClick, ChromeStyle, ControlLayout, ControlSide, DecorationMode,
-    SNAP_LAYOUTS_BUILD, TrafficLightOrigin, WindowChrome,
+    self, CaptionButton, CaptionClick, ChromeStyle, ControlSide, DecorationMode, TrafficLightOrigin, WindowChrome,
 };
 use rise_theme::{AppTheme, ShellMetrics};
 use rise_ui::IconUi;
@@ -88,13 +86,17 @@ pub fn draws_under_window_controls(route: &RootRoute) -> bool {
 pub const fn drag_moves_window(host: HostOs, granted: DecorationMode) -> bool {
     match host {
         HostOs::MacOs => window_chrome::app_owns_titlebar_drag(host),
-        HostOs::Windows => false,
-        HostOs::Linux => window_chrome::app_starts_window_move(host, granted),
+        HostOs::Windows | HostOs::Linux => window_chrome::app_starts_window_move(host, granted),
     }
 }
 
 pub const fn controls_dock_in_rail(host: HostOs) -> bool {
-    matches!(host, HostOs::MacOs)
+    matches!(host, HostOs::MacOs | HostOs::Windows)
+}
+
+/// windows draws its buttons as lights in the top left corner of every window, rail or not
+pub const fn lights_in_corner(host: HostOs) -> bool {
+    matches!(host, HostOs::Windows)
 }
 
 /// true if the strip itself handles double click, the os keeps it only on a titlebar it owns
@@ -102,24 +104,6 @@ pub const fn strip_handles_double_click(host: HostOs) -> bool {
     match host {
         HostOs::MacOs => window_chrome::app_owns_titlebar_drag(host),
         HostOs::Windows | HostOs::Linux => true,
-    }
-}
-
-/// icon font windows draws its own caption glyphs with
-pub fn windows_caption_font(build: Option<WindowsBuild>) -> &'static str {
-    match build {
-        Some(build) if build.is_at_least(SNAP_LAYOUTS_BUILD) => "Segoe Fluent Icons",
-        _ => "Segoe MDL2 Assets",
-    }
-}
-
-/// windows caption glyph, maximize shows restore while maximized
-pub const fn windows_caption_glyph(button: CaptionButton, maximized: bool) -> &'static str {
-    match button {
-        CaptionButton::Minimize => "\u{e921}",
-        CaptionButton::Maximize if maximized => "\u{e923}",
-        CaptionButton::Maximize => "\u{e922}",
-        CaptionButton::Close => "\u{e8bb}",
     }
 }
 
@@ -133,36 +117,27 @@ pub const fn linux_caption_icon(button: CaptionButton, maximized: bool) -> &'sta
     }
 }
 
-/// caption buttons fitted into the top band of the rail pane
-/// desktop sizes if they fit then tighter gaps then narrower buttons
-pub fn rail_control_layout(layout: ControlLayout, buttons: usize, rail_width: f32) -> ControlLayout {
-    if buttons == 0 {
-        return layout;
-    }
-    let count = buttons as f32;
-    let natural = count * layout.button_width + (count - 1.0) * layout.gap + 2.0 * layout.edge_padding;
-    if natural <= rail_width {
-        return layout;
-    }
-    let slack = rail_width - count * layout.button_width;
-    if slack > 0.0 {
-        let space = slack / (count + 1.0);
-        return ControlLayout {
-            gap: layout.gap.min(space),
-            edge_padding: layout.edge_padding.min(space),
-            ..layout
-        };
-    }
-    ControlLayout {
-        button_width: rail_width / count,
-        gap: 0.0,
-        edge_padding: 0.0,
-        ..layout
+const WINDOW_MOVE_THRESHOLD: f32 = 4.0;
+const LIGHTS_GROUP: &str = "shell.title_bar.lights";
+const LIGHT_SLOT: f32 = 14.0;
+const LIGHT_GAP: f32 = 9.0;
+const LIGHT_DIAMETER: f32 = 12.0;
+const LIGHT_GLYPH: f32 = 8.0;
+const LIGHT_CLOSE: u32 = 0xFF5F57;
+const LIGHT_MINIMIZE: u32 = 0xFEBC2E;
+const LIGHT_MAXIMIZE: u32 = 0x28C840;
+const LIGHTS_LAYER_PRIORITY: usize = 2000;
+
+/// fill of each light as on macos
+pub const fn traffic_light_fill(button: CaptionButton) -> u32 {
+    match button {
+        CaptionButton::Close => LIGHT_CLOSE,
+        CaptionButton::Minimize => LIGHT_MINIMIZE,
+        CaptionButton::Maximize => LIGHT_MAXIMIZE,
     }
 }
 
-const WINDOWS_CLOSE_HOVER: u32 = 0xC42B1C;
-const WINDOWS_CAPTION_GLYPH_SIZE: f32 = 10.0;
+pub const TRAFFIC_LIGHT_ORDER: [CaptionButton; 3] = [CaptionButton::Close, CaptionButton::Minimize, CaptionButton::Maximize];
 
 #[derive(Default)]
 struct TitleBars(HashMap<WindowId, WeakEntity<WindowTitleBar>>);
@@ -217,7 +192,7 @@ pub struct WindowTitleBar {
     _menu_observation: Option<Subscription>,
     controls_theme: Option<AppTheme>,
     on_close: Option<CloseAction>,
-    should_move: bool,
+    should_move: Option<gpui::Point<Pixels>>,
     controls_in_rail: bool,
     drag_holes: Vec<(Pixels, Pixels)>,
 }
@@ -247,7 +222,7 @@ impl WindowTitleBar {
             _menu_observation: menu_observation,
             controls_theme: None,
             on_close: None,
-            should_move: false,
+            should_move: None,
             controls_in_rail: false,
             drag_holes: Vec::new(),
         }
@@ -303,8 +278,13 @@ impl WindowTitleBar {
             .bottom_0()
             .left(start)
             .w(end - start)
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, cx.listener(|bar, _, _, _| bar.should_move = true))
+            .when(window_chrome::strip_is_caption_area(HostOs::current()), |segment| {
+                segment.window_control_area(WindowControlArea::Drag)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|bar, event: &gpui::MouseDownEvent, _, _| bar.should_move = Some(event.position)),
+            )
             .on_click(move |event, window, _| {
                 if event.click_count() == 2 && strip_handles_double_click(HostOs::current()) {
                     let _ = window_chrome::titlebar_double_click(window, &chrome);
@@ -331,7 +311,6 @@ impl WindowTitleBar {
         theme: &AppTheme,
         window: &Window,
         on_close: Option<&CloseAction>,
-        rail_width: Option<f32>,
     ) -> Option<AnyElement> {
         if window.is_fullscreen() {
             return None;
@@ -342,23 +321,14 @@ impl WindowTitleBar {
             return None;
         }
 
-        let host = HostOs::current();
         let maximized = window.is_maximized();
-        let in_rail = rail_width.is_some();
-        let layout = match rail_width {
-            Some(width) => rail_control_layout(chrome.controls, buttons.len(), width),
-            None => chrome.controls,
-        };
-        let glyph_font = windows_caption_font(windows_build());
-
-        let children = buttons.into_iter().map(|button| match host {
-            HostOs::Windows => {
-                Self::windows_button(button, &layout, maximized, glyph_font, theme, in_rail)
-            }
-            HostOs::MacOs | HostOs::Linux => {
-                Self::painted_button(button, &layout, maximized, theme, on_close.cloned())
-            }
-        });
+        if lights_in_corner(HostOs::current()) {
+            return Some(Self::traffic_lights(&buttons, maximized, window.is_window_active(), theme));
+        }
+        let layout = chrome.controls;
+        let children = buttons
+            .into_iter()
+            .map(|button| Self::painted_button(button, &layout, maximized, theme, on_close.cloned()));
 
         Some(
             div()
@@ -366,8 +336,7 @@ impl WindowTitleBar {
                 .h_full()
                 .flex()
                 .flex_row()
-                .when(matches!(host, HostOs::Windows) && !in_rail, |group| group.items_start())
-                .when(!matches!(host, HostOs::Windows) || in_rail, |group| group.items_center())
+                .items_center()
                 .px(px(layout.edge_padding))
                 .gap(px(layout.gap))
                 .children(children)
@@ -375,46 +344,52 @@ impl WindowTitleBar {
         )
     }
 
-    fn windows_button(
-        button: CaptionButton,
-        layout: &window_chrome::ControlLayout,
-        maximized: bool,
-        glyph_font: &'static str,
-        theme: &AppTheme,
-        in_rail: bool,
-    ) -> AnyElement {
-        let close = matches!(button, CaptionButton::Close);
-        let hover_fill: Hsla = if close {
-            gpui::rgb(WINDOWS_CLOSE_HOVER).into()
-        } else {
-            theme.bg._300
-        };
-        let hover_glyph = if close {
-            gpui::white()
-        } else {
-            theme.text.primary
-        };
+    fn traffic_lights(buttons: &[CaptionButton], maximized: bool, active: bool, theme: &AppTheme) -> AnyElement {
+        let lights = TRAFFIC_LIGHT_ORDER
+            .into_iter()
+            .filter(|button| buttons.contains(button))
+            .map(|button| Self::traffic_light(button, maximized, active, theme));
+        div()
+            .id(CONTROLS_ID)
+            .group(LIGHTS_GROUP)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(LIGHT_GAP))
+            .children(lights)
+            .into_any_element()
+    }
 
+    fn traffic_light(button: CaptionButton, maximized: bool, active: bool, theme: &AppTheme) -> AnyElement {
+        let lit: Hsla = gpui::rgb(traffic_light_fill(button)).into();
+        let fill = if active { lit } else { theme.bg._400 };
+        let icon = format!("{}{}.svg", IconUi::ASSET_PREFIX, linux_caption_icon(button, maximized));
         div()
             .id(caption_id(button))
             .occlude()
-            .w(px(layout.button_width))
-            .h(px(layout.button_height))
+            .size(px(LIGHT_SLOT))
             .flex()
             .items_center()
             .justify_center()
-            .when(in_rail, |button| button.rounded_md())
-            .font_family(glyph_font)
-            .text_size(px(WINDOWS_CAPTION_GLYPH_SIZE))
-            .text_color(theme.text.primary)
-            .hover(move |style| style.bg(hover_fill).text_color(hover_glyph))
-            .active(move |style| {
-                style
-                    .bg(hover_fill.opacity(0.8))
-                    .text_color(hover_glyph.opacity(0.8))
-            })
             .window_control_area(button.control_area())
-            .child(windows_caption_glyph(button, maximized))
+            .child(
+                div()
+                    .size(px(LIGHT_DIAMETER))
+                    .rounded_full()
+                    .bg(fill)
+                    .group_hover(LIGHTS_GROUP, move |style| style.bg(lit))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .path(icon)
+                            .size(px(LIGHT_GLYPH))
+                            .text_color(gpui::black().opacity(0.6))
+                            .opacity(0.0)
+                            .group_hover(LIGHTS_GROUP, |style| style.opacity(1.0)),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -481,15 +456,16 @@ impl Render for WindowTitleBar {
         let side = chrome.controls.side;
 
         let shell = theme.shell;
-        let rail_width = self.controls_in_rail.then(|| f32::from(shell.rail_width));
-        let controls = Self::controls(&chrome, &theme, window, self.on_close.as_ref(), rail_width);
-        let (rail_controls, leading_controls, trailing_controls) = match (rail_width, side) {
-            (Some(_), _) => (controls, None, None),
-            (None, ControlSide::Leading) => (None, controls, None),
-            (None, ControlSide::Trailing) => (None, None, controls),
+        let host = HostOs::current();
+        let in_corner = self.controls_in_rail || lights_in_corner(host);
+        let controls = Self::controls(&chrome, &theme, window, self.on_close.as_ref());
+        let (rail_controls, leading_controls, trailing_controls) = match (in_corner, side) {
+            (true, _) => (controls, None, None),
+            (false, ControlSide::Leading) => (None, controls, None),
+            (false, ControlSide::Trailing) => (None, None, controls),
         };
         let rail_controls = rail_controls.map(|controls| {
-            div()
+            let corner = div()
                 .absolute()
                 .top(shell.rail_outer_inset)
                 .left(shell.rail_outer_inset)
@@ -498,7 +474,12 @@ impl Render for WindowTitleBar {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(controls)
+                .child(controls);
+            if lights_in_corner(host) {
+                deferred(corner).with_priority(LIGHTS_LAYER_PRIORITY).into_any_element()
+            } else {
+                corner.into_any_element()
+            }
         });
         let rail_reserve = shell.rail_width + shell.rail_outer_inset * 2.0;
 
@@ -530,21 +511,25 @@ impl Render for WindowTitleBar {
             .flex()
             .flex_row()
             .items_center()
-            .when(self.controls_in_rail, |strip| strip.pl(rail_reserve))
+            .when(in_corner, |strip| strip.pl(rail_reserve))
             .children(segments)
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|bar, _, _, _| bar.should_move = false),
+                cx.listener(|bar, _, _, _| bar.should_move = None),
             )
-            .on_mouse_down_out(cx.listener(|bar, _, _, _| bar.should_move = false))
-            .on_mouse_move(cx.listener(|bar, _, window, _| {
-                if !bar.should_move {
+            .on_mouse_down_out(cx.listener(|bar, _, _, _| bar.should_move = None))
+            .on_mouse_move(cx.listener(|bar, event: &gpui::MouseMoveEvent, window, _| {
+                let Some(start) = bar.should_move else {
+                    return;
+                };
+                let travel = event.position - start;
+                if travel.x.abs().max(travel.y.abs()) < px(WINDOW_MOVE_THRESHOLD) {
                     return;
                 }
-                bar.should_move = false;
+                bar.should_move = None;
                 let granted = window_chrome::granted_decorations(window);
                 if drag_moves_window(HostOs::current(), granted) {
-                    window.start_window_move();
+                    let _ = window_chrome::start_titlebar_move(window);
                 }
             }))
             .children(leading_controls)
