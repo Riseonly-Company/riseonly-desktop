@@ -1,0 +1,54 @@
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: { required: true, type: string }
+      target: { required: true, type: string }
+      environment: { required: true, type: string }
+      version: { required: true, type: string }
+      build_number: { required: true, type: string }
+      tag: { required: true, type: string }
+      sha: { required: true, type: string }
+      slug: { required: true, type: string }
+
+run-name: publish ${{ inputs.target }} ${{ inputs.version }} ${{ inputs.environment }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Collect the build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "${{ inputs.run_id }}" --repo "$GITHUB_REPOSITORY" --name "desktop-${{ inputs.target }}" --dir "dist/${{ inputs.target }}"
+      - name: Publish ${{ inputs.target }} ${{ inputs.environment }} ${{ inputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_RUN_NUMBER: ${{ inputs.build_number }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          VERSION: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+          SLUG: ${{ inputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
