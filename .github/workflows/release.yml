@@ -75,201 +75,18 @@ jobs:
           STAGING_RELEASES: ${{ vars.DESKTOP_STAGING_RELEASES }}
         run: python3 scripts/ci/plan.py release | tee -a "$GITHUB_STEP_SUMMARY"
 
-  linux:
+  macos-aarch64:
+    name: macos (aarch64)
     needs: plan
-    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true'
-    runs-on: ${{ fromJSON(needs.plan.outputs.linux_runners)[matrix.arch] }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: ${{ fromJSON(needs.plan.outputs.linux_archs) }}
-    timeout-minutes: 210
-    permissions:
-      contents: read
-      actions: write
-    env:
-      PROFILE: ${{ needs.plan.outputs.profile }}
-      RISE_ENV: ${{ needs.plan.outputs.environment }}
-      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
-      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
-      VERSION: ${{ needs.plan.outputs.version }}
-      SLUG: ${{ needs.plan.outputs.slug }}
-      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('linux-{0}', matrix.arch)] }}
-      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-linux-${{ matrix.arch }}
-      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('linux-{0}', matrix.arch)] }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          path: riseonly-desktop
-          persist-credentials: false
-          clean: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ needs.plan.outputs.tools_repo }}
-          ref: ${{ needs.plan.outputs.tools_ref }}
-          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
-          path: riseonly-tools
-          persist-credentials: false
-      - if: env.PAYLOAD_RUN == ''
-        name: wait for macos and windows to finish compiling, linux builds last
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WINDOWS_PLANNED: ${{ needs.plan.outputs.windows }}
-        run: python3 riseonly-desktop/scripts/ci/wait_turn.py
-      - name: no files of an earlier run, the vendored sources stay so nothing compiles again
-        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
-      - if: env.PAYLOAD_RUN != ''
-        name: the build of this tree from an earlier release
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: ${{ env.PAYLOAD_FOUND }}
-          path: riseonly-desktop/payload
-          run-id: ${{ env.PAYLOAD_RUN }}
-          github-token: ${{ github.token }}
-      - if: matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true'
-        name: room for the toolchain image and the target dir on the hosted runner
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h /
-      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
-        env:
-          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true' && format('{0}/desktop-ci', runner.temp) || '' }}
-          DESKTOP_CI_MEMORY: 14g
-          DESKTOP_CI_JOBS: 3
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
-        run: |
-          rm -rf riseonly-desktop/dist
-          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
-          bash riseonly-desktop/scripts/ci/run-build.sh linux "${{ matrix.arch }}" "${{ fromJSON(needs.plan.outputs.linux_local)[matrix.arch] }}"
-      - if: env.PAYLOAD_RUN == ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ env.PAYLOAD_NAME }}
-          path: riseonly-desktop/payload/
-          retention-days: 90
-          if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-linux-${{ matrix.arch }}
-          path: riseonly-desktop/dist/linux/
-          retention-days: 30
-          if-no-files-found: error
-      - name: publish linux ${{ matrix.arch }} now, the other builds join the same version later
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET: linux-${{ matrix.arch }}
-          PLAN: ${{ toJSON(needs.plan.outputs) }}
-          BRANCH: ${{ github.event.pull_request.base.ref }}
-        run: python3 riseonly-desktop/scripts/ci/dispatch_publish.py
-      - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: timings-linux-${{ matrix.arch }}
-          path: riseonly-desktop/timings/
-          retention-days: 30
-          if-no-files-found: ignore
-
-  windows:
-    needs: [plan, macos]
-    # why: the owner's build order is macos, windows, linux; windows shares the team Mac with macos, a failed macos must not hold it back
-    if: always() && needs.plan.result == 'success' && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true'
-    runs-on: ${{ fromJSON(needs.plan.outputs.windows_runner) }}
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        arch: ${{ fromJSON(needs.plan.outputs.windows_archs) }}
-    timeout-minutes: 210
-    permissions:
-      contents: read
-      actions: write
-    env:
-      PROFILE: ${{ needs.plan.outputs.profile }}
-      RISE_ENV: ${{ needs.plan.outputs.environment }}
-      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
-      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
-      VERSION: ${{ needs.plan.outputs.version }}
-      SLUG: ${{ needs.plan.outputs.slug }}
-      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('windows-{0}', matrix.arch)] }}
-      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-windows-${{ matrix.arch }}
-      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('windows-{0}', matrix.arch)] }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          path: riseonly-desktop
-          persist-credentials: false
-          clean: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ needs.plan.outputs.tools_repo }}
-          ref: ${{ needs.plan.outputs.tools_ref }}
-          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
-          path: riseonly-tools
-          persist-credentials: false
-      - name: no files of an earlier run, the vendored sources stay so nothing compiles again
-        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
-      - if: env.PAYLOAD_RUN != ''
-        name: the build of this tree from an earlier release
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: ${{ env.PAYLOAD_FOUND }}
-          path: riseonly-desktop/payload
-          run-id: ${{ env.PAYLOAD_RUN }}
-          github-token: ${{ github.token }}
-      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
-        env:
-          WIN_ARCH: ${{ matrix.arch }}
-          DESKTOP_CI_MEMORY: 14g
-          DESKTOP_CI_JOBS: 3
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
-        run: |
-          rm -rf riseonly-desktop/dist
-          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
-          bash riseonly-desktop/scripts/ci/run-build.sh windows "${{ matrix.arch }}" "${{ needs.plan.outputs.windows_local }}"
-      - if: env.PAYLOAD_RUN == ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ env.PAYLOAD_NAME }}
-          path: riseonly-desktop/payload/
-          retention-days: 90
-          if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-windows-${{ matrix.arch }}
-          path: riseonly-desktop/dist/windows/
-          retention-days: 30
-          if-no-files-found: error
-      - name: publish windows ${{ matrix.arch }} now, the other builds join the same version later
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET: windows-${{ matrix.arch }}
-          PLAN: ${{ toJSON(needs.plan.outputs) }}
-          BRANCH: ${{ github.event.pull_request.base.ref }}
-        run: python3 riseonly-desktop/scripts/ci/dispatch_publish.py
-      - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: timings-windows-${{ matrix.arch }}
-          path: riseonly-desktop/timings/
-          retention-days: 30
-          if-no-files-found: ignore
-
-  macos:
-    needs: plan
-    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.macos == 'true'
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.macos == 'true' && contains(fromJSON(needs.plan.outputs.macos_archs), 'aarch64')
     runs-on: ${{ fromJSON(needs.plan.outputs.macos_runner) }}
     strategy:
-      fail-fast: false
       matrix:
-        arch: ${{ fromJSON(needs.plan.outputs.macos_archs) }}
+        arch: [aarch64]
     timeout-minutes: 240
     permissions:
       contents: read
-      actions: write
+      actions: read
     env:
       PROFILE: ${{ needs.plan.outputs.profile }}
       RISE_ENV: ${{ needs.plan.outputs.environment }}
@@ -368,13 +185,6 @@ jobs:
           path: riseonly-desktop/dist/macos/
           retention-days: 30
           if-no-files-found: error
-      - name: publish macos ${{ matrix.arch }} now, the other builds join the same version later
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET: macos-${{ matrix.arch }}
-          PLAN: ${{ toJSON(needs.plan.outputs) }}
-          BRANCH: ${{ github.event.pull_request.base.ref }}
-        run: python3 riseonly-desktop/scripts/ci/dispatch_publish.py
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -382,3 +192,703 @@ jobs:
           path: riseonly-desktop/timings/
           retention-days: 30
           if-no-files-found: ignore
+
+  macos-x86_64:
+    name: macos (x86_64)
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.macos == 'true' && contains(fromJSON(needs.plan.outputs.macos_archs), 'x86_64')
+    runs-on: ${{ fromJSON(needs.plan.outputs.macos_runner) }}
+    strategy:
+      matrix:
+        arch: [x86_64]
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+      MACOS_ARCH: ${{ matrix.arch }}
+      MACOS_LOCAL: ${{ needs.plan.outputs.macos_local }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('macos-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-macos-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('macos-{0}', matrix.arch)] }}
+      PAYLOAD_TAG: ${{ needs.plan.outputs.payload_tag }}
+      PAYLOAD_ASSET: ${{ fromJSON(needs.plan.outputs.payload_assets)[format('macos-{0}', matrix.arch)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+          clean: ${{ needs.plan.outputs.macos_local != 'true' }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
+          path: riseonly-tools
+          persist-credentials: false
+      - if: env.MACOS_LOCAL == 'true'
+        name: no files of an earlier run on the team Mac
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_FOUND }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
+      - if: env.PAYLOAD_ASSET != ''
+        name: the build of this source stored by hand
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PAYLOAD_ASSET" --dir "$RUNNER_TEMP/payload"
+          mkdir -p "riseonly-desktop/payload/macos-$MACOS_ARCH"
+          tar -xzf "$RUNNER_TEMP/payload/$PAYLOAD_ASSET" -C "riseonly-desktop/payload/macos-$MACOS_ARCH"
+      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == '' && env.MACOS_LOCAL != 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: ${{ needs.plan.outputs.rust }}
+          targets: x86_64-apple-darwin
+      - if: env.PAYLOAD_RUN == '' && env.PAYLOAD_ASSET == '' && env.MACOS_LOCAL != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: riseonly-desktop -> target
+          key: ${{ needs.plan.outputs.profile }}-${{ matrix.arch }}
+          cache-on-failure: true
+      - if: env.MACOS_LOCAL != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: riseonly-desktop/vendor/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('riseonly-desktop/scripts/build-ffmpeg-lgpl.sh') }}
+      - run: brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
+      - if: matrix.arch == 'x86_64'
+        run: brew list nasm ninja >/dev/null 2>&1 || brew install nasm ninja
+      - name: build, sign and notarize ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
+        working-directory: riseonly-desktop
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          PAYLOAD: ${{ (env.PAYLOAD_RUN != '' || env.PAYLOAD_ASSET != '') && format('payload/macos-{0}', matrix.arch) || '' }}
+        run: |
+          rm -rf dist
+          python3 scripts/ci/set-version.py "$VERSION"
+          if [ "$MACOS_LOCAL" = true ]; then
+            [ "$MACOS_ARCH" != x86_64 ] || rustup target add x86_64-apple-darwin
+            caffeinate -i /usr/bin/lockf -k /tmp/riseonly-desktop-build.lock bash scripts/ci/build-macos.sh
+          else
+            bash scripts/ci/build-macos.sh
+          fi
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-macos-${{ matrix.arch }}
+          path: riseonly-desktop/dist/macos/
+          retention-days: 30
+          if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-macos-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  windows-x86_64:
+    name: windows (x86_64)
+    needs: [plan, macos-aarch64, macos-x86_64]
+    # why: the owner's build order is macos, windows, linux; windows shares the team Mac with macos, a failed macos must not hold it back
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true' && contains(fromJSON(needs.plan.outputs.windows_archs), 'x86_64')
+    runs-on: ${{ fromJSON(needs.plan.outputs.windows_runner) }}
+    strategy:
+      matrix:
+        arch: [x86_64]
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('windows-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-windows-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('windows-{0}', matrix.arch)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+          clean: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: no files of an earlier run, the vendored sources stay so nothing compiles again
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_FOUND }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
+      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
+        env:
+          WIN_ARCH: ${{ matrix.arch }}
+          DESKTOP_CI_MEMORY: 14g
+          DESKTOP_CI_JOBS: 3
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
+        run: |
+          rm -rf riseonly-desktop/dist
+          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
+          bash riseonly-desktop/scripts/ci/run-build.sh windows "${{ matrix.arch }}" "${{ needs.plan.outputs.windows_local }}"
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows-${{ matrix.arch }}
+          path: riseonly-desktop/dist/windows/
+          retention-days: 30
+          if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-windows-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  windows-aarch64:
+    name: windows (aarch64)
+    needs: [plan, macos-aarch64, macos-x86_64]
+    # why: the owner's build order is macos, windows, linux; windows shares the team Mac with macos, a failed macos must not hold it back
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.run == 'true' && needs.plan.outputs.windows == 'true' && contains(fromJSON(needs.plan.outputs.windows_archs), 'aarch64')
+    runs-on: ${{ fromJSON(needs.plan.outputs.windows_runner) }}
+    strategy:
+      matrix:
+        arch: [aarch64]
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('windows-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-windows-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('windows-{0}', matrix.arch)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+          clean: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
+          path: riseonly-tools
+          persist-credentials: false
+      - name: no files of an earlier run, the vendored sources stay so nothing compiles again
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_FOUND }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
+      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
+        env:
+          WIN_ARCH: ${{ matrix.arch }}
+          DESKTOP_CI_MEMORY: 14g
+          DESKTOP_CI_JOBS: 3
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/windows-{0}', matrix.arch) || '' }}
+        run: |
+          rm -rf riseonly-desktop/dist
+          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
+          bash riseonly-desktop/scripts/ci/run-build.sh windows "${{ matrix.arch }}" "${{ needs.plan.outputs.windows_local }}"
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows-${{ matrix.arch }}
+          path: riseonly-desktop/dist/windows/
+          retention-days: 30
+          if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-windows-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  linux-aarch64:
+    name: linux (aarch64)
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true' && contains(fromJSON(needs.plan.outputs.linux_archs), 'aarch64')
+    runs-on: ${{ fromJSON(needs.plan.outputs.linux_runners)[matrix.arch] }}
+    strategy:
+      matrix:
+        arch: [aarch64]
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('linux-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-linux-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('linux-{0}', matrix.arch)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+          clean: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
+          path: riseonly-tools
+          persist-credentials: false
+      - if: env.PAYLOAD_RUN == ''
+        name: wait for macos and windows to finish compiling, linux builds last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_PLANNED: ${{ needs.plan.outputs.windows }}
+        run: python3 riseonly-desktop/scripts/ci/wait_turn.py
+      - name: no files of an earlier run, the vendored sources stay so nothing compiles again
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_FOUND }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
+      - if: matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true'
+        name: room for the toolchain image and the target dir on the hosted runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
+        env:
+          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true' && format('{0}/desktop-ci', runner.temp) || '' }}
+          DESKTOP_CI_MEMORY: 14g
+          DESKTOP_CI_JOBS: 3
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
+        run: |
+          rm -rf riseonly-desktop/dist
+          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
+          bash riseonly-desktop/scripts/ci/run-build.sh linux "${{ matrix.arch }}" "${{ fromJSON(needs.plan.outputs.linux_local)[matrix.arch] }}"
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-linux-${{ matrix.arch }}
+          path: riseonly-desktop/dist/linux/
+          retention-days: 30
+          if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-linux-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  linux-x86_64:
+    name: linux (x86_64)
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.linux == 'true' && contains(fromJSON(needs.plan.outputs.linux_archs), 'x86_64')
+    runs-on: ${{ fromJSON(needs.plan.outputs.linux_runners)[matrix.arch] }}
+    strategy:
+      matrix:
+        arch: [x86_64]
+    timeout-minutes: 210
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: ${{ needs.plan.outputs.profile }}
+      RISE_ENV: ${{ needs.plan.outputs.environment }}
+      RISE_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+      RISE_UPDATE_FEED_PUBLIC_KEY: ${{ vars.DESKTOP_FEED_PUBLIC_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SLUG: ${{ needs.plan.outputs.slug }}
+      PAYLOAD_RUN: ${{ fromJSON(needs.plan.outputs.payloads)[format('linux-{0}', matrix.arch)] }}
+      PAYLOAD_NAME: payload-${{ needs.plan.outputs.tree }}-v${{ needs.plan.outputs.version }}-b${{ needs.plan.outputs.build_number }}-linux-${{ matrix.arch }}
+      PAYLOAD_FOUND: ${{ fromJSON(needs.plan.outputs.payload_names)[format('linux-{0}', matrix.arch)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          path: riseonly-desktop
+          persist-credentials: false
+          clean: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.tools_repo }}
+          ref: ${{ needs.plan.outputs.tools_ref }}
+          ssh-key: ${{ secrets.RISEONLY_TOOLS_SSH_KEY }}
+          path: riseonly-tools
+          persist-credentials: false
+      - if: env.PAYLOAD_RUN == ''
+        name: wait for macos and windows to finish compiling, linux builds last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_PLANNED: ${{ needs.plan.outputs.windows }}
+        run: python3 riseonly-desktop/scripts/ci/wait_turn.py
+      - name: no files of an earlier run, the vendored sources stay so nothing compiles again
+        run: rm -rf riseonly-desktop/payload riseonly-desktop/dist riseonly-desktop/timings
+      - if: env.PAYLOAD_RUN != ''
+        name: the build of this tree from an earlier release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PAYLOAD_FOUND }}
+          path: riseonly-desktop/payload
+          run-id: ${{ env.PAYLOAD_RUN }}
+          github-token: ${{ github.token }}
+      - if: matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true'
+        name: room for the toolchain image and the target dir on the hosted runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - name: build ${{ needs.plan.outputs.environment }} ${{ matrix.arch }} release
+        env:
+          DESKTOP_CI_CACHE: ${{ matrix.arch == 'aarch64' && fromJSON(needs.plan.outputs.linux_local)[matrix.arch] != 'true' && format('{0}/desktop-ci', runner.temp) || '' }}
+          DESKTOP_CI_MEMORY: 14g
+          DESKTOP_CI_JOBS: 3
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          PAYLOAD: ${{ env.PAYLOAD_RUN != '' && format('payload/linux-{0}', matrix.arch) || '' }}
+        run: |
+          rm -rf riseonly-desktop/dist
+          (cd riseonly-desktop && python3 scripts/ci/set-version.py "$VERSION")
+          bash riseonly-desktop/scripts/ci/run-build.sh linux "${{ matrix.arch }}" "${{ fromJSON(needs.plan.outputs.linux_local)[matrix.arch] }}"
+      - if: env.PAYLOAD_RUN == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PAYLOAD_NAME }}
+          path: riseonly-desktop/payload/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-linux-${{ matrix.arch }}
+          path: riseonly-desktop/dist/linux/
+          retention-days: 30
+          if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timings-linux-${{ matrix.arch }}
+          path: riseonly-desktop/timings/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  publish-macos-aarch64:
+    name: publish macos (aarch64)
+    needs: [plan, macos-aarch64]
+    # why: every build ships as soon as it is done; the later ones join the same version in the feed
+    if: always() && needs.macos-aarch64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-macos-aarch64
+          path: dist/macos-aarch64
+      - name: publish macos-aarch64 ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-macos-x86_64:
+    name: publish macos (x86_64)
+    needs: [plan, macos-x86_64]
+    # why: every build ships as soon as it is done; the later ones join the same version in the feed
+    if: always() && needs.macos-x86_64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-macos-x86_64
+          path: dist/macos-x86_64
+      - name: publish macos-x86_64 ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-windows-x86_64:
+    name: publish windows (x86_64)
+    needs: [plan, windows-x86_64]
+    # why: every build ships as soon as it is done; the later ones join the same version in the feed
+    if: always() && needs.windows-x86_64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-windows-x86_64
+          path: dist/windows-x86_64
+      - name: publish windows-x86_64 ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-windows-aarch64:
+    name: publish windows (aarch64)
+    needs: [plan, windows-aarch64]
+    # why: every build ships as soon as it is done; the later ones join the same version in the feed
+    if: always() && needs.windows-aarch64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-windows-aarch64
+          path: dist/windows-aarch64
+      - name: publish windows-aarch64 ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-linux-aarch64:
+    name: publish linux (aarch64)
+    needs: [plan, linux-aarch64]
+    # why: every build ships as soon as it is done; the later ones join the same version in the feed
+    if: always() && needs.linux-aarch64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-linux-aarch64
+          path: dist/linux-aarch64
+      - name: publish linux-aarch64 ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
+
+  publish-linux-x86_64:
+    name: publish linux (x86_64)
+    needs: [plan, linux-x86_64]
+    # why: every build ships as soon as it is done; the later ones join the same version in the feed
+    if: always() && needs.linux-x86_64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-linux-x86_64
+          path: dist/linux-x86_64
+      - name: publish linux-x86_64 ${{ needs.plan.outputs.environment }} ${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SLUG: ${{ needs.plan.outputs.slug }}
+          DOWNLOADS_BASE: ${{ vars.DESKTOP_DOWNLOADS_BASE || 'https://cdn.riseonly.net/desktop' }}
+          STORAGE_PREFIX: ${{ vars.DESKTOP_STORAGE_PREFIX || 'desktop' }}
+          BUNNY_STORAGE_HOST: ${{ vars.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com' }}
+          BUNNY_STORAGE_ZONE: ${{ vars.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_KEY: ${{ secrets.BUNNY_STORAGE_KEY }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          FEED_SIGNING_KEY: ${{ secrets.DESKTOP_FEED_SIGNING_KEY }}
+          BACKEND_RELEASE_HOOK: ${{ secrets.BACKEND_RELEASE_HOOK }}
+          BACKEND_RELEASE_TOKEN: ${{ secrets.BACKEND_RELEASE_TOKEN }}
+        run: bash scripts/ci/publish.sh dist
